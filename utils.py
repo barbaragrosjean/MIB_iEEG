@@ -13,26 +13,26 @@ import random
 
 import seaborn as sns
 import matplotlib.pyplot as plt
-from matplotlib.colors import TwoSlopeNorm, ListedColormap
 import matplotlib.patches as mpatches
-from sklearn.decomposition import NMF
+from matplotlib import cm
+import plotly.graph_objects as go
+from sklearn.decomposition import PCA
 
+from nilearn import plotting
 
 from sklearn.utils import shuffle
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, f1_score, log_loss
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from tslearn.neighbors import KNeighborsTimeSeriesClassifier 
 from sklearn.svm import SVC
-
+from sklearn.model_selection import KFold
 from tslearn.preprocessing import TimeSeriesScalerMinMax
-from sklearn.inspection import permutation_importance
+from sklearn.preprocessing import StandardScaler
 from scipy.stats import spearmanr
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 
-
-from nilearn import plotting
-
+from sklearn.decomposition import NMF
 from sklearn.decomposition import PCA
 
 from PIL import Image
@@ -97,10 +97,6 @@ REGION = {'parietal': ['IPS','IP','SP','SPL','AG','SMG','TPJ'],
         'THAL': ['THAL']}
 
 TASK = 'MusicMemory'
-
-
-################################### FUNCTIONS SETUP ###################################
-# TODO -- BE SURE TO SET UP MY DIRECTORY 
 
 ################################### FUNCTIONS PREPROC ###################################
 
@@ -282,13 +278,13 @@ def set_reference(raw0, bads=None, white=None, rename=True, summary=False):
 
     return raw_bip
 
-def ExcludSubj(subj_included) : 
+def ExcludSubj(subj_included, data_path = OUT_PATH + '/Data') : 
     '''
     Exclude the ones that < 50 % performance or number of trials <24.
     '''
     excluded = []
     for subj in subj_included :   
-        info_file = OUT_PATH + f'/Data/{subj}_info.json'
+        info_file = data_path + f'/{subj}_info.json'
         with open(info_file) as f:
             info = json.load(f)
             events_index = np.array([int(i) for i in info['event_id']])
@@ -312,7 +308,7 @@ def ExcludSubj(subj_included) :
 
 ################################### FUNCTIONS TFR ###################################
 
-def MM_compute_TFR(epochs, freqs, n_cycles, baseline, zscore=True, trial_baseline = False, picks='all',n_jobs=2, summary=False):
+def MM_compute_TFR(epochs, freqs, n_cycles, baseline, zscore=True, trial_baseline = True, picks='all',n_jobs=2, summary=False):
     if summary : print('###### Call tfr morlet')
     TFR = mne.time_frequency.tfr_morlet(epochs,freqs,n_cycles,return_itc=False,average=False,n_jobs = n_jobs,picks=picks)
     
@@ -417,7 +413,7 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
         return subj
 
     epoching_kwargs = {'tmin':-2, 'tmax': 5, 'baseline': (-1.5,-0.5), 'resample': 600, 'l_freq': None, 'h_freq': None,
-                            'event_fun': LB_event_fun, 'event_fun_kwargs': {'sfreq': 600}}
+                             'event_fun': LB_event_fun, 'event_fun_kwargs': {'sfreq': 600}}
     epochs = mne.Epochs(raw, events, event_id=event_id, tmin=epoching_kwargs['tmin'], tmax=epoching_kwargs['tmax'],
                             preload=True, baseline=epoching_kwargs['baseline'], on_missing='warn',
                             reject=None)
@@ -428,8 +424,8 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
 
     if compute_TFR :
         n_cycles = np.array(freqs) * 2 / np.array(bwidth)
-        TFR = MM_compute_TFR(epochs,np.array(freqs), n_cycles, baseline = (-1.5,-0.5), zscore=True, trial_baseline = True, picks='all',n_jobs=1, summary = False)
-        TFR = TFR.crop(-0.5,3)
+        TFR = MM_compute_TFR(epochs,np.array(freqs), n_cycles, baseline = (-1.5,-0.5), zscore=False, trial_baseline = False, picks='all',n_jobs=1, summary = False)
+        TFR = TFR.crop(-1.5,3)
 
         smooth_kwargs = {'tstep': 0.025, 'twin': .1}
         TFR = smooth(TFR, **smooth_kwargs)
@@ -455,7 +451,7 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
         del TFRtrials
         del TFR
 
-    epochs = epochs.crop(-0.5,3)
+    epochs = epochs.crop(-1.5,3)
     epochs = epochs.resample(new_sfreq)
 
     if save_epoch : 
@@ -473,13 +469,15 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
 
     ch_coord_df.to_csv(out_path + f'/{subj}_coords.csv' )
 
-def TFRmEvents(subj, event_ids = [1, 2], test_id=False, freq_id=False) : 
-    info_file = f'{OUT_PATH}/Data/{subj}_info.json'
-    with open(info_file) as f:
-        info = json.load(f)
-        events_index = np.array([int(i) for i in info['event_id']])
+def TFRmEvents(subj, event_ids = [1, 2], test_id=False, freq_id=False, events_index=[],  baseline_corr=False, data_path = OUT_PATH + '/Data') : 
+    if len(events_index) == 0 : 
+        info_file = f'{data_path}/{subj}_info.json'
+        with open(info_file) as f:
+            info = json.load(f)
+            time = info['time_tfr']
+            events_index = np.array([int(i) for i in info['event_id']])
 
-    with open(f'{OUT_PATH}/Data/{subj}_TFRtrials.p', "rb") as f:
+    with open(f'{data_path}/{subj}_TFRtrials.p', "rb") as f:
         TFRtrials = pickle.load(f)
 
     if freq_id == False :
@@ -490,24 +488,36 @@ def TFRmEvents(subj, event_ids = [1, 2], test_id=False, freq_id=False) :
     for i, ev_id in enumerate(event_ids) :
         index_condi = list(np.where(events_index == ev_id)[0])
 
+        if baseline_corr == True : 
+            # Baseline adjust every trials
+            baseline_end = int(time.index([t for t in time if t>=-0.5][0]))
+            TFRbmean = TFRtrials[np.array(index_condi), :, :, :baseline_end].mean(axis=-1, keepdims=True)
+            TFRbstd = TFRtrials[np.array(index_condi), :, :, :baseline_end].std(axis=-1, keepdims=True)
+
+            tfr = (TFRtrials[np.array(index_condi), :, :, :] - TFRbmean) #/TFRbstd
+        else :
+            tfr = TFRtrials[np.array(index_condi), :, :, :]
+
         if test_id != False : # remove the excluded trials that we keep for testing
             index_condi.remove(test_id[i])
         
         if freq_id == False:
-            TFRm[i, :,:, :] = TFRtrials[np.array(index_condi), :,:,:].mean(0)
+            TFRm[i, :,:, :] = tfr.mean(0) 
 
         else : 
-            TFRm[i, :, :] = TFRtrials[np.array(index_condi), :,freq_id,:].mean(0)
+            TFRm[i, :, :] = tfr[:, :,freq_id,:].mean(0)
 
     return TFRm
     
-def BbEvents(subj, event_ids = [1, 2], test_id=False) : 
-    info_file = f'{OUT_PATH}/Data/{subj}_info.json'
-    with open(info_file) as f:
-        info = json.load(f)
-        events_index = np.array([int(i) for i in info['event_id']])
+def BbEvents(subj, event_ids = [1, 2], test_id=False, events_index=[], data_path=OUT_PATH + '/Data') : 
+    
+    if len(events_index) == 0 : 
+        info_file = f'{data_path}/{subj}_info.json'
+        with open(info_file) as f:
+            info = json.load(f)
+            events_index = np.array([int(i) for i in info['event_id']])
 
-    with open(f'{OUT_PATH}/Data/{subj}_epochs.p', "rb") as f:
+    with open(f'{data_path}/{subj}_epochs.p', "rb") as f:
         epochs = pickle.load(f)
 
     epochsm = np.zeros((len(event_ids), epochs.shape[1], epochs.shape[2]))
@@ -547,7 +557,7 @@ def ConcatPCA(concat_dict, ch_id = False, nb_compo =2, freq_band=FREQ_BAND, meth
                 df_compo = pd.DataFrame(pca.components_)
 
             elif method == 'nmf' :
-                nmf = NMF(n_components=nb_compo)
+                nmf = NMF(n_components=nb_compo, max_iter=1000)
                 scaler = TimeSeriesScalerMinMax()
                 X = scaler.fit_transform(X)[:,:,0]
                 X_transformed = nmf.fit_transform(X.T) 
@@ -558,7 +568,7 @@ def ConcatPCA(concat_dict, ch_id = False, nb_compo =2, freq_band=FREQ_BAND, meth
             df_compo.loc[:, 'freq'] = [freq_band[i]]*nb_compo
             df_compo_list.append(df_compo)
 
-            # save X transform
+            # save 
             df = pd.DataFrame(X_transformed.T)
             df.loc[:, 'compo'] = ['compo' + str(i_compo+1) for i_compo in range(nb_compo)]
             df.loc[:, 'freq'] = [freq]*(nb_compo)
@@ -571,18 +581,18 @@ def ConcatPCA(concat_dict, ch_id = False, nb_compo =2, freq_band=FREQ_BAND, meth
     df_X_transformed = pd.concat(df_list) 
     return df_Componants, df_X_transformed
 
-def PlotCompoIndividual(subj, df_Componants,subj_included=[], nb_compo = 2, save = True, show=False,browser=False, freq_band= FREQ_BAND, tfr_path = OUT_PATH +'/Data', out_path = OUT_PATH, project_path=PROJECT_PATH, method='pca') : 
+def PlotCompoIndividual(subj, df_Componants,subj_included=[], nb_compo = 2, save = True, show=False,browser=False, freq_band= FREQ_BAND, data_path = OUT_PATH +'/Data', out_path = OUT_PATH, project_path=PROJECT_PATH, method='pca') : 
     if subj == 'grp' : 
         if subj_included == [] : 
-            subj_included = [file.replace('_info.json', '') for file in os.listdir(tfr_path) if file[-len('info.json'):] == 'info.json']
+            subj_included = [file.replace('_info.json', '') for file in os.listdir(data_path) if file[-len('info.json'):] == 'info.json']
 
         coord = []
         for s in subj_included :
-            coord_file = pd.read_csv(f'{tfr_path}/{s}_coords.csv')
+            coord_file = pd.read_csv(f'{data_path}/{s}_coords.csv')
             coord.extend(np.vstack([coord_file['x'].values,  coord_file['y'].values, coord_file['z'].values]).T)
         coord = np.array(coord)
     else : 
-        coord_file = pd.read_csv(f'{tfr_path}/{subj}_coords.csv')
+        coord_file = pd.read_csv(f'{data_path}/{subj}_coords.csv')
         coord = np.vstack([coord_file['x'].values,  coord_file['y'].values, coord_file['z'].values]).T
 
     combined_images = []
@@ -594,12 +604,16 @@ def PlotCompoIndividual(subj, df_Componants,subj_included=[], nb_compo = 2, save
         thr = data.mean() + abs(data.std())
         if method =='pca' :
             node_map = 'seismic'
+            node_vmin=-vlim
+            node_vmax=vlim
         elif method == 'nmf' :
             node_map ='Reds'
+            node_vmin = 0
+            node_vmax = vlim
         
         for compo_id in range(nb_compo) :
             index_thr = np.where(abs(data[compo_id, :]) > thr)
-            fig = plotting.plot_markers(node_coords = coord[index_thr, :][0],  node_size=10, node_values=data[compo_id, index_thr], node_cmap=node_map, title=f'{band}:PC n{compo_id+1}',display_mode='ortho', node_vmin=-vlim, node_vmax=vlim)
+            fig = plotting.plot_markers(node_coords = coord[index_thr, :][0],  node_size=10, node_values=data[compo_id, index_thr], node_cmap=node_map, title=f'{band}:PC n{compo_id+1}',display_mode='ortho', node_vmin=node_vmin, node_vmax=node_vmax)
             
             #signal = df_Componants[subj].query(f'freq == @band and compo == "compo{compo_id +1}"').drop(columns = ['compo', 'freq']).values
             #fig = plotting.plot_markers(node_coords =coord,  node_size=10, node_values=signal, node_cmap='seismic', title=f'PC{compo_id+1} {band}',display_mode='ortho', node_vmin=-vlim, node_vmax=vlim)
@@ -632,16 +646,17 @@ def PlotCompoIndividual(subj, df_Componants,subj_included=[], nb_compo = 2, save
     if save : 
         pdf_path = f'{out_path}/{subj}_compos.pdf'
         combined_images[0].save(pdf_path, save_all=True, append_images=combined_images[1:])
-        for img in to_remove : 
-            os.remove(img)
 
-def PlotTimeSerie(subj_list, df_X_transformed, out_path, region='', show=False, save=True, tfr=True)  :    
+        #for img in to_remove : 
+            #os.remove(img)
+
+def PlotTimeSerie(subj_list, df_X_transformed, out_path, region='', show=False, save=True, tfr=True, data_path = OUT_PATH + '/Data')  :    
     for subj in subj_list :  
         # get the time 
         if subj == 'grp' : 
-            json_file = OUT_PATH + '/Data/' + [f for f in os.listdir(f'{OUT_PATH}/Data') if '_info.json' in f][0]
+            json_file = data_path + '/' + [f for f in os.listdir(f'{OUT_PATH}/Data') if '_info.json' in f][0]
         else : 
-            json_file = f'{OUT_PATH}/Data/{subj}_info.json'
+            json_file = f'{data_path}/{subj}_info.json'
 
         with open(json_file) as json_data:
             d = json.load(json_data)
@@ -651,7 +666,6 @@ def PlotTimeSerie(subj_list, df_X_transformed, out_path, region='', show=False, 
             else : 
                 time=np.array(d['time'])
                 
-        print(subj)
         df_subset = df_X_transformed.query('subj == @subj')
         freq_nb = len(np.unique(df_subset.freq.values))
         compo_nb = len(np.unique(df_subset.compo.values))
@@ -699,12 +713,13 @@ def PlotTimeSerie(subj_list, df_X_transformed, out_path, region='', show=False, 
         else  : plt.close()
 
 ################################### COMPO ANALYSIS ###################################
-def GetInfo(subj_included, project_path = PROJECT_PATH, out_path = OUT_PATH) : 
+def GetInfo(subj_included, project_path = PROJECT_PATH, data_path = OUT_PATH + '/Data') : 
     coord = []
     areas = []
     elect_list = []
+    subj_list = []
     for subj in subj_included: 
-        df = pd.read_csv(f'{out_path}/Data/{subj}_coords.csv').rename(columns={'Unnamed: 0' :'channels'})
+        df = pd.read_csv(f'{data_path}/{subj}_coords.csv').rename(columns={'Unnamed: 0' :'channels'})
         coord.extend(np.vstack([df['x'].values,  df['y'].values, df['z'].values]).T)
 
         elect = pd.read_csv(project_path + f'/misc/electrodes/{subj}_electrodes.csv').set_index('electrode')
@@ -713,9 +728,10 @@ def GetInfo(subj_included, project_path = PROJECT_PATH, out_path = OUT_PATH) :
 
         areas.extend(np.vstack([df['area1'], df['area2']]).T)
         elect_list.extend(df['channels'])
+
+        subj_list.extend([subj]*len(df['channels']))
         
-    coord_array = np.array(coord)
-    return coord, areas, elect_list
+    return coord, areas, elect_list, subj_list
 
 def CompoThr(data, replace=0) : 
     data_thr = data.copy()
@@ -726,11 +742,17 @@ def CompoThr(data, replace=0) :
 
     return data_thr
 
+def FindRegion(x) :
+    for key, val in REGION.items() : 
+        if x in val : 
+            return key
+    return None
+
 ################################### DECODING ###################################
-def CheckTrials(X_train, y_train, event=list(EVENT_ID.keys())[:2] , out_path=OUT_PATH + '/Decoding', label = '', save=False, color_ev = {0 : 'r', 1 : 'b'}, freq='high_gamma') : 
+def CheckTrials(X_train, y_train, event=list(EVENT_ID.keys())[:2] , out_path=OUT_PATH + '/Decoding', label = '', save=False, color_ev = {0 : 'r', 1 : 'b'}, freq='high_gamma', data_path=OUT_PATH + '/Data') : 
     # get time 
-    files_info = [file for file in os.listdir(OUT_PATH + '/Data') if file[-len('info.json'):] == 'info.json']
-    with open(OUT_PATH + f'/Data/{files_info[0]}') as json_data:
+    files_info = [file for file in os.listdir(data_path) if file[-len('info.json'):] == 'info.json']
+    with open(data_path + f'/{files_info[0]}') as json_data:
         d = json.load(json_data)
         if freq =='broadband' :
             time = d['time_epoch']
@@ -768,9 +790,9 @@ def CheckTrials(X_train, y_train, event=list(EVENT_ID.keys())[:2] , out_path=OUT
     else :
         plt.show()
 
-def CheckTrialsMean(X_train,X_test, y_train, freq , event=list(EVENT_ID.keys())[:2], color_ev = {0 : 'r', 1 : 'b'}, save = False, out_path =OUT_PATH + '/Decoding', label='') :
-    files_info = [file for file in os.listdir(OUT_PATH + '/Data') if file[-len('info.json'):] == 'info.json']
-    with open(OUT_PATH + f'/Data/{files_info[0]}') as json_data:
+def CheckTrialsMean(X_train,X_test, y_train, freq , event=list(EVENT_ID.keys())[:2], color_ev = {0 : 'r', 1 : 'b'}, save = False, out_path =OUT_PATH + '/Decoding', label='', data_path=OUT_PATH + '/Data') :
+    files_info = [file for file in os.listdir(data_path) if file[-len('info.json'):] == 'info.json']
+    with open(data_path + f'/{files_info[0]}') as json_data:
         d = json.load(json_data)
         time = d['time_tfr']
         json_data.close()
@@ -822,7 +844,7 @@ def DataAugmentation(TFRtr,event_ids, data_aug_method='mean') :
 
     return np.concatenate([TFR_trials_filled[:,i, :, :] for i in [0, 1]], axis = 0), true_trials
 
-def DataTransformationM1(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, PC_use=0, subj_included=[], method_pca='mean', data_aug_method='mean') : 
+def DataTransformationM1(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, PC_use=0, subj_included=[], method_pca='mean', data_aug_method='mean', shuffle_index = False, data_path = OUT_PATH + '/Data') : 
     TFRm_list = []
 
     Train_sample = []
@@ -830,10 +852,10 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, PC_use=
     truth = []
 
     if subj_included ==[] : 
-        subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(out_path + '/Data') if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
+        subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(data_path) if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
  
     for subj in subj_included : 
-        info_file = out_path + f'/Data/{subj}_info.json'
+        info_file = data_path + f'/{subj}_info.json'
         with open(info_file) as f:
             info = json.load(f)
             events_index = np.array([int(i) for i in info['event_id']])
@@ -850,12 +872,17 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, PC_use=
         id_ev2.remove(id_test[1])
         id_ev2 = np.array(id_ev2)
 
+        if shuffle_index : # TO ADJUST TODO
+            ev_shuffl= shuffle(np.concat([id_ev1, id_ev2]))
+            id_ev1_s = ev_shuffl[:id_ev1.shape[0]]
+            id_ev2_s = ev_shuffl[id_ev1.shape[0]:]
+
         # Compute TFRm 
         if freq == 'broadband' :
-            TFRm = BbEvents(subj, test_id = id_test)
+            TFRm = BbEvents(subj, test_id = id_test, events_index=events_index, data_path=data_path)
         else : 
             freq_id = freq_band.index(freq)
-            TFRm = TFRmEvents(subj, test_id = id_test, freq_id = freq_id)
+            TFRm = TFRmEvents(subj, test_id = id_test, freq_id = freq_id, events_index=events_index, data_path=data_path)
 
         # Save for PCA computation at grp level
         if method_pca == 'concat' :
@@ -865,7 +892,7 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, PC_use=
 
         # Get the data
         if freq == 'broadband' :
-            file = out_path + f'/Data/{subj}_epochs.p'
+            file = data_path + f'/{subj}_epochs.p'
             with open(file, "rb") as f:
                 TFRtr = pickle.load(f)  
 
@@ -875,7 +902,7 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, PC_use=
             Test_sample.append(TFRtr[id_test,:, :])
 
         else :
-            file = out_path + f'/Data/{subj}_TFRtrials.p'
+            file = data_path + f'/{subj}_TFRtrials.p'
             with open(file, "rb") as f:
                 TFRtr = pickle.load(f)  
 
@@ -909,16 +936,16 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, PC_use=
 
     return Train_transformed, [1]*23 + [2]*23, Test_transformed, [1, 2], np.stack(truth, axis=2)*1, weights # X_train, y_train, X_test, y_test, subj_track_train, proportion of true trail in each supersample
  
-def DataTransformationM1Raw(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, subj_included=[], data_aug_method='mean') :
+def DataTransformationM1Raw(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, subj_included=[], data_aug_method='mean', data_path = OUT_PATH + '/Data') :
     Train_sample = []
     Test_sample = []
     truth = []
 
     if subj_included ==[] : 
-        subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(out_path + '/Data') if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
+        subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(data_path) if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
  
     for subj in subj_included : 
-        info_file = out_path + f'/Data/{subj}_info.json'
+        info_file = data_path + f'/{subj}_info.json'
         with open(info_file) as f:
             info = json.load(f)
             events_index = np.array([int(i) for i in info['event_id']])
@@ -937,7 +964,7 @@ def DataTransformationM1Raw(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, subj
 
         # Get the data
         if freq == 'broadband' :
-            file = out_path + f'/Data/{subj}_epochs.p'
+            file = data_path + f'/{subj}_epochs.p'
             with open(file, "rb") as f:
                 TFRtr = pickle.load(f)  
 
@@ -948,7 +975,7 @@ def DataTransformationM1Raw(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, subj
 
         else :
             freq_id = freq_band.index(freq)
-            file = out_path + f'/Data/{subj}_TFRtrials.p'
+            file = data_path + f'/{subj}_TFRtrials.p'
             with open(file, "rb") as f:
                 TFRtr = pickle.load(f)  
 
@@ -964,24 +991,20 @@ def DataTransformationM1Raw(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, subj
 
     return Train_all, [1]*23 + [2]*23, Test_all[:, 0, :,:], [1, 2], np.stack(truth, axis=2)*1 
 
-def LR(band, method_pca, data_aug_method,subj_included, iteration=100, perm=False, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding/', iter_perm=1) : 
+def LR(band, method_pca, data_aug_method,subj_included, iteration=100, perm=False, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding/', iter_perm=1, data_path = OUT_PATH + '/Data') : 
     Y_PRED = []
     Y_TEST = []
     MODELS_weights = []
     X_TEST = []
     PCA_weights= []
-    Res_importance =[]
     PVALUES =[]
-
+    PVALUES_ll=[]
+    ll_trial = []
+    acc_trial =[]
+    
     for i in range(iteration) :   
-        X_train, y_train, X_test, y_test, True_trials, pca_weights = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use)        
-        # shuffle 
+        X_train, y_train, X_test, y_test, True_trials, pca_weights = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use, data_path=data_path)        
         X_train, y_train = shuffle(X_train, y_train, random_state =0)
-
-        # Scale
-        scaler = TimeSeriesScalerMinMax()
-        X_train = scaler.fit_transform(X_train)[:,:,0] # normalize amplitude per trials
-        X_test = scaler.transform(X_test)[:,:,0] # use the same scaler for testing set
 
         if i == 0 :
             param_grid = {
@@ -1009,25 +1032,31 @@ def LR(band, method_pca, data_aug_method,subj_included, iteration=100, perm=Fals
 
         if perm : 
             acc_perm = []
+            ll=[]
             for j in range(iter_perm) :
                 # Shuffle the labels
-                y_train_s = shuffle(y_train, random_state=0)
-                model = LogisticRegression(**best_params, max_iter=1000)
-                model.fit(X_train, y_train_s)    
-                y_pred = model.predict(X_test) 
+                y_train_s = shuffle(y_train) #, random_state=0)
+                model_s = LogisticRegression(**best_params, max_iter=1000)
+                model_s.fit(X_train, y_train_s)    
+                y_pred = model_s.predict(X_test) 
                 acc_perm.append(accuracy_score(y_pred=y_pred, y_true=y_test))
+
+                # LL
+                ll.append(log_loss(y_test, model_s.predict_proba(X_test)[:,1]))
             
             # Proportion of permuted mean accuracies equal or higher than the original accuracy.
-            PVALUES.append(len([np.array(acc_perm) >= current_acc])/iter_perm)
+            #PVALUES.append(len([np.array(acc_perm) >= current_acc])/iter_perm)
+            PVALUES.extend(acc_perm)
+            PVALUES_ll.extend(ll)
 
-        result = permutation_importance(model, X_test, y_test, n_repeats=20, random_state=0)
-        Res_importance.append(result.importances_mean)
         X_TEST.append(X_test)
+        acc_trial.append(current_acc)
+        ll_trial.append(log_loss(y_test, model.predict_proba(X_test)[:,1]))
+
 
     # save the result
     PCA_weights = np.vstack(PCA_weights)
     MODELS_weights = np.vstack(MODELS_weights)
-    Res_importance = np.vstack(Res_importance)
 
     # Analysis 
     out_dir = out_path + band
@@ -1035,8 +1064,8 @@ def LR(band, method_pca, data_aug_method,subj_included, iteration=100, perm=Fals
         os.makedirs(out_dir)
     
     # Check trials plot
-    #CheckTrialsMean(X_train,X_test, y_train, label = band+'_' + method_pca + '_' + data_aug_method, save=True, freq=band)
-    #CheckTrials(X_train, y_train, label = band+'_' + method_pca + '_' + data_aug_method, save=True, freq=band)
+    #CheckTrialsMean(X_train,X_test, y_train, label = band+'_' + method_pca + '_' + data_aug_method, save=True, freq=band, data_path = data_path)
+    #CheckTrials(X_train, y_train, label = band+'_' + method_pca + '_' + data_aug_method, save=True, freq=band,  data_path = data_path)
 
     #2. summary
     sumsum = pd.DataFrame()
@@ -1056,7 +1085,10 @@ def LR(band, method_pca, data_aug_method,subj_included, iteration=100, perm=Fals
 
     if perm :
         sumsum.loc['nb_iter_perm', 0] = iter_perm
-        sumsum.loc['pvalues', 0] = PVALUES
+        sumsum.loc['for_pvalues_acc', 0] = PVALUES
+        sumsum.loc['for_pvalues_ll', 0] = PVALUES_ll
+        sumsum.loc['current_acc', 0] = acc_trial
+        sumsum.loc['current_ll', 0] = ll_trial
 
     # info correlation pca stability
     n_runs = PCA_weights.shape[0]
@@ -1067,25 +1099,27 @@ def LR(band, method_pca, data_aug_method,subj_included, iteration=100, perm=Fals
             corr_matrix[i, j] = rho
             corr_matrix[j, i] = rho
     corr = pd.DataFrame(np.abs(corr_matrix))
-    corr.to_csv(out_dir + f'/{band}_{method_pca}_{data_aug_method}_correlation.csv')
-
+    corr.to_csv(out_dir + f'/{band}_{method_pca}_{data_aug_method}_{PC_use}_correlation.csv')
+    
     lower_tri = np.tril(corr.values, k=-1)  
     mean = lower_tri[lower_tri != 0].mean()
-    title = f"{sumsum.loc['band', :].values[0]} - {sumsum.loc['method_pca', :].values[0]} - {sumsum.loc['method_data_augm', :].values[0]} - mean:{np.round(mean, 2)}"
-    fig, ax = plt.subplots()
-    fig.suptitle('PCs correlations')
-    sns.heatmap(corr, xticklabels=False, yticklabels=False, cmap= 'Blues', ax=ax)
-    ax.set_title(title)
+    sumsum.loc['mean_corPC', 0] = mean
+
+    #title = f"{sumsum.loc['band', :].values[0]} - {sumsum.loc['method_pca', :].values[0]} - {sumsum.loc['method_data_augm', :].values[0]} - mean:{np.round(mean, 2)}"
+    #fig, ax = plt.subplots()
+    #fig.suptitle('PCs correlations')
+    #sns.heatmap(corr, xticklabels=False, yticklabels=False, cmap= 'Blues', ax=ax)
+    #ax.set_title(title)
 
     if save:
-        fig.savefig(out_dir + f'/{band}_{method_pca}_{data_aug_method}_CorrPCs.png')
-        sumsum.to_csv(out_dir + f'/{band}_{method_pca}_{data_aug_method}_summary.csv')
-        plt.close()
-    else :
-        plt.show()
+        #fig.savefig(out_dir + f'/{band}_{method_pca}_{data_aug_method}_CorrPCs.png')
+        sumsum.to_csv(out_dir + f'/{band}_{method_pca}_{data_aug_method}_{PC_use}_summary.csv')
+        #plt.close()
+    #else :
+        #plt.show()
 
     # Model temporal importance plot
-    fig, axs = plt.subplots(3, 1, figsize = (10, 8),height_ratios=[0.2, 0.4, 0.4], sharex=True)
+    fig, axs = plt.subplots(2, 1, figsize = (10, 8), sharex=True)
     fig.suptitle('Model analysis: Temporal Importance')
     fig.tight_layout()
 
@@ -1120,45 +1154,45 @@ def LR(band, method_pca, data_aug_method,subj_included, iteration=100, perm=Fals
     axs[0].grid()
     axs[0].set_title('Last run example', size=10)
 
-    axs[2].plot(time, Res_importance.mean(0), color='black',linewidth=1, label='Mean')
-    axs[2].fill_between(time,Res_importance.mean(0) - Res_importance.std(0).ravel(),Res_importance.mean(0) + Res_importance.std(0).ravel(),alpha=0.3, linewidth=0,color='gray', label='Std')
-    axs[2].set_title("Permutation Importance per Time Point", size = 10)
-    axs[2].legend()
-    axs[2].set_xlabel("Time")
-    axs[2].set_ylabel("Accuracy drop")
-
     if save: 
-        fig.savefig(out_dir + f'/{band}_{method_pca}_{data_aug_method}_TemporalImportance.png' )
+        fig.savefig(out_dir + f'/{band}_{method_pca}_{data_aug_method}_{PC_use}_TemporalImportance.png' )
         plt.close()
     else : 
         plt.show()
         return sumsum
 
-def TemporalGeneralization(band,method_pca,data_aug_method, subj_included, PC_use=0, undersampling=False, save=False) : 
+def TemporalGeneralization(band,method_pca,data_aug_method, subj_included, PC_use=0, undersampling=False, save=False, data_path = OUT_PATH + '/Data') : 
     out_dir = f'{OUT_PATH}/Decoding/{band}'
     if not os.path.exists(out_dir) : 
         os.makedirs(out_dir)
 
-    X_train, y_train, X_test, y_test, _, _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use)      
+    X_train, y_train, X_test, y_test, _, _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use, data_path=data_path)      
     
     X = np.concat([X_train, X_test], axis =0)
     y = np.concat([y_train, y_test])
 
     if undersampling : 
-        X = X[:, :, ::5]
+        X = X[:, ::5]
 
     _, n_time = X.shape
     scores = np.zeros((n_time, n_time))
 
+    kf = KFold(n_splits=4, shuffle=True, random_state=42)
+
     for t_train in range(n_time):
-        X_train = X[:, t_train].reshape(-1, 1)
-        clf = LogisticRegression(max_iter=1000)
-        clf.fit(X_train, y)
+        X_t = X[:, t_train].reshape(-1, 1)
 
         for t_test in range(n_time):
-            X_test = X[:, t_test].reshape(-1, 1)
-            y_pred = clf.predict(X_test)
-            scores[t_train, t_test] = accuracy_score(y, y_pred)
+            X_te = X[:, t_test].reshape(-1, 1)
+            fold_scores = []
+
+            for train_idx, test_idx in kf.split(X_t):
+                clf = LogisticRegression(max_iter=1000)
+                clf.fit(X_t[train_idx], y[train_idx])
+                y_pred = clf.predict(X_te[test_idx])
+                fold_scores.append(accuracy_score(y[test_idx], y_pred))
+
+            scores[t_train, t_test] = np.mean(fold_scores)
 
     fig, ax = plt.subplots()
     im = ax.imshow(scores, vmin=0, vmax=1, origin='lower', aspect='auto', cmap='Blues')
@@ -1168,12 +1202,12 @@ def TemporalGeneralization(band,method_pca,data_aug_method, subj_included, PC_us
     ax.set_ylabel("Train Time")
     ax.set_title(f"Temporal Generalization - mean score : {np.round(np.mean(scores), 2)}")
     if save :
-        fig.savefig(OUT_PATH + '/Decoding/'+ band + f'/{band}_{method_pca}_{data_aug_method}_TemporalGeneralization.png' )
+        fig.savefig(OUT_PATH + '/Decoding/'+ band + f'/{band}_{method_pca}_{data_aug_method}_{PC_use}_TemporalGeneralization.png' )
         plt.close()
     else : 
         plt.show()
 
-def TemporalLR(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False):
+def TemporalLR(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, data_path = OUT_PATH + '/Data'):
     Y_PRED = []
     Y_TEST = []
     MODELS_weights = []
@@ -1181,20 +1215,10 @@ def TemporalLR(band, method_pca, data_aug_method,subj_included, iteration=100, P
     param_grid = {'C': [0.01, 0.1, 1, 10], 'penalty': ['l2'], 'solver': ['liblinear']}
     best_params = {}
 
-    out_dir = f'{OUT_PATH}/Decoding/{band}'
-    if not os.path.exists(out_dir) : 
-        os.makedirs(out_dir)
-
     for i in range(iteration) :     
         
-        X_train, y_train, X_test, y_test, _, _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use)        
-        # Shuffle 
+        X_train, y_train, X_test, y_test, _, _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use, data_path=data_path )        
         X_train, y_train = shuffle(X_train, y_train, random_state =0)
-
-        # Scale
-        scaler = TimeSeriesScalerMinMax()
-        X_train = scaler.fit_transform(X_train)[:,:,0] 
-        X_test = scaler.transform(X_test)[:,:,0]
 
         weights = []
         y_pred= []
@@ -1228,7 +1252,7 @@ def TemporalLR(band, method_pca, data_aug_method,subj_included, iteration=100, P
     fig.suptitle('Model analysis: Temporal Importance')
     fig.tight_layout()
 
-    with open(OUT_PATH + f'/Data/{subj_included[0]}_info.json') as json_data:
+    with open(data_path + f'/{subj_included[0]}_info.json') as json_data:
         d = json.load(json_data)
         if band == 'broadband' :
             time = d['time_epoch']
@@ -1249,8 +1273,10 @@ def TemporalLR(band, method_pca, data_aug_method,subj_included, iteration=100, P
     id_ev2 = np.where(np.array(y_train) == 2)[0]
 
     for ev_i, ev in enumerate([id_ev1, id_ev2]) : 
-        axs[0].plot(time, X_train[ev, :].mean(0) *0.1, label = f'{event[ev_i]} mean over training', color = color_ev[ev_i]) 
-        axs[0].plot(time, X_test[ev_i, :] *0.1, label = f'{event[ev_i]} testing', color = color_ev[ev_i], alpha = 0.2)
+        axs[0].plot(time, X_train[ev, :].mean(0), color = color_ev[ev_i], label =event[ev_i] + ' - Mean over Training')
+        axs[0].fill_between(time, X_train[ev, :].mean(0) - X_train[ev, :].std(0), X_train[ev, :].mean(0) + X_train[ev, :].std(0), color = color_ev[ev_i], alpha = 0.2,  label =event[ev_i] + ' - Std over Training')
+        axs[0].plot(time, X_test[ev_i, :], color = color_ev[ev_i], linestyle='dashed',  label =event[ev_i] + ' - Testing')
+    
     axs[0].legend()
     axs[0].grid()
     axs[0].set_title('Last run example', size=10)
@@ -1273,37 +1299,36 @@ def TemporalLR(band, method_pca, data_aug_method,subj_included, iteration=100, P
 
     # save
     if save:
-        sumsum.to_csv(out_dir+ f'/{band}_{method_pca}_{data_aug_method}_TpointSummary.csv')
-        fig.savefig(out_dir+ f'/{band}_{method_pca}_{data_aug_method}_TpointTemporalImportance.png' )
+        out_dir = f'{OUT_PATH}/Decoding/{band}'
+        if not os.path.exists(out_dir) : 
+            os.makedirs(out_dir)
+        sumsum.to_csv(out_dir+ f'/{band}_{method_pca}_{data_aug_method}_{PC_use}_TpointSummary.csv')
+        fig.savefig(out_dir+ f'/{band}_{method_pca}_{data_aug_method}_{PC_use}_TpointTemporalImportance.png' )
         plt.close()
     else :
         plt.plot()
         return sumsum
 
-def TemporalLRRaw(band, data_aug_method,subj_included, iteration=100, PC_use=False, method_pca=False, save=False):
+def TemporalLRRaw(band, data_aug_method,subj_included, iteration=100, PC_use=False, method_pca=False, save=False, data_path = OUT_PATH + '/Data'):
     Y_PRED = []
     Y_TEST = []
     MODELS_weights = []
-
-    out_dir = f'{OUT_PATH}/Decoding/{band}'
-    if not os.path.exists(out_dir) : 
-        os.makedirs(out_dir)
     best_params = {}
     param_grid = {'C': [0.01, 0.1, 1, 10], 'penalty': ['l2'], 'solver': ['liblinear']}
 
     for i in range(iteration) :     
         if PC_use == False : 
-            X_train, y_train, X_test, y_test, _ = DataTransformationM1Raw(freq= band, data_aug_method=data_aug_method, subj_included=subj_included)        
+            X_train, y_train, X_test, y_test, _ = DataTransformationM1Raw(freq= band, data_aug_method=data_aug_method, subj_included=subj_included, data_path=data_path)        
         else : 
-            X_train, y_train, X_test, y_test, _, _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=[0, 1])                
+            X_train, y_train, X_test, y_test, _, _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use, data_path = data_path )                
 
         # Shuffle 
         X_train, y_train = shuffle(X_train, y_train, random_state =0)
         # Scale
-        for pc in range(X_train.shape[1]) :    
-            scaler = TimeSeriesScalerMinMax()
-            X_train[:,pc, :] = scaler.fit_transform(X_train[:, pc, :])[:, :, 0]
-            X_test[:, pc, :] = scaler.transform(X_test[:, pc, :])[:, :, 0]
+        #for pc in range(X_train.shape[1]) :    
+        #    scaler = StandardScaler()
+        #    X_train[:,pc, :] = scaler.fit_transform(X_train[:, pc, :])
+        #    X_test[:, pc, :] = scaler.transform(X_test[:, pc, :])
    
         weights = []
         y_pred= []
@@ -1337,7 +1362,7 @@ def TemporalLRRaw(band, data_aug_method,subj_included, iteration=100, PC_use=Fal
     fig.suptitle('Model analysis: Temporal Importance')
     fig.tight_layout()
 
-    with open(OUT_PATH + f'/Data/{subj_included[0]}_info.json') as json_data:
+    with open(data_path + f'/{subj_included[0]}_info.json') as json_data:
         d = json.load(json_data)
         if band == 'broadband' :
             time = d['time_epoch']
@@ -1371,7 +1396,7 @@ def TemporalLRRaw(band, data_aug_method,subj_included, iteration=100, PC_use=Fal
     axs[0].grid()
     axs[0].set_title(title_label + ' last run example', size=10)
 
-    sns.heatmap(weights_clf.T, cmap='seismic', xticklabels=False, yticklabels=False, ax=axs[1])
+    sns.heatmap(abs(weights_clf.T), cmap='Blues', xticklabels=False, yticklabels=False,center=0, ax=axs[1])
     axs[1].set_title('LR Weights per time point mean over iterations', size = 10)
     if PC_use == False : 
         axs[1].set_ylabel('Channels')
@@ -1401,6 +1426,9 @@ def TemporalLRRaw(band, data_aug_method,subj_included, iteration=100, PC_use=Fal
     sumsum.loc['accuracy', 0] = np.round(np.mean(accuracies), 2)
     # save
     if save :
+        out_dir = f'{OUT_PATH}/Decoding/{band}'
+        if not os.path.exists(out_dir) : 
+            os.makedirs(out_dir)
         sumsum.to_csv(out_dir + f'/{band}_{l}_{data_aug_method}_TpointSummary.csv')
         fig.savefig(out_dir + f'/{band}_{l}_{data_aug_method}_TpointTemporalImportance.png' )
         plt.close()
@@ -1408,15 +1436,15 @@ def TemporalLRRaw(band, data_aug_method,subj_included, iteration=100, PC_use=Fal
         plt.show()
         return sumsum
 
-def TemporalGeneralizationRaw(band, data_aug_method, subj_included, save=False,PC_use=False,method_pca=False, undersampling=False) : 
+def TemporalGeneralizationRaw(band, data_aug_method, subj_included, save=False,PC_use=False,method_pca=False, undersampling=False, data_path = OUT_PATH + '/Data') : 
     out_dir = f'{OUT_PATH}/Decoding/{band}'
     if not os.path.exists(out_dir) : 
         os.makedirs(out_dir)
 
     if PC_use == False : 
-        X_train, y_train, X_test, y_test, _ = DataTransformationM1Raw(freq= band, data_aug_method=data_aug_method, subj_included=subj_included)        
+        X_train, y_train, X_test, y_test, _ = DataTransformationM1Raw(freq= band, data_aug_method=data_aug_method, subj_included=subj_included, data_path=data_path)        
     else : 
-        X_train, y_train, X_test, y_test, _, _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=[0, 1])                
+        X_train, y_train, X_test, y_test, _, _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use, data_path=data_path)                
 
     X = np.concat([X_train, X_test], axis =0)
     y = np.concat([y_train, y_test])
@@ -1424,23 +1452,25 @@ def TemporalGeneralizationRaw(band, data_aug_method, subj_included, save=False,P
     if undersampling : 
         X = X[:, :, ::5]
 
-    for pc in range(X.shape[1]) :    
-        scaler = TimeSeriesScalerMinMax()
-        X[:,pc, :] = scaler.fit_transform(X[:, pc, :])[:, :, 0]
+    #for pc in range(X.shape[1]) :    
+        #scaler = StandardScaler()
+        #X[:,pc, :] = scaler.fit_transform(X[:, pc, :])
 
     _, _, n_time = X.shape
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
     scores = np.zeros((n_time, n_time))
 
     for t_train in range(n_time):
-        X_train = X[:, :, t_train]
-        clf = LogisticRegression(max_iter=1000)
-        clf.fit(X_train, y)
-
-
+        X_t_train = X[:, :, t_train] 
         for t_test in range(n_time):
-            X_test = X[:,:, t_test]
-            y_pred = clf.predict(X_test)
-            scores[t_train, t_test] = accuracy_score(y, y_pred)
+            X_t_test = X[:, :, t_test]
+            fold_scores = []
+            for train_idx, test_idx in kf.split(X_t_train):
+                clf = LogisticRegression(max_iter=1000)
+                clf.fit(X_t_train[train_idx], y[train_idx])
+                y_pred = clf.predict(X_t_test[test_idx])
+                fold_scores.append(accuracy_score(y[test_idx], y_pred))
+            scores[t_train, t_test] = np.mean(fold_scores)
 
     fig, ax = plt.subplots()
     im = ax.imshow(scores, vmin=0, vmax=1, origin='lower', aspect='auto', cmap='Blues')
@@ -1456,12 +1486,12 @@ def TemporalGeneralizationRaw(band, data_aug_method, subj_included, save=False,P
     ax.set_title(f"Temporal Generalization {l.replace('_', ' ')} -- mean accuracy {np.round(np.mean(scores), 2)}")
 
     if save :
-        fig.savefig(OUT_PATH + '/Decoding/'+ band + f'/{band}_{l}_{data_aug_method}_TemporalGeneralization.png' )
+        fig.savefig(out_dir + f'/{band}_{l}_{data_aug_method}_TemporalGeneralization.png' )
         plt.close()
     else : 
         plt.show()
 
-def CompareClassifier(band,method_pca,data_aug_method,subj_included, nb_iter=100, PC_use=0, save=False, perm=False, out_path = OUT_PATH + '/Decoding') :
+def CompareClassifier(band,method_pca,data_aug_method,subj_included, nb_iter=100, PC_use=0, save=False, perm=False, out_path = OUT_PATH + '/Decoding', data_path=OUT_PATH + '/Data') :
 
     classifiers = {
         'LR': LogisticRegression(max_iter=1000),
@@ -1480,25 +1510,25 @@ def CompareClassifier(band,method_pca,data_aug_method,subj_included, nb_iter=100
     }
 
     best_params = {}
-    results = {key: {'accuracy': [], 'f1': []} for key in classifiers.keys()}
+    results = {key: {'accuracy': [], 'f1': [], 'y_pred': [], 'y_test':[]} for key in classifiers.keys()}
 
     for run in range(nb_iter):
-        X_train, y_train, X_test, y_test, _, _ = DataTransformationM1(freq=band,method_pca=method_pca,data_aug_method=data_aug_method,subj_included=subj_included,PC_use=PC_use)
+        X_train, y_train, X_test, y_test, _, _ = DataTransformationM1(freq=band,method_pca=method_pca,data_aug_method=data_aug_method,subj_included=subj_included,PC_use=PC_use, data_path=data_path)
         X_train, y_train = shuffle(X_train, y_train, random_state=run)
         if perm : 
             y_train = shuffle(y_train, random_state=0)
 
-        scaler = TimeSeriesScalerMinMax()
-        X_train_scaled = scaler.fit_transform(X_train)[:, :, 0]  # (samples, timepoints)
-        X_test_scaled = scaler.transform(X_test)[:, :, 0]
-        
+        #scaler = StandardScaler()
+        #X_train_scaled = scaler.fit_transform(X_train)[:, :, 0]  # (samples, timepoints)
+        #X_test_scaled = scaler.transform(X_test)[:, :, 0]
+
         for name, clf in classifiers.items():
             if run == 0:
                 grid = GridSearchCV(clf, param_grids[name], cv=5, scoring='accuracy')
                 if name in ['kNN_DTW', 'TimeSeriesSVC']:
-                    grid.fit(X_train_scaled[:, :, np.newaxis], y_train)
+                    grid.fit(X_train[:, :, np.newaxis], y_train)
                 else:
-                    grid.fit(X_train_scaled, y_train)
+                    grid.fit(X_train, y_train)
                 
                 best_params[name] = grid.best_params_
                 clf = clf.set_params(**best_params[name])
@@ -1506,17 +1536,18 @@ def CompareClassifier(band,method_pca,data_aug_method,subj_included, nb_iter=100
                 clf = clf.set_params(**best_params[name])
             
             if name in ['kNN_DTW', 'TimeSeriesSVC']:
-                clf.fit(X_train_scaled[:, :, np.newaxis], y_train)
+                clf.fit(X_train[:, :, np.newaxis], y_train)
                 y_pred = clf.predict(X_test[:, :, np.newaxis])
             else:
-                clf.fit(X_train_scaled, y_train)
-                y_pred = clf.predict(X_test_scaled)
+                clf.fit(X_train, y_train)
+                y_pred = clf.predict(X_test)
             
             results[name]['accuracy'].append(accuracy_score(y_test, y_pred))
             results[name]['f1'].append(f1_score(y_test, y_pred, average='macro'))
+            results[name]['y_pred'].extend(y_pred)
+            results[name]['y_test'].extend(y_test)
 
-
-    PlotCompareModels(band, method_pca, data_aug_method, results, save=save, perm=perm)
+    #PlotCompareModels(band, method_pca, data_aug_method, results,pc_used=PC_use, save=save, perm=perm)
     if perm :
         l = '_permuted'
     else : 
@@ -1525,11 +1556,14 @@ def CompareClassifier(band,method_pca,data_aug_method,subj_included, nb_iter=100
     # save result 
     if save :
         df_res = pd.DataFrame(results)
-        df_res.to_csv(out_path + f'/{band}_{method_pca}_{data_aug_method}{l}_CompareModels.csv')
+        if not os.path.exists(out_path + f'/{band}') :
+            os.makedirs(out_path + f'/{band}')
+
+        df_res.to_csv(out_path + f'/{band}/{method_pca}_{data_aug_method}{l}_{PC_use}_CompareModels.csv')
     else : 
         return df_res
 
-def PlotCompareModels(band, method_pca, data_aug_method, results, save=False, out_path = OUT_PATH, perm=False):
+def PlotCompareModels(band, method_pca, data_aug_method, results, pc_used, save=False, out_path = OUT_PATH +'/Decoding', perm=False):
     clf_names = [k.replace('_', ' ') for k in results.keys()]
     acc_mean = [np.mean(results[k]['accuracy']) for k in results.keys()]
     acc_std  = [np.std(results[k]['accuracy'])  for k in results.keys()]
@@ -1563,7 +1597,10 @@ def PlotCompareModels(band, method_pca, data_aug_method, results, save=False, ou
     plt.tight_layout()
 
     if save :
-        fig.savefig(out_path + f'/Decoding/{band}_{method_pca}_{data_aug_method}{l}_CompareModels.png')
+        if not os.path.exists(out_path + f'/{band}') :
+            os.makedirs(out_path + f'/{band}')
+            
+        fig.savefig(out_path + f'/{band}/{method_pca}_{data_aug_method}{l}_{pc_used}_CompareModels.png')
         plt.close()
     else : 
         plt.show()
@@ -1667,11 +1704,7 @@ def PermLR_distrib(band, method_pca, data_aug_method,subj_included, iteration=10
         for i in range(iteration) :   
             X_train, y_train, X_test, y_test, _ , _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use)        
             X_train, y_train = shuffle(X_train, y_train, random_state =0)
-
-            # Scale
-            scaler = TimeSeriesScalerMinMax()
-            X_train = scaler.fit_transform(X_train)[:,:,0] # normalize amplitude per trials
-            X_test = scaler.transform(X_test)[:,:,0] # use the same scaler for testing set
+            Y_TEST.extend(y_test)
 
             if i == 0 :
                 param_grid = {
@@ -1684,21 +1717,18 @@ def PermLR_distrib(band, method_pca, data_aug_method,subj_included, iteration=10
                 grid = GridSearchCV(base_model, param_grid, cv=5)
                 grid.fit(X_train, y_train)
                 best_params = grid.best_params_
-
             # model not shuffle
             model = LogisticRegression(**best_params, max_iter=1000)
             model.fit(X_train, y_train)
-            y_pred = model.predict(X_test)
+            Y_PRED.extend(model.predict(X_test))
 
             # model shuffle 
+
             y_train_s = shuffle(y_train, random_state=0)
             model_s = LogisticRegression(**best_params, max_iter=1000)
             model_s.fit(X_train, y_train_s)    
-            y_pred = model_s.predict(X_test) 
-        
-            Y_PRED_S.extend(y_pred)
-            Y_PRED.extend(y_pred)
-            Y_TEST.extend(y_test)
+            Y_PRED_S.extend(model_s.predict(X_test)) 
+
             p.extend(model.predict_proba(X_test)[:,1]) # CHECK THAT I M DOING THE RIGHT THINGS WITH THE LABELS
             p_s.extend(model_s.predict_proba(X_test)[:,1])
 
@@ -1732,18 +1762,185 @@ def PermLR_distrib(band, method_pca, data_aug_method,subj_included, iteration=10
         return sumsum
 
 def PermLR_null(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=1, accuracy = True, entropy=True) : 
-    Y_PRED = []
+    sumsum = pd.DataFrame()
+    for s in range(3):
+        Y_PRED = []
+        Y_TEST = []
+        p=[]
+
+        for i in range(iteration) :   
+            X_train, y_train, X_test, y_test, _ , _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use)        
+            X_train, y_train = shuffle(X_train, y_train, random_state =0)
+
+            if i == 0 :
+                param_grid = {
+                    'C': [0.01, 0.1, 1, 10, 100],
+                    'penalty': ['l2'],
+                    'solver': ['lbfgs']  # works with l2
+                }
+
+                base_model = LogisticRegression(max_iter=1000)
+                grid = GridSearchCV(base_model, param_grid, cv=5)
+                grid.fit(X_train, y_train)
+                best_params = grid.best_params_
+
+            # model not shuffle
+            model = LogisticRegression(**best_params, max_iter=1000)
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+        
+            Y_PRED.extend(y_pred)
+            Y_TEST.extend(y_test)
+            p.extend(model.predict_proba(X_test)[:,1]) # CHECK THAT I M DOING THE RIGHT THINGS WITH THE LABELS
+        
+        # STATS BUILT UP THE NULL 
+        acc = accuracy_score(Y_TEST, Y_PRED)
+        if accuracy : 
+            acc_perm_list = []
+            for k in range(iter_perm):
+                acc_perm_list.append(accuracy_score(shuffle(Y_TEST), Y_PRED) )
+            
+            #perm_scores_array = np.array(acc_perm_list)
+            #mask = [perm_scores_array >= acc]
+            #p_value_acc = len(perm_scores_array[mask])/iter_perm
+
+        score = log_loss(Y_TEST, p)
+        if entropy :
+            perm_scores =[]
+            for k in range(iter_perm):
+                y_perm = np.random.permutation(Y_TEST)
+                score_k = log_loss(y_perm, p)
+                perm_scores.append(score_k)
+
+            #perm_scores_array = np.array(perm_scores)
+            #mask = [perm_scores_array <= score]
+            #p_value_entropy = len(perm_scores_array[mask])/iter_perm
+
+        #2. summary
+        if not os.path.isdir(out_path + 'stats/') : 
+            os.makedirs(out_path+'stats/')
+
+        
+        # info test
+        sumsum.loc['band', s] = band
+        sumsum.loc['method_pca', s] = method_pca
+        sumsum.loc['method_data_augm', s] = data_aug_method
+        sumsum.loc['nb_iter', s] = iteration # Iteration to built up the testing 
+
+        # info model capacities
+        sumsum.loc['acc', s] = np.round(acc, 3)
+        sumsum.loc['entropy', s] = np.round(score, 3)
+
+        # info perm 
+        sumsum.loc['nb_iter_perm', s] = iter_perm # Iteration to built up the pvalue
+        if entropy : 
+            sumsum.loc['entropy_p', s] = str(perm_scores)
+            #sumsum.loc['entropy_pvalue', 0] = p_value_entropy
+        if accuracy : 
+            sumsum.loc['acc_p', s] = str(acc_perm_list)
+            #sumsum.loc['acc_pvalues', 0] = p_value_acc
+
+    if save : 
+        sumsum.to_csv(out_path + f'/stats/PermNull_{band}_{method_pca}_{data_aug_method}_pc{PC_use+1}.csv')
+
+    else : 
+        return sumsum
+    
+def PermLR_Final(freq, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=1) :
+
+    TFRm_list = []
+    Train_sample = []
+    Test_sample = []
+    truth = []
+
+    # TO STORE
     Y_TEST = []
-    p=[]
+    Y_PRED = []
+    Y_PRED_SH = []
+    p= []
+    p_sh  =[]
+    weights_model = []
+    weights_model_sh = []
 
-    for i in range(iteration) :   
-        X_train, y_train, X_test, y_test, _ , _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use)        
-        X_train, y_train = shuffle(X_train, y_train, random_state =0)
+    if subj_included ==[] : 
+        subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(out_path + '/Data') if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
 
-        # Scale
-        scaler = TimeSeriesScalerMinMax()
-        X_train = scaler.fit_transform(X_train)[:,:,0] # normalize amplitude per trials
-        X_test = scaler.transform(X_test)[:,:,0] # use the same scaler for testing set
+    for i in range(iteration):
+        for subj in subj_included[:3] : 
+            info_file = out_path + f'/Data/{subj}_info.json'
+            with open(info_file) as f:
+                info = json.load(f)
+                events_index = np.array([int(i) for i in info['event_id']])
+
+            id_ev1 = np.where(events_index == 1)[0]
+            id_ev2 = np.where(events_index == 2)[0]
+
+            # Keep 1 id per condi for testing 
+            id_test= [random.sample(list(id_ev1),1), random.sample(list(id_ev2),1)]
+            id_ev1 = list(id_ev1)
+            id_ev1.remove(id_test[0])
+            id_ev1 = np.array(id_ev1)
+            id_ev2 = list(id_ev2)
+            id_ev2.remove(id_test[1])
+            id_ev2 = np.array(id_ev2)
+            
+            # Compute TFRm 
+            if freq == 'broadband' :
+                TFRm = BbEvents(subj, test_id = id_test, events_index=events_index)
+            else : 
+                freq_id = FREQ_BAND.index(freq)
+                TFRm = TFRmEvents(subj, test_id = id_test, freq_id = freq_id, events_index=events_index)
+
+            # Save for PCA computation at grp level
+            if method_pca == 'concat' :
+                TFRm_list.append(np.concatenate([TFRm[i, :,:] for i in [0, 1]], axis = 1))
+            if method_pca == 'mean' : 
+                TFRm_list.append(np.mean(TFRm[[0, 1], :,:], axis = 0))
+
+            # Get the data
+            if freq == 'broadband' :
+                file = out_path + f'/Data/{subj}_epochs.p'
+                with open(file, "rb") as f:
+                    TFRtr = pickle.load(f)  
+
+                TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
+                Train_sample.append(TFRtr_augmented)
+                truth.append(true_trials)
+                Test_sample.append(TFRtr[id_test,:, :])
+
+            else :
+                file = out_path + f'/Data/{subj}_TFRtrials.p'
+                with open(file, "rb") as f:
+                    TFRtr = pickle.load(f)  
+
+                # Augment the data
+                TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, freq_id, :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
+                Train_sample.append(TFRtr_augmented)
+
+                truth.append(true_trials)
+                Test_sample.append(TFRtr[id_test,:, freq_id, :])
+
+            
+        concat_all = np.concatenate(TFRm_list, axis = 0) 
+        Train_all = np.concatenate(Train_sample, axis=1)
+        y_train = [1]*23 + [2]*23
+        Test_all = np.concatenate(Test_sample, axis =2)
+        Y_TEST.extend([1, 2])
+
+        # NORMAL 
+        df_Componants, _ = ConcatPCA({'grp' : concat_all}, ch_id = False, nb_compo=3, freq_band=[freq])
+        weights = df_Componants['grp'].query("freq == @freq").drop(columns = ['freq', 'compo']).values
+
+        if type(PC_use) == list :
+            Train_transformed = np.zeros([Train_all.shape[0],len(PC_use), Train_all.shape[-1]])
+            Test_transformed = np.zeros([Test_all.shape[0], len(PC_use),Test_all.shape[-1]])
+            for pc in PC_use : 
+                Train_transformed[:, pc, :] = weights[pc, :] @ Train_all
+                Test_transformed[:, pc, :] = weights[pc, :] @ Test_all[:,0,:]
+                
+        else : 
+            Train_transformed = weights[PC_use, :] @ Train_all
+            Test_transformed = weights[PC_use, :] @ Test_all[:,0,:]
 
         if i == 0 :
             param_grid = {
@@ -1760,57 +1957,255 @@ def PermLR_null(band, method_pca, data_aug_method,subj_included, iteration=100, 
         # model not shuffle
         model = LogisticRegression(**best_params, max_iter=1000)
         model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
+        Y_PRED.extend(model.predict(X_test))
+        p.extend(model.predict_proba(X_test)[:,1])
+        weights_model.append(model.coef_)
+
+        # SHUFFLED 
+        for j in range(iter_perm) : 
+            # Shuffleing TFRm to compute PCA
+            # split the concat shuffle the of one before one after 
+            concat_ev1 = concat_all[:, :int(concat_all.shape[1]/2)]
+            concat_ev2 = concat_all[:, int(concat_all.shape[1]/2):]
+            concat_ev12=np.concatenate([[concat_ev1], [concat_ev2]]) # got (2, channels, time) 
+            concat_ev12_shuffled = concat_ev12.copy()
+            np.random.shuffle(concat_ev12_shuffled)  # shuffle axis = 0
+            concat_all_sh = np.concat([concat_ev12_shuffled[i, :,:] for i in range(2)], axis = 1) # concat the time
+            df_Componants_sh, _ = ConcatPCA({'grp' : concat_all_sh}, ch_id = False, nb_compo=3, freq_band=[freq])
+            weights_sh = df_Componants_sh['grp'].query("freq == @freq").drop(columns = ['freq', 'compo']).values
+
+            # Applied on train 
+            if type(PC_use) == list : 
+                Train_transformed_sh = np.zeros([Train_all.shape[0],len(PC_use), Train_all.shape[-1]])
+                Test_transformed_sh = np.zeros([Test_all.shape[0], len(PC_use),Test_all.shape[-1]])
+                for pc in PC_use : 
+                    Train_transformed_sh[:, pc, :] = weights_sh[pc, :] @ Train_all
+                    Test_transformed_sh[:, pc, :] = weights_sh[pc, :] @ Test_all[:,0,:]
+                    
+            else : 
+                Train_transformed_sh = weights_sh[PC_use, :] @ Train_all
+                Test_transformed_sh = weights_sh[PC_use, :] @ Test_all[:,0,:]
+            
+            # Shuffle the labels
+            y_train_sh = shuffle(y_train)
+         
+            # applied the model
+            model_sh = LogisticRegression(**best_params, max_iter=1000)
+            model_sh.fit(Train_transformed_sh, y_train_sh)
+            Y_PRED_SH.extend(model_sh.predict(Test_transformed_sh))
+            p_sh.extend(model_sh.predict_proba(Test_transformed_sh)[:,1])
+            weights_model_sh.append(model_sh.coef_)
+
+        sumsum= pd.DataFrame()
+        sumsum['band'] =freq
+        sumsum['method_pca'] = method_pca
+        sumsum['data_aug_method'] = data_aug_method
+        sumsum['iter'] = iteration
+        sumsum['iter_perm']=iter_perm
+        sumsum['y_pred'] = Y_PRED
+        sumsum['y_pred_sh'] = Y_PRED_SH
+        sumsum['y_test'] = Y_TEST
+        sumsum['entropy'] = p
+        sumsum['entropy_sh'] = p_sh
+        sumsum['weight'] = weights_model
+        sumsum['weight_sh'] = weights_model_sh
+
+        if save : 
+            if not os.path.isdir(out_path + f'/stats/{freq}') : 
+                os.makedirs(out_path + f'/stats/{freq}')
+                
+            sumsum.to_csv(out_path + f'/stats/{freq}/{method_pca}_{data_aug_method}_{PC_use}_PermDistrub.csv')
+
+        else : 
+            return sumsum
+
+################################### VIZ AND INTRO (CHAT) ###################################
     
-        Y_PRED.extend(y_pred)
-        Y_TEST.extend(y_test)
-        p.extend(model.predict_proba(X_test)[:,1]) # CHECK THAT I M DOING THE RIGHT THINGS WITH THE LABELS
+def PolarChannel(data1, title="Channels", elects=[], subjs = [], cmap_name = 'Blues', to_black = []):
+    C, T = data1.shape
+    cmap = cm.get_cmap(cmap_name, C)
+    theta = np.linspace(0, 2*np.pi, C, endpoint=False)
+    fig = plt.figure(figsize=(10, 7))
+    ax = fig.add_subplot(111, projection="3d")
+    tfr_path = OUT_PATH+ '/Data'
+    subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
+    subj_included = ExcludSubj(subj_included)
+    with open(OUT_PATH + f'/Data/{subj_included[0]}_info.json') as json_data:
+        d = json.load(json_data)
+        time = d['time_tfr']
+        json_data.close()
+    z = time
     
-    # STATS BUILT UP THE NULL 
-    acc = accuracy_score(Y_TEST, Y_PRED)
-    if accuracy : 
-        acc_perm_list = []
-        for k in range(iter_perm):
-            acc_perm_list.append(accuracy_score(shuffle(Y_TEST), Y_PRED) )
+    for ch in range(C):
+        amp = data1[ch]            
+        th  = theta[ch]             
+        x = amp * np.cos(th)
+        y = amp * np.sin(th)
+
+        color = cmap(0.3 + (1 - 0.3) * (ch / (C - 1))) 
+        ax.plot(z, y, x, alpha=0.9, label=f"Ch {elects[ch].replace('`', '')} subj {subjs[ch]}", color=color)
+
+    if len(to_black) != 0 :
+        for i in to_black : 
+            amp = data1[i]            
+            th  = theta[i]             
+            x = amp * np.cos(th)
+            y = amp * np.sin(th)
+            ax.scatter(z, y,x,s=2, alpha=0.9, label=f"Ch {elects[i].replace('`', '')} subj {subjs[i]}", color='black')
         
-        p_value_acc = len([np.array(acc_perm_list) >= acc])/iter_perm
+    ax.legend(bbox_to_anchor=(1.6, 1))
+    ax.set_title(title)
+    ax.set_zlabel("x = r*cos(theta)")
+    ax.set_ylabel("y = r*sin(theta)")
+    ax.set_xlabel("time")
+    plt.show()
 
-    score = log_loss(Y_TEST, p)
-    if entropy :
-        perm_scores =[]
-        for k in range(iter_perm):
-            y_perm = np.random.permutation(Y_TEST)
-            score_k = log_loss(y_perm, p)
-            perm_scores.append(score_k)
+def PolarChannelWithPCA(data1, title="Channels", elects=[], subjs=[], cmap_name='Blues', data_full=None, idx_picks=None):
+    C, T = data1.shape
+    theta = np.linspace(0, 2*np.pi, C, endpoint=False)
+    cmap = cm.get_cmap(cmap_name, C)
 
-        p_value_entropy = len([np.array(perm_scores) <= score])/iter_perm
+    fig = plt.figure(figsize=(10, 7))
+    ax = fig.add_subplot(111, projection="3d")
 
-    #2. summary
-    if not os.path.isdir(out_path + 'stats/') : 
-        os.makedirs(out_path+'stats/')
+    # Load time axis
+    tfr_path = OUT_PATH+ '/Data'
+    subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file.endswith('TFRtrials.p')]
+    subj_included = ExcludSubj(subj_included)
+    with open(OUT_PATH + f'/Data/{subj_included[0]}_info.json') as json_data:
+        d = json.load(json_data)
+        time = d['time_tfr']
 
-    sumsum = pd.DataFrame()
-    # info test
-    sumsum.loc['band', 0] = band
-    sumsum.loc['method_pca', 0] = method_pca
-    sumsum.loc['method_data_augm', 0] = data_aug_method
-    sumsum.loc['nb_iter', 0] = iteration # Iteration to built up the testing 
+    z = time
 
-    # info model capacities
-    sumsum.loc['accuracy', 0] = np.round(acc, 3)
-    sumsum.loc['entropy', 0] = np.round(score, 3)
+    # ---- Plot channels in polar 3D ----
+    for ch in range(C):
+        amp = data1[ch]
+        th = theta[ch]
+        x = amp * np.cos(th)
+        y = amp * np.sin(th)
+        color = cmap(0.3 + 0.7 * (ch / (C - 1)))
+        ax.plot(z, y, x, alpha=0.9, label=f"Ch {elects[ch]} subj {subjs[ch]}", color=color)
 
-    # info perm 
-    sumsum.loc['nb_iter_perm', 0] = iter_perm # Iteration to built up the pvalue
-    if entropy : 
-        sumsum.loc['entropies_perm', 0] = perm_scores
-        sumsum.loc['pvalue_entropy', 0] = p_value_entropy
-    if accuracy : 
-        sumsum.loc['accuracies_perm', 0] = acc_perm_list
-        sumsum.loc['pvalues_accuracy', 0] = p_value_acc
+    pca = PCA(n_components=2)
+    pca.fit(data_full.T)  # transpose: samples x features
+    components = pca.components_  # shape (2, C)
 
-    if save : 
-        sumsum.to_csv(out_path + f'/stats/PermNull_{band}_{method_pca}_{data_aug_method}_pc{PC_use+1}.csv')
+    scale = 40
+    for i, pc in enumerate(components):
+        # PC direction in feature space
+        # Convert to polar coordinates: angle θ for each channel, radius = component value
+        pc_x = np.sum(pc[idx_picks] * np.cos(theta)) * scale
+        pc_y = np.sum(pc[idx_picks] * np.sin(theta)) * scale
+        pc_z = 0 # draw arrow at z=0 (bottom of plot)
 
-    else : 
-        return sumsum
+        ax.quiver(0, 0, pc_z, pc_y, pc_x, 0, color='red' if i==0 else 'blue', 
+                  linewidth=2, arrow_length_ratio=0.2, label=f'PC{i+1}')
+
+    ax.set_title(title)
+    ax.set_zlabel("x = r*cos(theta)")
+    ax.set_ylabel("y = r*sin(theta)")
+    ax.set_xlabel("time")
+    ax.legend(bbox_to_anchor=(1.6, 1))
+    plt.show()
+
+def PolarChannelPloty(data, title="Channels", elects='', subjs='', cmap_name = 'Blues'):
+    C, T = data.shape
+    cmap = cm.get_cmap(cmap_name, C)
+    theta = np.linspace(0, 2 * np.pi, C, endpoint=False)
+    # time axis = z dimension
+    tfr_path = OUT_PATH+ '/Data'
+    subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
+    subj_included = ExcludSubj(subj_included)
+    with open(OUT_PATH + f'/Data/{subj_included[0]}_info.json') as json_data:
+        d = json.load(json_data)
+        time = d['time_tfr']
+        json_data.close()
+
+    z = time
+
+    fig = go.Figure()
+
+    for ch in range(C):
+        amp = data[ch]                # radius = amplitude
+        th  = theta[ch]               # fixed angle
+        
+        x = amp * np.cos(th)
+        y = amp * np.sin(th)
+        import matplotlib.colors as mcolors
+
+        c = cmap(0.1 + (1 - 0.1) * (ch / (C - 1))) 
+        color = mcolors.to_hex(c)
+
+        fig.add_trace(go.Scatter3d(
+            x=z,
+            y=y,
+            z=x,
+            mode="lines",
+            line=dict(width=4),
+            name=f"Ch {elects[ch]} subj {subjs[ch]}", 
+            line_color=color
+        ))
+
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            zaxis_title="x = r*cos(theta)",
+            yaxis_title="y = r*sin(theta)",
+            xaxis_title="time",
+            aspectmode="cube"
+        ),
+        showlegend=True,
+        width=900,
+        height=800
+    )
+
+    fig.show()
+
+def PolarChannelSequential(data1, data2, title="Channels", elects=[], subjs=[]):
+
+    C, T1 = data1.shape
+    _, T2 = data2.shape
+    theta = np.linspace(0, 2*np.pi, C, endpoint=False)
+
+    fig = plt.figure(figsize=(12, 8))
+    ax = fig.add_subplot(111, projection="3d")
+    tfr_path = OUT_PATH+ '/Data'
+    subj_included = [file.replace('_TFRtrials.p', '') 
+                     for file in os.listdir(tfr_path) 
+                     if file.endswith('TFRtrials.p')]
+    subj_included = ExcludSubj(subj_included)
+    with open(OUT_PATH + f'/Data/{subj_included[0]}_info.json') as json_data:
+        d = json.load(json_data)
+        time1 = np.array(d['time_tfr'])
+    
+    z1 = time1
+    z2 = time1[-1] + np.diff(time1).mean() + time1 
+    cmap1 = cm.get_cmap("Blues")
+    cmap2 = cm.get_cmap("Reds")
+
+    for ch in range(C):
+        amp = data1[ch]
+        th = theta[ch]
+        x = amp * np.cos(th)
+        y = amp * np.sin(th)
+        color = cmap1(0.3 + 0.7 * (ch / (C - 1)))
+        ax.plot(z1, y, x, color=color, alpha=0.9,
+                label=f"Ch {elects[ch]} subj {subjs[ch]} (data1)")
+
+    for ch in range(C):
+        amp = data2[ch]
+        th = theta[ch]
+        x = amp * np.cos(th)
+        y = amp * np.sin(th)
+        color = cmap2(0.3 + 0.7 * (ch / (C - 1)))
+        ax.plot(z2, y, x, color=color, alpha=0.9,
+                label=f"Ch {elects[ch]} subj {subjs[ch]} (data2)")
+
+    ax.set_title(title)
+    ax.set_xlabel("time")
+    ax.set_ylabel("y = r*sin(theta)")
+    ax.set_zlabel("x = r*cos(theta)")
+    ax.legend(bbox_to_anchor=(1.6, 1))
+    plt.show()
+
