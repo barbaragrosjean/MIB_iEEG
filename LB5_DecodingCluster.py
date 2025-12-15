@@ -9,7 +9,7 @@ def main(band, pc_use):
     iteration =100
     iter_perm = 100
     perm =False
-    data_path = OUT_PATH + '/Data_woBSadjustement'
+    data_path = OUT_PATH + '/Data_shortWOBS'
 
     warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -44,40 +44,42 @@ def main(band, pc_use):
             #    subj_included=subj_included, 
             #    PC_use=pc_use, 
             #    save=True, 
-            #    iter_perm=iter_perm)
+            #    iter_perm=iter_perm, 
+            #    data_path=data_path)
                 
             #TemporalLR(band=band, 
             #            method_pca=method_pca, 
             #            data_aug_method=data_aug_method, 
             #            subj_included=subj_included, 
             #            PC_use=pc_use, 
-            #            save=True)
+            #            save=True, 
+            #            data_path=data_path)
                 
             #TemporalGeneralization(band=band, 
             #                        method_pca=method_pca, 
             #                        data_aug_method=data_aug_method, 
             #                        subj_included=subj_included, 
             #                        PC_use = pc_use,
-            #                        save=True, 
-            #                        undersampline = True)
+            #                        save=True,
+            #                        data_path=data_path)
             
-            CompareClassifier(band=band,
-                            method_pca=method_pca, 
-                            data_aug_method=data_aug_method, 
-                            subj_included=subj_included,
-                            PC_use=pc_use, 
-                            perm = False,
-                            save=True, 
-                            data_path=data_path)
+            #CompareClassifier(band=band,
+            #                method_pca=method_pca, 
+            #                data_aug_method=data_aug_method, 
+            #                subj_included=subj_included,
+            #                PC_use=pc_use, 
+            #                perm = False,
+            #                save=True, 
+            #                data_path=data_path)
             
-            CompareClassifier(band=band,
-                            method_pca=method_pca, 
-                            data_aug_method=data_aug_method, 
-                            subj_included=subj_included,
-                            PC_use=pc_use, 
-                            perm = True,
-                            save=True, 
-                            data_path=data_path)
+            #CompareClassifier(band=band,
+            #                method_pca=method_pca, 
+            #                data_aug_method=data_aug_method, 
+            #                subj_included=subj_included,
+            #                PC_use=pc_use, 
+            #                perm = True,
+            #                save=True, 
+            #                data_path=data_path)
             
             
             #####################
@@ -104,14 +106,15 @@ def main(band, pc_use):
             # Permutation scores
             #####################
             
-            #PermLR_Final(band=band, 
-            #            method_pca=method_pca, 
-            #            data_aug_method=data_aug_method,
-            #            subj_included=subj_included,
-            #            iteration=iteration, 
-            #            PC_use=pc_use, 
-            #            save=True, 
-            #            iter_perm=iter_perm)
+            PermLR_Final(band=band, 
+                        method_pca=method_pca, 
+                        data_aug_method=data_aug_method,
+                        subj_included=subj_included,
+                        iteration=iteration, 
+                        PC_use=pc_use, 
+                        save=True, 
+                        iter_perm=iter_perm, 
+                        data_path=data_path)
 
 
 if __name__ == "__main__":
@@ -122,5 +125,4 @@ if __name__ == "__main__":
                         help="PC to use to process.")
     
     args = parser.parse_args()
-    
     main(args.band, args.pc_use)

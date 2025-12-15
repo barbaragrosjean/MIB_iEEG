@@ -12,7 +12,7 @@ if __name__ == "__main__":
     for s in failled : 
         if s in subj_included :
             subj_included.remove(s)
-    path_to_save = OUT_PATH + '/Data_woBSadjustement'
+    path_to_save = OUT_PATH + '/Data_longWOBS'
 
     if not os.path.exists(path_to_save) :
         os.makedirs(path_to_save)

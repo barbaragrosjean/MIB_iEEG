@@ -37,6 +37,7 @@ from sklearn.decomposition import PCA
 
 from PIL import Image
 
+plt.style.use('seaborn-v0_8-dark')
 
 # Relative paths
 PROJECT_PATH = '../MINDLAB2021_MEG-TempSeqAges/scratch/learning_bach_iEEG'
@@ -320,8 +321,9 @@ def MM_compute_TFR(epochs, freqs, n_cycles, baseline, zscore=True, trial_baselin
     if zscore:
         if summary : print('##### z-scoring to baseline')
         bix = [a and b  for a, b in zip(TFR.times >= baseline[0], TFR.times <= baseline[1])]
-        bmean = np.nanmean(TFR.data[:,:,:,bix],axis=(0,3),keepdims=True)
+        bmean = np.nanmean(TFR.data[:,:,:,bix],axis=(0,3),keepdims=True) 
         bstd = np.nanstd(TFR.data[:,:,:,bix],axis=(0,3),keepdims=True)
+
         TFR.data -= bmean 
         TFR.data /= bstd
         
@@ -411,30 +413,23 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
         print(subj) 
         print(e)
         return subj
-
-    epoching_kwargs = {'tmin':-2, 'tmax': 5, 'baseline': (-1.5,-0.5), 'resample': 600, 'l_freq': None, 'h_freq': None,
+    
+    epoching_kwargs = {'tmin':-1.5, 'tmax': 5, 'baseline': None, 'resample': 600, 'l_freq': None, 'h_freq': None,
                              'event_fun': LB_event_fun, 'event_fun_kwargs': {'sfreq': 600}}
     epochs = mne.Epochs(raw, events, event_id=event_id, tmin=epoching_kwargs['tmin'], tmax=epoching_kwargs['tmax'],
                             preload=True, baseline=epoching_kwargs['baseline'], on_missing='warn',
                             reject=None)
     epochs = normalize_epochs(epochs)
 
-    # release memory
     del raw
 
     if compute_TFR :
         n_cycles = np.array(freqs) * 2 / np.array(bwidth)
-        TFR = MM_compute_TFR(epochs,np.array(freqs), n_cycles, baseline = (-1.5,-0.5), zscore=False, trial_baseline = False, picks='all',n_jobs=1, summary = False)
-        TFR = TFR.crop(-1.5,3)
+        TFR = MM_compute_TFR(epochs,np.array(freqs), n_cycles, baseline = (-1.5,4), zscore=True, trial_baseline = False, picks='all',n_jobs=1, summary = False)
+        TFR = TFR.crop(-1.5,4)
 
         smooth_kwargs = {'tstep': 0.025, 'twin': .1}
         TFR = smooth(TFR, **smooth_kwargs)
-
-        # resample 
-        from mne.filter import resample
-        old_sfreq = 1 / (TFR.times[1] - TFR.times[0])
-        old_times = TFR.times
-        TFR.data = resample(TFR.data, up=new_sfreq, down=old_sfreq, axis=-1)
 
         if trials :
             TFRtrials = TFR_mean(TFR=TFR, trials=trials)
@@ -447,11 +442,11 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
         with open(out_path + f'/{subj}_TFRtrials.p', "wb") as f:
             pickle.dump(TFRtrials, f)
 
-        info['time_tfr'] = list(np.linspace(old_times[0], old_times[-1], TFR.shape[-1]))
+        info['time_tfr'] = list(TFR.times)
         del TFRtrials
         del TFR
 
-    epochs = epochs.crop(-1.5,3)
+    epochs = epochs.crop(-1.5,4)
     epochs = epochs.resample(new_sfreq)
 
     if save_epoch : 
@@ -470,11 +465,12 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
     ch_coord_df.to_csv(out_path + f'/{subj}_coords.csv' )
 
 def TFRmEvents(subj, event_ids = [1, 2], test_id=False, freq_id=False, events_index=[],  baseline_corr=False, data_path = OUT_PATH + '/Data') : 
-    if len(events_index) == 0 : 
-        info_file = f'{data_path}/{subj}_info.json'
-        with open(info_file) as f:
-            info = json.load(f)
-            time = info['time_tfr']
+    
+    info_file = f'{data_path}/{subj}_info.json'
+    with open(info_file) as f:
+        info = json.load(f)
+        time = info['time_tfr']
+        if len(events_index) == 0 : 
             events_index = np.array([int(i) for i in info['event_id']])
 
     with open(f'{data_path}/{subj}_TFRtrials.p', "rb") as f:
@@ -488,13 +484,18 @@ def TFRmEvents(subj, event_ids = [1, 2], test_id=False, freq_id=False, events_in
     for i, ev_id in enumerate(event_ids) :
         index_condi = list(np.where(events_index == ev_id)[0])
 
-        if baseline_corr == True : 
-            # Baseline adjust every trials
+        if baseline_corr == 'mean' : 
             baseline_end = int(time.index([t for t in time if t>=-0.5][0]))
             TFRbmean = TFRtrials[np.array(index_condi), :, :, :baseline_end].mean(axis=-1, keepdims=True)
             TFRbstd = TFRtrials[np.array(index_condi), :, :, :baseline_end].std(axis=-1, keepdims=True)
+            tfr = (TFRtrials[np.array(index_condi), :, :, :] - TFRbmean) 
+        
+        elif baseline_corr == 'z_score' :
+            baseline_end = int(time.index([t for t in time if t>=-0.5][0]))
+            TFRbmean = TFRtrials[np.array(index_condi), :, :, :baseline_end].mean(axis=-1, keepdims=True)
+            TFRbstd = TFRtrials[np.array(index_condi), :, :, :baseline_end].std(axis=-1, keepdims=True)
+            tfr = (TFRtrials[np.array(index_condi), :, :, :] - TFRbmean)/TFRbstd
 
-            tfr = (TFRtrials[np.array(index_condi), :, :, :] - TFRbmean) #/TFRbstd
         else :
             tfr = TFRtrials[np.array(index_condi), :, :, :]
 
@@ -654,7 +655,7 @@ def PlotTimeSerie(subj_list, df_X_transformed, out_path, region='', show=False, 
     for subj in subj_list :  
         # get the time 
         if subj == 'grp' : 
-            json_file = data_path + '/' + [f for f in os.listdir(f'{OUT_PATH}/Data') if '_info.json' in f][0]
+            json_file = data_path + '/' + [f for f in os.listdir(data_path) if '_info.json' in f][0]
         else : 
             json_file = f'{data_path}/{subj}_info.json'
 
@@ -696,6 +697,7 @@ def PlotTimeSerie(subj_list, df_X_transformed, out_path, region='', show=False, 
             
                 the_ax.set_xlabel('Time (s)')
                 the_ax.set_title(band)
+                the_ax.grid()
 
                 if band_id == len(FREQ_BAND)-1 :
                     line_handles, line_labels = the_ax.get_legend_handles_labels()
@@ -1006,6 +1008,8 @@ def LR(band, method_pca, data_aug_method,subj_included, iteration=100, perm=Fals
         X_train, y_train, X_test, y_test, True_trials, pca_weights = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use, data_path=data_path)        
         X_train, y_train = shuffle(X_train, y_train, random_state =0)
 
+        # scale -- -0.5
+
         if i == 0 :
             param_grid = {
                 'C': [0.01, 0.1, 1, 10, 100],
@@ -1123,7 +1127,7 @@ def LR(band, method_pca, data_aug_method,subj_included, iteration=100, perm=Fals
     fig.suptitle('Model analysis: Temporal Importance')
     fig.tight_layout()
 
-    with open(OUT_PATH + f'/Data/{subj_included[0]}_info.json') as json_data:
+    with open(data_path + f'/{subj_included[0]}_info.json') as json_data:
         d = json.load(json_data)
         if band == 'broadband' :
             time = d['time_epoch']
@@ -1846,7 +1850,7 @@ def PermLR_null(band, method_pca, data_aug_method,subj_included, iteration=100, 
     else : 
         return sumsum
     
-def PermLR_Final(freq, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=1) :
+def PermLR_Final(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=1, data_path=OUT_PATH + '/Data') :
 
     TFRm_list = []
     Train_sample = []
@@ -1863,11 +1867,11 @@ def PermLR_Final(freq, method_pca, data_aug_method,subj_included, iteration=100,
     weights_model_sh = []
 
     if subj_included ==[] : 
-        subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(out_path + '/Data') if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
+        subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(data_path) if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
 
     for i in range(iteration):
         for subj in subj_included[:3] : 
-            info_file = out_path + f'/Data/{subj}_info.json'
+            info_file = data_path + f'/{subj}_info.json'
             with open(info_file) as f:
                 info = json.load(f)
                 events_index = np.array([int(i) for i in info['event_id']])
@@ -1886,10 +1890,10 @@ def PermLR_Final(freq, method_pca, data_aug_method,subj_included, iteration=100,
             
             # Compute TFRm 
             if freq == 'broadband' :
-                TFRm = BbEvents(subj, test_id = id_test, events_index=events_index)
+                TFRm = BbEvents(subj, test_id = id_test, events_index=events_index, data_path=data_path)
             else : 
                 freq_id = FREQ_BAND.index(freq)
-                TFRm = TFRmEvents(subj, test_id = id_test, freq_id = freq_id, events_index=events_index)
+                TFRm = TFRmEvents(subj, test_id = id_test, freq_id = freq_id, events_index=events_index, data_path=data_path)
 
             # Save for PCA computation at grp level
             if method_pca == 'concat' :
@@ -1941,7 +1945,10 @@ def PermLR_Final(freq, method_pca, data_aug_method,subj_included, iteration=100,
         else : 
             Train_transformed = weights[PC_use, :] @ Train_all
             Test_transformed = weights[PC_use, :] @ Test_all[:,0,:]
-
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(Train_transformed)
+        X_test = scaler.transform(X_test)
+        
         if i == 0 :
             param_grid = {
                 'C': [0.01, 0.1, 1, 10, 100],
@@ -1988,6 +1995,9 @@ def PermLR_Final(freq, method_pca, data_aug_method,subj_included, iteration=100,
             
             # Shuffle the labels
             y_train_sh = shuffle(y_train)
+
+            Train_transformed_sh = scaler.fit_transform(Train_transformed_sh)
+            Test_transformed_sh = scaler.transform(Test_transformed_sh)
          
             # applied the model
             model_sh = LogisticRegression(**best_params, max_iter=1000)
@@ -2021,16 +2031,15 @@ def PermLR_Final(freq, method_pca, data_aug_method,subj_included, iteration=100,
 
 ################################### VIZ AND INTRO (CHAT) ###################################
     
-def PolarChannel(data1, title="Channels", elects=[], subjs = [], cmap_name = 'Blues', to_black = []):
+def PolarChannel(data1, title="Channels", elects=[], subjs = [], cmap_name = 'Blues', to_black = [], data_path = OUT_PATH + '/Data'):
     C, T = data1.shape
     cmap = cm.get_cmap(cmap_name, C)
     theta = np.linspace(0, 2*np.pi, C, endpoint=False)
     fig = plt.figure(figsize=(10, 7))
     ax = fig.add_subplot(111, projection="3d")
-    tfr_path = OUT_PATH+ '/Data'
-    subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
-    subj_included = ExcludSubj(subj_included)
-    with open(OUT_PATH + f'/Data/{subj_included[0]}_info.json') as json_data:
+    subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(data_path) if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
+    subj_included = ExcludSubj(subj_included, data_path=data_path)
+    with open(data_path + f'/{subj_included[0]}_info.json') as json_data:
         d = json.load(json_data)
         time = d['time_tfr']
         json_data.close()
@@ -2055,30 +2064,29 @@ def PolarChannel(data1, title="Channels", elects=[], subjs = [], cmap_name = 'Bl
         
     ax.legend(bbox_to_anchor=(1.6, 1))
     ax.set_title(title)
-    ax.set_zlabel("x = r*cos(theta)")
-    ax.set_ylabel("y = r*sin(theta)")
-    ax.set_xlabel("time")
+    ax.set_zlabel("")
+    ax.set_ylabel("")
+    ax.xaxis.set_visible(False)
+    ax.yaxis.set_visible(False)
+    ax.zaxis.set_visible(False)
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.set_xlabel("Time")
     plt.show()
 
-def PolarChannelWithPCA(data1, title="Channels", elects=[], subjs=[], cmap_name='Blues', data_full=None, idx_picks=None):
+def PolarChannelWithPCA(data1, title="Channels", elects=[], subjs=[], cmap_name='Blues', data_full=None, idx_picks=None, data_path = OUT_PATH + '/Data'):
     C, T = data1.shape
     theta = np.linspace(0, 2*np.pi, C, endpoint=False)
     cmap = cm.get_cmap(cmap_name, C)
-
     fig = plt.figure(figsize=(10, 7))
     ax = fig.add_subplot(111, projection="3d")
-
-    # Load time axis
-    tfr_path = OUT_PATH+ '/Data'
-    subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file.endswith('TFRtrials.p')]
-    subj_included = ExcludSubj(subj_included)
-    with open(OUT_PATH + f'/Data/{subj_included[0]}_info.json') as json_data:
+    subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(data_path) if file.endswith('TFRtrials.p')]
+    subj_included = ExcludSubj(subj_included, data_path=data_path)
+    with open(data_path + f'/{subj_included[0]}_info.json') as json_data:
         d = json.load(json_data)
         time = d['time_tfr']
 
-    z = time
-
-    # ---- Plot channels in polar 3D ----
+    z = time 
     for ch in range(C):
         amp = data1[ch]
         th = theta[ch]
@@ -2093,8 +2101,6 @@ def PolarChannelWithPCA(data1, title="Channels", elects=[], subjs=[], cmap_name=
 
     scale = 40
     for i, pc in enumerate(components):
-        # PC direction in feature space
-        # Convert to polar coordinates: angle θ for each channel, radius = component value
         pc_x = np.sum(pc[idx_picks] * np.cos(theta)) * scale
         pc_y = np.sum(pc[idx_picks] * np.sin(theta)) * scale
         pc_z = 0 # draw arrow at z=0 (bottom of plot)
@@ -2103,29 +2109,31 @@ def PolarChannelWithPCA(data1, title="Channels", elects=[], subjs=[], cmap_name=
                   linewidth=2, arrow_length_ratio=0.2, label=f'PC{i+1}')
 
     ax.set_title(title)
-    ax.set_zlabel("x = r*cos(theta)")
-    ax.set_ylabel("y = r*sin(theta)")
-    ax.set_xlabel("time")
+    ax.set_zlabel("")
+    ax.set_ylabel("")
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.set_zticklabels([])
+    ax.xaxis.set_visible(False)
+    ax.yaxis.set_visible(False)
+    ax.zaxis.set_visible(False)
+    ax.set_xlabel("Time")
     ax.legend(bbox_to_anchor=(1.6, 1))
     plt.show()
 
-def PolarChannelPloty(data, title="Channels", elects='', subjs='', cmap_name = 'Blues'):
+def PolarChannelPloty(data, title="Channels", elects='', subjs='', cmap_name = 'Blues', data_path = OUT_PATH + '/Data'):
     C, T = data.shape
     cmap = cm.get_cmap(cmap_name, C)
     theta = np.linspace(0, 2 * np.pi, C, endpoint=False)
-    # time axis = z dimension
-    tfr_path = OUT_PATH+ '/Data'
-    subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
-    subj_included = ExcludSubj(subj_included)
-    with open(OUT_PATH + f'/Data/{subj_included[0]}_info.json') as json_data:
+    subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(data_path) if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
+    subj_included = ExcludSubj(subj_included, data_path=data_path)
+    with open(data_path + f'/{subj_included[0]}_info.json') as json_data:
         d = json.load(json_data)
         time = d['time_tfr']
         json_data.close()
 
     z = time
-
     fig = go.Figure()
-
     for ch in range(C):
         amp = data[ch]                # radius = amplitude
         th  = theta[ch]               # fixed angle
@@ -2150,9 +2158,9 @@ def PolarChannelPloty(data, title="Channels", elects='', subjs='', cmap_name = '
     fig.update_layout(
         title=title,
         scene=dict(
-            zaxis_title="x = r*cos(theta)",
-            yaxis_title="y = r*sin(theta)",
-            xaxis_title="time",
+            zaxis_title="",
+            yaxis_title=")",
+            xaxis_title="Time",
             aspectmode="cube"
         ),
         showlegend=True,
@@ -2162,20 +2170,18 @@ def PolarChannelPloty(data, title="Channels", elects='', subjs='', cmap_name = '
 
     fig.show()
 
-def PolarChannelSequential(data1, data2, title="Channels", elects=[], subjs=[]):
-
+def PolarChannelSequential(data1, data2, title="Channels", elects=[], subjs=[], data_path = OUT_PATH + '/Data'):
     C, T1 = data1.shape
     _, T2 = data2.shape
     theta = np.linspace(0, 2*np.pi, C, endpoint=False)
-
     fig = plt.figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection="3d")
-    tfr_path = OUT_PATH+ '/Data'
     subj_included = [file.replace('_TFRtrials.p', '') 
-                     for file in os.listdir(tfr_path) 
+                     for file in os.listdir(data_path) 
                      if file.endswith('TFRtrials.p')]
-    subj_included = ExcludSubj(subj_included)
-    with open(OUT_PATH + f'/Data/{subj_included[0]}_info.json') as json_data:
+    
+    subj_included = ExcludSubj(subj_included, data_path=data_path)
+    with open(data_path + f'/{subj_included[0]}_info.json') as json_data:
         d = json.load(json_data)
         time1 = np.array(d['time_tfr'])
     
@@ -2203,9 +2209,15 @@ def PolarChannelSequential(data1, data2, title="Channels", elects=[], subjs=[]):
                 label=f"Ch {elects[ch]} subj {subjs[ch]} (data2)")
 
     ax.set_title(title)
-    ax.set_xlabel("time")
-    ax.set_ylabel("y = r*sin(theta)")
-    ax.set_zlabel("x = r*cos(theta)")
+    ax.set_xlabel("Time")
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.set_zticklabels([])
+    ax.xaxis.set_visible(False)
+    ax.yaxis.set_visible(False)
+    ax.zaxis.set_visible(False)
+    ax.set_ylabel("")
+    ax.set_zlabel("")
     ax.legend(bbox_to_anchor=(1.6, 1))
     plt.show()
 
