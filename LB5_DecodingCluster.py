@@ -16,7 +16,7 @@ def main(band, pc_use):
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(data_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
     subj_included = ExcludSubj(subj_included, data_path=data_path)
     
-    for data_aug_method in ['mean', 'duplicat'] :
+    for data_aug_method in ['mean'] : #, 'duplicat'] :
         #####################
         # Decoding on Raw
         #####################
@@ -30,7 +30,7 @@ def main(band, pc_use):
         #                          subj_included=subj_included, 
         #                          save=True)
         
-        for method_pca in ['concat', 'mean'] :
+        for method_pca in ['concat'] : #, 'mean'] :
 
             #####################
             # Compute decoding

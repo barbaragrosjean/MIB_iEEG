@@ -1199,7 +1199,7 @@ def TemporalGeneralization(band,method_pca,data_aug_method, subj_included, PC_us
             scores[t_train, t_test] = np.mean(fold_scores)
 
     fig, ax = plt.subplots()
-    im = ax.imshow(scores, vmin=0, vmax=1, origin='lower', aspect='auto', cmap='Blues')
+    im = ax.imshow(scores, vmin=0, vmax=1, origin='lower', aspect='auto', cmap='PuOr')
     cbar = fig.colorbar(im, ax=ax)
     cbar.set_label("Decoding Accuracy")
     ax.set_xlabel("Test Time")
@@ -1889,10 +1889,10 @@ def PermLR_Final(band, method_pca, data_aug_method,subj_included, iteration=100,
             id_ev2 = np.array(id_ev2)
             
             # Compute TFRm 
-            if freq == 'broadband' :
+            if band == 'broadband' :
                 TFRm = BbEvents(subj, test_id = id_test, events_index=events_index, data_path=data_path)
             else : 
-                freq_id = FREQ_BAND.index(freq)
+                freq_id = FREQ_BAND.index(band)
                 TFRm = TFRmEvents(subj, test_id = id_test, freq_id = freq_id, events_index=events_index, data_path=data_path)
 
             # Save for PCA computation at grp level
@@ -1902,8 +1902,8 @@ def PermLR_Final(band, method_pca, data_aug_method,subj_included, iteration=100,
                 TFRm_list.append(np.mean(TFRm[[0, 1], :,:], axis = 0))
 
             # Get the data
-            if freq == 'broadband' :
-                file = out_path + f'/Data/{subj}_epochs.p'
+            if band == 'broadband' :
+                file = data_path + f'/{subj}_epochs.p'
                 with open(file, "rb") as f:
                     TFRtr = pickle.load(f)  
 
@@ -1913,7 +1913,7 @@ def PermLR_Final(band, method_pca, data_aug_method,subj_included, iteration=100,
                 Test_sample.append(TFRtr[id_test,:, :])
 
             else :
-                file = out_path + f'/Data/{subj}_TFRtrials.p'
+                file = data_path + f'/{subj}_TFRtrials.p'
                 with open(file, "rb") as f:
                     TFRtr = pickle.load(f)  
 
@@ -1932,8 +1932,8 @@ def PermLR_Final(band, method_pca, data_aug_method,subj_included, iteration=100,
         Y_TEST.extend([1, 2])
 
         # NORMAL 
-        df_Componants, _ = ConcatPCA({'grp' : concat_all}, ch_id = False, nb_compo=3, freq_band=[freq])
-        weights = df_Componants['grp'].query("freq == @freq").drop(columns = ['freq', 'compo']).values
+        df_Componants, _ = ConcatPCA({'grp' : concat_all}, ch_id = False, nb_compo=3, freq_band=[band])
+        weights = df_Componants['grp'].query("freq == @band").drop(columns = ['freq', 'compo']).values
 
         if type(PC_use) == list :
             Train_transformed = np.zeros([Train_all.shape[0],len(PC_use), Train_all.shape[-1]])
@@ -1947,7 +1947,7 @@ def PermLR_Final(band, method_pca, data_aug_method,subj_included, iteration=100,
             Test_transformed = weights[PC_use, :] @ Test_all[:,0,:]
         scaler = StandardScaler()
         X_train = scaler.fit_transform(Train_transformed)
-        X_test = scaler.transform(X_test)
+        X_test = scaler.transform(Test_transformed)
         
         if i == 0 :
             param_grid = {
@@ -1965,7 +1965,7 @@ def PermLR_Final(band, method_pca, data_aug_method,subj_included, iteration=100,
         model = LogisticRegression(**best_params, max_iter=1000)
         model.fit(X_train, y_train)
         Y_PRED.extend(model.predict(X_test))
-        p.extend(model.predict_proba(X_test)[:,1])
+        p.append(log_loss([1, 2], model.predict_proba(X_test)[:,1]))
         weights_model.append(model.coef_)
 
         # SHUFFLED 
@@ -1978,8 +1978,8 @@ def PermLR_Final(band, method_pca, data_aug_method,subj_included, iteration=100,
             concat_ev12_shuffled = concat_ev12.copy()
             np.random.shuffle(concat_ev12_shuffled)  # shuffle axis = 0
             concat_all_sh = np.concat([concat_ev12_shuffled[i, :,:] for i in range(2)], axis = 1) # concat the time
-            df_Componants_sh, _ = ConcatPCA({'grp' : concat_all_sh}, ch_id = False, nb_compo=3, freq_band=[freq])
-            weights_sh = df_Componants_sh['grp'].query("freq == @freq").drop(columns = ['freq', 'compo']).values
+            df_Componants_sh, _ = ConcatPCA({'grp' : concat_all_sh}, ch_id = False, nb_compo=3, freq_band=[band])
+            weights_sh = df_Componants_sh['grp'].query("freq == @band").drop(columns = ['freq', 'compo']).values
 
             # Applied on train 
             if type(PC_use) == list : 
@@ -2003,31 +2003,31 @@ def PermLR_Final(band, method_pca, data_aug_method,subj_included, iteration=100,
             model_sh = LogisticRegression(**best_params, max_iter=1000)
             model_sh.fit(Train_transformed_sh, y_train_sh)
             Y_PRED_SH.extend(model_sh.predict(Test_transformed_sh))
-            p_sh.extend(model_sh.predict_proba(Test_transformed_sh)[:,1])
+            p_sh.append(log_loss([1, 2], model_sh.predict_proba(Test_transformed_sh)[:,1]))
             weights_model_sh.append(model_sh.coef_)
 
-        sumsum= pd.DataFrame()
-        sumsum['band'] =freq
-        sumsum['method_pca'] = method_pca
-        sumsum['data_aug_method'] = data_aug_method
-        sumsum['iter'] = iteration
-        sumsum['iter_perm']=iter_perm
-        sumsum['y_pred'] = Y_PRED
-        sumsum['y_pred_sh'] = Y_PRED_SH
-        sumsum['y_test'] = Y_TEST
-        sumsum['entropy'] = p
-        sumsum['entropy_sh'] = p_sh
-        sumsum['weight'] = weights_model
-        sumsum['weight_sh'] = weights_model_sh
+    sumsum= pd.DataFrame()
+    sumsum['band'] =[band]
+    sumsum['method_pca'] = [method_pca]
+    sumsum['data_aug_method'] = [data_aug_method]
+    sumsum['iter'] = [iteration]
+    sumsum['iter_perm']=[iter_perm]
+    sumsum['y_pred'] = [Y_PRED]
+    sumsum['y_pred_sh'] = [Y_PRED_SH]
+    sumsum['y_test'] = [Y_TEST]
+    sumsum['entropy'] = [p]
+    sumsum['entropy_sh'] = [p_sh]
+    sumsum['weight'] = [weights_model]
+    sumsum['weight_sh'] = [weights_model_sh]
 
-        if save : 
-            if not os.path.isdir(out_path + f'/stats/{freq}') : 
-                os.makedirs(out_path + f'/stats/{freq}')
-                
-            sumsum.to_csv(out_path + f'/stats/{freq}/{method_pca}_{data_aug_method}_{PC_use}_PermDistrub.csv')
+    if save : 
+        if not os.path.isdir(out_path + f'/stats/{band}') : 
+            os.makedirs(out_path + f'/stats/{band}')
+            
+        sumsum.to_csv(out_path + f'/stats/{band}/{method_pca}_{data_aug_method}_{PC_use}_PermDistrub.csv')
 
-        else : 
-            return sumsum
+    else : 
+        return sumsum
 
 ################################### VIZ AND INTRO (CHAT) ###################################
     
