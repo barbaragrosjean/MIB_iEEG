@@ -3,13 +3,12 @@ import numpy as np
 import os
 import json
 import matplotlib.pyplot as plt
-import seaborn as sns
 from sklearn.decomposition import PCA
-from scipy.stats import spearmanr, pearsonr
+from scipy.stats import spearmanr
 from scipy.ndimage import gaussian_filter1d
 
 from utils import OUT_PATH
-from utils import PlotCompoIndividual, BbEvents, GetInfo, CompoThr, ExcludSubj, PolarityCor, computeLagPeak, crosscorr, ConcatPCA, DataTransformationM1
+from utils import PlotCompoIndividual, BbEvents, GetInfo, CompoThr, ExcludSubj, PolarityCor, computeLagPeak, ConcatPCA, DataTransformationM1
 
 epoch_path = OUT_PATH + '/Data_shortWOBS'
 
