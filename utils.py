@@ -764,7 +764,7 @@ def PlotTimeSerie(subj_list, df_X_transformed, out_path, region='', show=False, 
         else  : plt.close()
 
 ################################### COMPO ANALYSIS ###################################
-def GetInfo(subj_included, project_path = PROJECT_PATH, data_path = OUT_PATH + '/Data') : 
+def GetInfo(subj_included, project_path = PROJECT_PATH, data_path = OUT_PATH + '/Data', save=False) : 
     coord = []
     areas = []
     elect_list = []
@@ -781,8 +781,16 @@ def GetInfo(subj_included, project_path = PROJECT_PATH, data_path = OUT_PATH + '
         elect_list.extend(df['channels'])
 
         subj_list.extend([subj]*len(df['channels']))
+
+    if save : 
+        d = pd.DataFrame(coord, columns = ['x', 'y', 'z'])
+        d.loc[:, ['areas1', 'area2']] = areas
+        d.loc[:, 'elect'] = elect_list
+        d.loc[:, 'subj'] = subj_list
+        d.to_csv(data_path + '/grp_info.csv')
         
-    return coord, areas, elect_list, subj_list
+    else : 
+        return coord, areas, elect_list, subj_list
 
 def CompoThr(data, replace=0) : 
     data_thr = data.copy()

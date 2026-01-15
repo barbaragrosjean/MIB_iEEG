@@ -69,7 +69,7 @@ def main(band, pc_use):
                             subj_included=subj_included,
                             PC_use=pc_use, 
                             nb_iter = iteration,
-                            perm = False,
+                            perm = True,
                             save=True, 
                             data_path=data_path)
             
@@ -79,7 +79,7 @@ def main(band, pc_use):
             #                subj_included=subj_included,
             #                PC_use=pc_use, 
             #                nb_iter=iteration,
-            #                perm = True,
+            #                perm = False,
             #                save=True, 
             #                data_path=data_path)
             
