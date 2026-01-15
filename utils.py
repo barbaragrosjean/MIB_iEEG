@@ -565,7 +565,7 @@ def run_nmf_multistart(X, n_components, n_runs=10, random_states=None, max_iter=
     return best, results
 
 ################################### FUNCTIONS PCA ###################################
-def ConcatPCA(concat_dict, ch_id = False, nb_compo =2, freq_band=FREQ_BAND, method ='pca') : 
+def ConcatPCA(concat_dict, ch_id = False, nb_compo =2, freq_band=FREQ_BAND, method ='pca', return_mean = False) : 
     # Try to concat at subject level the event correct 
     df_list = []
     df_Componants = {}
@@ -616,7 +616,15 @@ def ConcatPCA(concat_dict, ch_id = False, nb_compo =2, freq_band=FREQ_BAND, meth
 
         df_Componants[subj] = pd.concat(df_compo_list, axis=0)
     df_X_transformed = pd.concat(df_list) 
-    return df_Componants, df_X_transformed
+    if return_mean :
+        if method == 'nmf' : 
+            mean = X.mean(1, keepdims=False)
+        else : 
+            mean = pca.mean_
+        
+        return df_Componants, df_X_transformed, mean
+    else :
+        return df_Componants, df_X_transformed
 
 def PlotCompoIndividual(subj, df_Componants,subj_included=[], nb_compo = 2, save = True, show=False,browser=False, freq_band= FREQ_BAND, data_path = OUT_PATH +'/Data', out_path = OUT_PATH, project_path=PROJECT_PATH, method='pca') : 
     if not os.path.exists(out_path) and save : 
@@ -857,7 +865,7 @@ def smooth_moving_average(x, window):
 def crosscorr(datax, datay, lag=0):
     return datax.corr(datay.shift(lag), method='kendall')
     
-def computeLagPeak(data_condi, time, win_high, method_pca, show=True) : 
+def computeLagPeak(data_condi, time, win_high, method_pca, show=True, save=False, out_path =OUT_PATH, dis=60) : 
     peaks_coni1 = {c:[] for c in range(2)}
     fig, ax = plt.subplots(3, 1, figsize=(12, 9))
     fig.suptitle(f'Peaks detection on PC1 and 2 time series -- New condition -- {method_pca} PCA')
@@ -866,11 +874,8 @@ def computeLagPeak(data_condi, time, win_high, method_pca, show=True) :
 
     for i in range(2) : 
         for win, high in win_high[i]:
-            if i == 1 :
-                coni = data_condi[i] * -1
-            else :
-                coni = data_condi[i]
-            peaks, _ = find_peaks(coni[win[0]:win[1]], height=high, distance=60)
+            coni = data_condi[i]
+            peaks, _ = find_peaks(coni[win[0]:win[1]], height=high, distance=dis)
             peaks_coni1[i].extend([p + win[0] for p in peaks])
 
         ax[i].plot(coni, c=c[i], label=f'PC {i+1} Time series')
@@ -884,7 +889,7 @@ def computeLagPeak(data_condi, time, win_high, method_pca, show=True) :
     mean_lag = np.mean(lag_peak_time)
     std_lag = np.std(lag_peak_time)
     ax[2].plot(time, data_condi[0], label='PC1', c=c[0])
-    ax[2].plot(time + mean_lag, -data_condi[1], label='PC2', c=c[1])
+    ax[2].plot(time + mean_lag, data_condi[1], label='PC2', c=c[1])
     ax[2].set_title('PC2 shifted by mean lag')
     ax[2].set_xlabel('Time (s)')
     ax[2].legend()
@@ -892,6 +897,8 @@ def computeLagPeak(data_condi, time, win_high, method_pca, show=True) :
     ax[2].text(s=f'Mean lag : {np.round(mean_lag, 3)}s ± {np.round(std_lag, 3)}s', x=-0.5, y=-0.015)
     if show :
         plt.show()
+    if save :
+        fig.savefig(out_path + f'/lagPeak_{method_pca}.png')
 
     return lag_peak_time
         
@@ -959,6 +966,26 @@ def subject_variance_explained(data_grp_, subj_list, W, subj_included=[], data_p
 
     return np.array(results)
 
+def WeightSpearman(data1, data2, labels=[], out_path=OUT_PATH) : 
+    if labels == [] : 
+        labels = ['data1', 'data2']
+    R = np.zeros((data1.shape[0], data2.shape[0]))
+    P = np.zeros((data1.shape[0], data2.shape[0]))
+
+    for i in range(data1.shape[0]):
+        for j in range(data2.shape[0]):
+            r, pval = spearmanr(data1[i, :], data2[j, :])
+            R[i, j] = r
+            P[i, j] = pval
+
+    fig, ax = plt.subplots(figsize = (8, 6))
+    sns.heatmap(abs(R), vmin=0, vmax=1, cmap='Blues', ax=ax, annot=True , fmt='.3f')
+    ax.set_xticklabels(['PC' + str(i+1) for i in range(data2.shape[0])])
+    ax.set_xlabel(labels[1])
+    ax.set_yticklabels(['PC' + str(i+1) for i in range(data1.shape[0])])
+    ax.set_ylabel(labels[0])
+    ax.set_title('Spearman correlation of weights')
+    fig.savefig(out_path)
 ################################### DECODING ###################################
 def CheckTrials(X_train, y_train, event=list(EVENT_ID.keys())[:2] , out_path=OUT_PATH + '/Decoding', label = '', save=False, color_ev = {0 : 'r', 1 : 'b'}, freq='high_gamma', data_path=OUT_PATH + '/Data') : 
     # get time 
@@ -1136,23 +1163,26 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, subj_included=[], 
         concat_all = PolarityCor(concat_all, method_pca=method_pca, subj_included=subj_included, data_path=data_path)
     
     del TFRm_list
-    df_Componants, _ = ConcatPCA({'grp' : concat_all}, ch_id = False, nb_compo=3, freq_band=[freq],method=method)
+    df_Componants, _, mean_pca = ConcatPCA({'grp' : concat_all}, ch_id = False, nb_compo=3, freq_band=[freq],method=method, return_mean=True)
     weights = df_Componants['grp'].query("freq == @freq").drop(columns = ['freq', 'compo']).values
-
     Train_all = np.concatenate(Train_sample, axis=1)
     Test_all = np.concatenate(Test_sample, axis =2)
+
+    # to center the data before transform
+    m_train= mean_pca[None, :, None]
+    m_test = mean_pca[None, :, None]
 
     # Transform the data using the weights
     if type(PC_use) == list :
         Train_transformed = np.zeros([Train_all.shape[0],len(PC_use), Train_all.shape[-1]])
         Test_transformed = np.zeros([Test_all.shape[0], len(PC_use),Test_all.shape[-1]])
         for pc in PC_use : 
-            Train_transformed[:, pc, :] = weights[pc, :] @ Train_all
-            Test_transformed[:, pc, :] = weights[pc, :] @ Test_all[:,0,:]
+            Train_transformed[:, pc, :] = weights[pc, :] @ (Train_all -m_train)
+            Test_transformed[:, pc, :] = weights[pc, :] @ (Test_all[:,0,:] - m_test)
             
     else : 
-        Train_transformed = weights[PC_use, :] @ Train_all
-        Test_transformed = weights[PC_use, :] @ Test_all[:,0,:]
+        Train_transformed = weights[PC_use, :] @ (Train_all -m_train)
+        Test_transformed = weights[PC_use, :] @ (Test_all[:,0,:] - m_test)
 
     return Train_transformed, [1]*23 + [2]*23, Test_transformed, [1, 2], np.stack(truth, axis=2)*1, weights # X_train, y_train, X_test, y_test, subj_track_train, proportion of true trail in each supersample
  

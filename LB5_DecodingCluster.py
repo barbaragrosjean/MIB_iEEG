@@ -16,7 +16,7 @@ def main(band, pc_use):
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(data_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
     subj_included = ExcludSubj(subj_included, data_path=data_path)
     
-    for data_aug_method in ['mean'] : #, 'duplicat'] :
+    for data_aug_method in ['mean', 'duplicat'] :
         #####################
         # Decoding on Raw
         #####################
@@ -30,7 +30,7 @@ def main(band, pc_use):
         #                          subj_included=subj_included, 
         #                          save=True)
         
-        for method_pca in ['concat'] : #, 'mean'] :
+        for method_pca in ['concat', 'mean'] :
 
             #####################
             # Compute decoding
@@ -63,23 +63,25 @@ def main(band, pc_use):
             #                        save=True,
             #                        data_path=data_path)
             
-            #CompareClassifier(band=band,
-            #                method_pca=method_pca, 
-            #                data_aug_method=data_aug_method, 
-            #                subj_included=subj_included,
-            #                PC_use=pc_use, 
-            #                perm = False,
-            #                save=True, 
-            #                data_path=data_path)
+            CompareClassifier(band=band,
+                            method_pca=method_pca, 
+                            data_aug_method=data_aug_method, 
+                            subj_included=subj_included,
+                            PC_use=pc_use, 
+                            nb_iter = iteration,
+                            perm = False,
+                            save=True, 
+                            data_path=data_path)
             
-            #CompareClassifier(band=band,
-            #                method_pca=method_pca, 
-            #                data_aug_method=data_aug_method, 
-            #                subj_included=subj_included,
-            #                PC_use=pc_use, 
-            #                perm = True,
-            #                save=True, 
-            #                data_path=data_path)
+            CompareClassifier(band=band,
+                            method_pca=method_pca, 
+                            data_aug_method=data_aug_method, 
+                            subj_included=subj_included,
+                            PC_use=pc_use, 
+                            nb_iter=iteration,
+                            perm = True,
+                            save=True, 
+                            data_path=data_path)
             
             
             #####################
@@ -106,15 +108,15 @@ def main(band, pc_use):
             # Permutation scores
             #####################
             
-            PermLR_Final(band=band, 
-                        method_pca=method_pca, 
-                        data_aug_method=data_aug_method,
-                        subj_included=subj_included,
-                        iteration=iteration, 
-                        PC_use=pc_use, 
-                        save=True, 
-                        iter_perm=iter_perm, 
-                        data_path=data_path)
+            #PermLR_Final(band=band, 
+            #            method_pca=method_pca, 
+            #            data_aug_method=data_aug_method,
+            #            subj_included=subj_included,
+            #            iteration=iteration, 
+            #            PC_use=pc_use, 
+            #            save=True, 
+            #            iter_perm=iter_perm, 
+            #            data_path=data_path)
 
 
 if __name__ == "__main__":
