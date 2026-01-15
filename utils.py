@@ -569,7 +569,7 @@ def ConcatPCA(concat_dict, ch_id = False, nb_compo =2, freq_band=FREQ_BAND, meth
     # Try to concat at subject level the event correct 
     df_list = []
     df_Componants = {}
-
+    means= {}
     for subj, concat in concat_dict.items() : 
         df_compo_list = []
         if ch_id == False : 
@@ -589,10 +589,12 @@ def ConcatPCA(concat_dict, ch_id = False, nb_compo =2, freq_band=FREQ_BAND, meth
                 pca = PCA(n_components=nb_compo)
                 X_transformed = pca.fit_transform(X.T)
                 df_compo = pd.DataFrame(pca.components_)
+                means[freq] = pca.mean_
 
             elif method == 'nmf' :
                 X_pos = X - X.min() + 1e-6 # shift to make it non negative
                 # optimize NMF 
+                means[freq] = X.mean(1, keepdims=False)
                 best, _ = run_nmf_multistart(X_pos.T, nb_compo, n_runs=10, random_states=None, max_iter=10000)
                 X_transformed = best['X_transformed']
                 df_compo =  pd.DataFrame(best['Compo'])
@@ -617,12 +619,7 @@ def ConcatPCA(concat_dict, ch_id = False, nb_compo =2, freq_band=FREQ_BAND, meth
         df_Componants[subj] = pd.concat(df_compo_list, axis=0)
     df_X_transformed = pd.concat(df_list) 
     if return_mean :
-        if method == 'nmf' : 
-            mean = X.mean(1, keepdims=False)
-        else : 
-            mean = pca.mean_
-        
-        return df_Componants, df_X_transformed, mean
+        return df_Componants, df_X_transformed, means
     else :
         return df_Componants, df_X_transformed
 
@@ -1172,12 +1169,13 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, subj_included=[], 
         concat_all = PolarityCor(concat_all, method_pca=method_pca, subj_included=subj_included, data_path=data_path)
     
     del TFRm_list
-    df_Componants, _, mean_pca = ConcatPCA({'grp' : concat_all}, ch_id = False, nb_compo=3, freq_band=[freq],method=method, return_mean=True)
+    df_Componants, _, means = ConcatPCA({'grp' : concat_all}, ch_id = False, nb_compo=3, freq_band=[freq],method=method, return_mean=True)
     weights = df_Componants['grp'].query("freq == @freq").drop(columns = ['freq', 'compo']).values
     Train_all = np.concatenate(Train_sample, axis=1)
     Test_all = np.concatenate(Test_sample, axis =2)
 
     # to center the data before transform
+    mean_pca = means[freq]
     m_train= mean_pca[None, :, None]
     m_test = mean_pca[None, :, None]
 

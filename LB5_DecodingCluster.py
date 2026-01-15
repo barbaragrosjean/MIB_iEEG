@@ -30,48 +30,48 @@ def main(band, pc_use):
         #                          subj_included=subj_included, 
         #                          save=True)
         
-        for method_pca in ['concat'] : #, 'mean'] :
+        for method_pca in ['mean'] : #, 'concat'] :
 
             #####################
             # Compute decoding
             #####################
 
-            #LR(band=band,
-            #    perm=perm,
-            #    iteration=iteration,
-            #    method_pca=method_pca, 
-            #    data_aug_method=data_aug_method, 
-            #    subj_included=subj_included, 
-            #    PC_use=pc_use, 
-            #    save=True, 
-            #    iter_perm=iter_perm, 
-            #    data_path=data_path)
+            LR(band=band,
+                perm=perm,
+                iteration=iteration,
+                method_pca=method_pca, 
+                data_aug_method=data_aug_method, 
+                subj_included=subj_included, 
+                PC_use=pc_use, 
+                save=True, 
+                iter_perm=iter_perm, 
+                data_path=data_path)
                 
-            #TemporalLR(band=band, 
-            #            method_pca=method_pca, 
-            #            data_aug_method=data_aug_method, 
-            #            subj_included=subj_included, 
-            #            PC_use=pc_use, 
-            #            save=True, 
-            #            data_path=data_path)
+            TemporalLR(band=band, 
+                        method_pca=method_pca, 
+                        data_aug_method=data_aug_method, 
+                        subj_included=subj_included, 
+                        PC_use=pc_use, 
+                        save=True, 
+                        data_path=data_path)
                 
-            #TemporalGeneralization(band=band, 
-            #                        method_pca=method_pca, 
-            #                        data_aug_method=data_aug_method, 
-            #                        subj_included=subj_included, 
-            #                        PC_use = pc_use,
-            #                        save=True,
-            #                        data_path=data_path)
+            TemporalGeneralization(band=band, 
+                                    method_pca=method_pca, 
+                                    data_aug_method=data_aug_method, 
+                                    subj_included=subj_included, 
+                                    PC_use = pc_use,
+                                    save=True,
+                                    data_path=data_path)
             
-            CompareClassifier(band=band,
-                            method_pca=method_pca, 
-                            data_aug_method=data_aug_method, 
-                            subj_included=subj_included,
-                            PC_use=pc_use, 
-                            nb_iter = iteration,
-                            perm = True,
-                            save=True, 
-                            data_path=data_path)
+            #CompareClassifier(band=band,
+            #                method_pca=method_pca, 
+            #                data_aug_method=data_aug_method, 
+            #                subj_included=subj_included,
+            #                PC_use=pc_use, 
+            #                nb_iter = iteration,
+            #                perm = True,
+            #                save=True, 
+            #                data_path=data_path)
             
             #CompareClassifier(band=band,
             #                method_pca=method_pca, 
