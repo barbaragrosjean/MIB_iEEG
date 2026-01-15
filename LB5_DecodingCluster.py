@@ -7,7 +7,7 @@ import argparse
 
 def main(band, pc_use):
     iteration =100
-    iter_perm = 100
+    iter_perm = 5
     perm =False
     data_path = OUT_PATH + '/Data_shortWOBS'
 
