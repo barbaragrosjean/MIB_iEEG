@@ -3,3 +3,5 @@ trash/
 __pycache__/
 
 py-wrapper_*
+
+.DS_Store
