@@ -779,14 +779,15 @@ def GetInfo(subj_included, project_path = PROJECT_PATH, data_path = OUT_PATH + '
 
         areas.extend(np.vstack([df['area1'], df['area2']]).T)
         elect_list.extend(df['channels'])
-
         subj_list.extend([subj]*len(df['channels']))
 
     if save : 
         d = pd.DataFrame(coord, columns = ['x', 'y', 'z'])
-        d.loc[:, ['areas1', 'area2']] = areas
+        d.loc[:, ['area1', 'area2']] = areas
         d.loc[:, 'elect'] = elect_list
         d.loc[:, 'subj'] = subj_list
+        d.loc[:, 'region'] = d.loc[:, 'area1'].apply(lambda x : FindRegion(x)) 
+
         d.to_csv(data_path + '/grp_info.csv')
         
     else : 
