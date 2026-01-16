@@ -8,7 +8,7 @@ from scipy.stats import spearmanr
 from scipy.ndimage import gaussian_filter1d
 
 from utils import OUT_PATH
-from utils import PlotCompoIndividual, BbEvents, GetInfo, CompoThr, ExcludSubj, PolarityCor, computeLagPeak, ConcatPCA, DataTransformationM1
+from utils import PlotCompoIndividual, BbEvents, GetInfo, CompoThr, ExcludSubj, PolarityCor, computeLagPeak, ConcatPCA, DataTransformationM1, WeightSpearman
 
 epoch_path = OUT_PATH + '/Data_shortWOBS'
 
@@ -48,7 +48,7 @@ method = 'pca'
 # 0. Get the data
 data = []
 subj_list = []
-for subj in subj_included: # go over the subject and comptute mean per condi over trials
+for subj in subj_included: 
     data_mean = BbEvents(subj, data_path=epoch_path)
     subj_list.extend([subj] * data_mean.shape[1])
     info_file = f'{epoch_path}/{subj}_info.json'
@@ -62,48 +62,49 @@ if pol_cor:
                            subj_included=subj_included)
 
 # 1. Compute for componant and get plots
-if method_pca == 'mean' :
-    data_grp_mean = data_grp.mean(0)
-else : 
-    data_grp_mean = np.concat([data_grp[i, :, :] for i in [0, 1]], axis =1)
-df_Componants, df_X_transformed, mean = ConcatPCA({'grp' : data_grp_mean}, 
-                                            ch_id = False, 
-                                            nb_compo =nb_compo, 
-                                            freq_band=['broadband'], 
-                                            method =method, 
-                                            return_mean = True)
+for method_pca in ['mean', 'concat'] : 
+    if method_pca == 'mean' :
+        data_grp_mean = data_grp.mean(0)
+    else : 
+        data_grp_mean = np.concat([data_grp[i, :, :] for i in [0, 1]], axis =1)
+    df_Componants, df_X_transformed, mean = ConcatPCA({'grp' : data_grp_mean}, 
+                                                ch_id = False, 
+                                                nb_compo =nb_compo, 
+                                                freq_band=['broadband'], 
+                                                method =method, 
+                                                return_mean = True)
 
-weights=df_Componants['grp'].drop(columns= ['compo', 'freq']).values #(4, 2576) compo, electrods
-data_transfrom = np.zeros((2, nb_compo, data_grp.shape[2]))
-data_grp_c = data_grp - mean[None, :, None]
-data_transfrom[0, :, :] = weights @ data_grp_c[0, :,:]
-data_transfrom[1, :, :] = weights @ data_grp_c[1, :,:]
+    weights=df_Componants['grp'].drop(columns= ['compo', 'freq']).values #(4, 2576) compo, electrods
+    data_transfrom = np.zeros((2, nb_compo, data_grp.shape[2]))
+    data_grp_c = data_grp - mean[band][None, :, None]
+    data_transfrom[0, :, :] = weights @ data_grp_c[0, :,:]
+    data_transfrom[1, :, :] = weights @ data_grp_c[1, :,:]
 
-fig, ax = plt.subplots(1, 3, figsize = (14, 4), sharey=True)
-fig.suptitle(f'Group PCs ({band}) -- {method} - {method_pca}')
+    fig, ax = plt.subplots(1, 3, figsize = (14, 4), sharey=True)
+    fig.suptitle(f'Group PCs ({band}) -- {method} - {method_pca}')
 
-for i in range(nb_compo) : 
-    ax[i].plot(time, data_transfrom[0, i,:], c = 'blue', label='old/correct', alpha = 1, ls=':')
-    ax[i].plot(time, data_transfrom[1, i,:], c = 'red', label='new/correct', alpha = 1, ls=':')
-ax[i].legend(bbox_to_anchor=(1, 1))
+    for i in range(nb_compo) : 
+        ax[i].plot(time, data_transfrom[0, i,:], c = 'blue', label='old/correct', alpha = 1, ls=':')
+        ax[i].plot(time, data_transfrom[1, i,:], c = 'red', label='new/correct', alpha = 1, ls=':')
+    ax[i].legend(bbox_to_anchor=(1, 1))
 
-fig.savefig(folder_out + f'/grpTS_{band}_{method}_{method_pca}.png')
+    fig.savefig(folder_out + f'/grpTS_{band}_{method}_{method_pca}.png')
 
-PlotCompoIndividual('grp', 
-                    df_Componants={'grp' : df_Componants}, 
-                    nb_compo = nb_compo,
-                    freq_band=[band], 
-                    out_path= folder_out + f'/grp{method.upper()}/supsubj_bb_{method_pca}/', 
-                    data_path=epoch_path, 
-                    show=False)
+    PlotCompoIndividual('grp', 
+                        df_Componants=df_Componants, 
+                        nb_compo = nb_compo,
+                        freq_band=[band], 
+                        out_path= folder_out + f'/grp{method.upper()}/supsubj_bb_{method_pca}/', 
+                        data_path=epoch_path, 
+                        show=False)
 
-df_X_transform = pd.DataFrame(np.concat([data_transfrom[0, :, :], data_transfrom[1, :, :]], axis=1))
-df_X_transform['freq'] = 'broadband'
-df_X_transform['subj'] = 'grp'
-df_X_transform['compo'] = ['compo' + str(i+1) for i in range(nb_compo)]
+    df_X_transform = pd.DataFrame(np.concat([data_transfrom[0, :, :], data_transfrom[1, :, :]], axis=1))
+    df_X_transform['freq'] = 'broadband'
+    df_X_transform['subj'] = 'grp'
+    df_X_transform['compo'] = ['compo' + str(i+1) for i in range(nb_compo)]
 
-df_X_transform.to_csv(f'{folder_out}/grp{method.upper()}/supsubj_bb_{method_pca}/grp_Xtrans_PCA{nb_compo}.csv')
-df_Componants.to_csv(f'{folder_out}/grp{method.upper()}/supsubj_bb_{method_pca}/grp_Compo_PCA{nb_compo}.csv')
+    df_X_transform.to_csv(f'{folder_out}/grp{method.upper()}/supsubj_bb_{method_pca}/grp_Xtrans_PCA{nb_compo}.csv')
+    pd.DataFrame(df_Componants['grp']).to_csv(f'{folder_out}/grp{method.upper()}/supsubj_bb_{method_pca}/grp_Compo_PCA{nb_compo}.csv')
 
 ########## Compare methods ########### 
 # Exp var of PCA

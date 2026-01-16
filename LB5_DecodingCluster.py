@@ -1,11 +1,12 @@
 
 import os
 from utils import OUT_PATH, FREQ_BAND
-from utils import PermLR_distrib, PermLR_null, LR, TemporalLR, TemporalGeneralization, ExcludSubj, TemporalLRRaw, TemporalGeneralizationRaw, CompareClassifier, PermLR_Final
+from utils import PermLR_distrib, PermLR_null, LR, TemporalLR, TemporalGeneralization, ExcludSubj, TemporalLRRaw, TemporalGeneralizationRaw, CompareClassifier
+from utils import decodingTS
 import warnings
 import argparse
 
-def main(band, pc_use):
+def main_old(band, pc_use):
     iteration =100
     iter_perm = 5
     perm =False
@@ -104,21 +105,30 @@ def main(band, pc_use):
             #                          save=True, 
             #                          undersampling=False)
             
-            #####################
-            # Permutation scores
-            #####################
-            
-            #PermLR_Final(band=band, 
-            #            method_pca=method_pca, 
-            #            data_aug_method=data_aug_method,
-            #            subj_included=subj_included,
-            #            iteration=iteration, 
-            #            PC_use=pc_use, 
-            #            save=True, 
-            #            iter_perm=iter_perm, 
-            #            data_path=data_path)
 
+def main(band, pc_use):
+    tfr_path = OUT_PATH + '/Data_shortWOBS'
+    subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
+    subj_included = ExcludSubj(subj_included, data_path=tfr_path)
 
+    method_pca = 'mean'
+    data_aug_method = 'mean'
+    iteration = 100
+    iter_perm = 50
+    model =  'SVC_rbf'
+
+    decodingTS(band, 
+            method_pca, 
+            data_aug_method,
+            subj_included, 
+            iteration=iteration, 
+            PC_use=pc_use, 
+            save=True, 
+            out_path=f'{OUT_PATH}/Decoding', 
+            iter_perm=iter_perm, 
+            data_path=tfr_path, 
+            model_name = model)
+    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Specific frequency band")
     parser.add_argument("--band", type=str, choices=FREQ_BAND + ['broadband'], required=True,
