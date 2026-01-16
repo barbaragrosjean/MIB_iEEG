@@ -2142,8 +2142,7 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
             p.append(model.oob_score_)
         elif model_name == 'SVC_rbf' :
             scores = model.decision_function(Test_transformed)
-            y_test_hinge = np.where(y_test == 1, 1, -1)
-            p.append(hinge_loss(y_test_hinge, scores))
+            p.append(hinge_loss([-1, 1], scores))
             weights_model.append(None)
         del model 
         del Test_transformed
@@ -2202,9 +2201,7 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
                 p_sh.append(model.oob_score_)
             elif model_name == 'SVC_rbf' :
                 scores = model_sh.decision_function(Test_transformed_sh)
-                y_test_hinge = np.where(y_test == 1, 1, -1)
-                print(y_test_hinge)
-                p_sh.append(hinge_loss(y_test_hinge, scores))
+                p_sh.append(hinge_loss([-1, 1], scores))
                 weights_model_sh.append(None)
             
             del Test_transformed_sh
