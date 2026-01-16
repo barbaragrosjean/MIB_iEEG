@@ -106,16 +106,15 @@ def main_old(band, pc_use):
             #                          undersampling=False)
             
 
-def main(band, pc_use):
+def main(band, pc_use, model):
     tfr_path = OUT_PATH + '/Data_shortWOBS'
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
     subj_included = ExcludSubj(subj_included, data_path=tfr_path)
 
-    method_pca = 'mean'
+    method_pca = 'concat'
     data_aug_method = 'mean'
     iteration = 100
     iter_perm = 50
-    model =  'SVC_rbf'
 
     decodingTS(band, 
             method_pca, 
@@ -135,6 +134,9 @@ if __name__ == "__main__":
                         help="Frequency band to process.")
     parser.add_argument("--pc_use", type=int, choices=[0, 1, 2], required=True,
                         help="PC to use to process.")
+    parser.add_argument("--model", type=str, choices=["LR", "SVC_linear", "SVC_rbf", "RandomForest"], required=True,
+                        help="Model to run")
+    
     
     args = parser.parse_args()
-    main(args.band, args.pc_use)
+    main(args.band, args.pc_use, args.model)

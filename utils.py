@@ -2135,8 +2135,7 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
         elif model_name == 'SVC_linear':
             weights_model.append(model.coef_)
             scores = model.decision_function(Test_transformed)
-            y_test_hinge = np.where(y_test == 1, 1, -1)
-            p.append(hinge_loss(y_test_hinge, scores))
+            p.append(hinge_loss([-1, 1], scores))
         elif model_name == 'RandomForest' : 
             weights_model.append(model.feature_importances_)
             p.append(model.oob_score_)
@@ -2194,11 +2193,10 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
             elif model_name == 'SVC_linear':
                 weights_model_sh.append(model_sh.coef_)
                 scores = model_sh.decision_function(Test_transformed_sh)
-                y_test_hinge = np.where(y_test == 1, 1, -1)
-                p_sh.append(hinge_loss(y_test_hinge, scores))
+                p_sh.append(hinge_loss([-1, 1], scores))
             elif model_name == 'RandomForest' : 
-                weights_model_sh.append(model.feature_importances_)
-                p_sh.append(model.oob_score_)
+                weights_model_sh.append(model_sh.feature_importances_)
+                p_sh.append(model_sh.oob_score_)
             elif model_name == 'SVC_rbf' :
                 scores = model_sh.decision_function(Test_transformed_sh)
                 p_sh.append(hinge_loss([-1, 1], scores))
@@ -2253,7 +2251,7 @@ def select_model(model_name) :
 def cleandfdecodingTS(df_final) : 
     return_dict ={}
 
-    for f in ['acc', 'acc_sh', 'weight_mean', 'weight_std', 'weight_sh_mean','weight_sh_std', 'entropy', 'entropy_sh_mean', 'entropy_sh_std']: 
+    for f in ['acc', 'acc_sh', 'pca_weight', 'pca_weight_sh', 'weight_mean', 'weight_std', 'weight_sh_mean','weight_sh_std', 'entropy', 'entropy_sh_mean', 'entropy_sh_std']: 
         return_dict[f] =[]
 
     y_pred = np.array([int(x.replace('[', '').replace('np.int64(', '').replace(')', '').replace(']', '')) for x in df_final.y_pred.values[0].split(', ')])
@@ -2263,12 +2261,18 @@ def cleandfdecodingTS(df_final) :
     entropy= np.array([float(x.replace('[', '').replace('np.float64(', '').replace(')', '').replace(']', '')) for x in df_final.entropy.values[0].split(', ')])
     entropy_sh= np.array([float(x.replace('[', '').replace('np.float64(', '').replace(')', '').replace(']', '')) for x in df_final.entropy_sh.values[0].split(', ')])
     entropy_sh = entropy_sh.reshape(int(df_final.loc[0, 'iter']), int(df_final.loc[0, 'iter_perm']))  
-
     numbers_only = ' '.join(re.findall(r'[-+]?\d*\.\d+e[-+]?\d+|[-+]?\d+\.\d*|[-+]?\d+', df_final.weight.values[0]))
     weight = np.fromstring(numbers_only, sep=' ').reshape(-1, 900)
     numbers_only = ' '.join(re.findall(r'[-+]?\d*\.\d+e[-+]?\d+|[-+]?\d+\.\d*|[-+]?\d+', df_final.weight_sh.values[0]))
-    weight_sh = np.fromstring(numbers_only, sep=' ').reshape(int(df_final.loc[0, 'iter']), int(df_final.loc[0, 'iter_perm']), 900) # TO check
-
+    try :     
+        weight_sh = np.fromstring(numbers_only, sep=' ').reshape(int(df_final.loc[0, 'iter']), int(df_final.loc[0, 'iter_perm']), 900) # TO check
+        return_dict['weight_sh_mean'] = weight_sh.reshape(-1, 900).mean(0)
+        return_dict['weight_sh_std'] = weight_sh.reshape(-1, 900).std(0)
+    except : 
+         return_dict['weight_sh'] = None
+   
+    return_dict['weight_mean'] = weight.mean(0)
+    return_dict['weight_std'] = weight.std(0)
     return_dict['y_pred'] = y_pred
     return_dict['y_pred_sh'] = y_pred_sh
     return_dict['y_test'] = y_test
@@ -2281,12 +2285,12 @@ def cleandfdecodingTS(df_final) :
     return_dict['acc_sh'] = np.mean(acc_along_perm) # acc global with the stability of perms
     return_dict['acc'] = accuracy_score(y_pred, y_test) # acc global
 
-    # compute weights
-    return_dict['weight_sh_mean'] = weight_sh.reshape(-1, 900).mean(0)
-    return_dict['weight_sh_std'] = weight_sh.reshape(-1, 900).std(0)
-    return_dict['weight_mean'] = weight.mean(0)
-    return_dict['weight_std'] = weight.std(0)
-
+    # weights pca
+    numbers_only = ' '.join(re.findall(r'[-+]?\d*\.\d+e[-+]?\d+|[-+]?\d+\.\d*|[-+]?\d+', df_final.pca_weight.values[0]))
+    return_dict['pca_weight'] = np.fromstring(numbers_only, sep=' ')
+    numbers_only = ' '.join(re.findall(r'[-+]?\d*\.\d+e[-+]?\d+|[-+]?\d+\.\d*|[-+]?\d+', df_final.pca_weight_sh.values[0]))
+    return_dict['pca_weight_sh'] = np.fromstring(numbers_only, sep=' ')
+    
     # entropy 
     return_dict['entropy'] = entropy
     return_dict['entropy_sh'] = entropy_sh
