@@ -2248,7 +2248,7 @@ def select_model(model_name) :
 
     return classifiers[model_name], param_grids[model_name]
 
-def cleandfdecodingTS(df_final) : 
+def cleandfdecodingTS(df_final, shape_time) : 
     return_dict ={}
 
     for f in ['acc', 'acc_sh', 'pca_weight', 'pca_weight_sh', 'weight_mean', 'weight_std', 'weight_sh_mean','weight_sh_std', 'entropy', 'entropy_sh_mean', 'entropy_sh_std']: 
@@ -2262,12 +2262,12 @@ def cleandfdecodingTS(df_final) :
     entropy_sh= np.array([float(x.replace('[', '').replace('np.float64(', '').replace(')', '').replace(']', '')) for x in df_final.entropy_sh.values[0].split(', ')])
     entropy_sh = entropy_sh.reshape(int(df_final.loc[0, 'iter']), int(df_final.loc[0, 'iter_perm']))  
     numbers_only = ' '.join(re.findall(r'[-+]?\d*\.\d+e[-+]?\d+|[-+]?\d+\.\d*|[-+]?\d+', df_final.weight.values[0]))
-    weight = np.fromstring(numbers_only, sep=' ').reshape(-1, 900)
+    weight = np.fromstring(numbers_only, sep=' ').reshape(-1, shape_time)
     numbers_only = ' '.join(re.findall(r'[-+]?\d*\.\d+e[-+]?\d+|[-+]?\d+\.\d*|[-+]?\d+', df_final.weight_sh.values[0]))
     try :     
-        weight_sh = np.fromstring(numbers_only, sep=' ').reshape(int(df_final.loc[0, 'iter']), int(df_final.loc[0, 'iter_perm']), 900) # TO check
-        return_dict['weight_sh_mean'] = weight_sh.reshape(-1, 900).mean(0)
-        return_dict['weight_sh_std'] = weight_sh.reshape(-1, 900).std(0)
+        weight_sh = np.fromstring(numbers_only, sep=' ').reshape(int(df_final.loc[0, 'iter']), int(df_final.loc[0, 'iter_perm']), shape_time) # TO check
+        return_dict['weight_sh_mean'] = weight_sh.reshape(-1, shape_time).mean(0)
+        return_dict['weight_sh_std'] = weight_sh.reshape(-1, shape_time).std(0)
     except : 
          return_dict['weight_sh'] = None
    

@@ -112,7 +112,7 @@ def main(band, pc_use, model):
     subj_included = ExcludSubj(subj_included, data_path=tfr_path)
 
     method_pca = 'concat'
-    data_aug_method = 'mean'
+    data_aug_method = 'duplicat'
     iteration = 100
     iter_perm = 50
 
