@@ -24,11 +24,9 @@ from sklearn.utils import shuffle
 from sklearn.metrics import accuracy_score, f1_score, log_loss, hinge_loss
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from tslearn.neighbors import KNeighborsTimeSeriesClassifier 
 from sklearn.svm import SVC
 from sklearn.base import clone
 from sklearn.model_selection import KFold
-from sklearn.preprocessing import StandardScaler
 from scipy.stats import spearmanr, pearsonr
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from scipy.signal import find_peaks
@@ -1019,6 +1017,7 @@ def PlotTimeSerie(subj_list, df_X_transformed, out_path, region='', show=False, 
                 the_ax.plot(df_to_plot_1.loc['time', :], df_to_plot_1.loc['compo' + str(compo_id+1), :], label = f'PC{compo_id+1}', color=color_1[compo_id])
                 
                 # event2
+                print(df_to_plot)
                 df_to_plot_2 = df_to_plot.set_index('compo').loc[:, len(time):len(time)*2 -1]                 
                 df_to_plot_2.loc['time', :] = time
                 the_ax.plot(df_to_plot_2.loc['time', :], df_to_plot_2.loc['compo' + str(compo_id+1), :], label = f'PC{compo_id+1}', color=color_2[compo_id])
@@ -1172,7 +1171,7 @@ def subject_variance_explained(data_grp_, subj_list, W): # var explain by subjec
 
     return np.array(results)
 
-def WeightSpearman(data1, data2, labels=[], out_path=OUT_PATH) : 
+def WeightSpearman(data1, data2, labels=[], figsize=(8, 6), ticks=False) : 
     if labels == [] : 
         labels = ['data1', 'data2']
     R = np.zeros((data1.shape[0], data2.shape[0]))
@@ -1184,14 +1183,20 @@ def WeightSpearman(data1, data2, labels=[], out_path=OUT_PATH) :
             R[i, j] = r
             P[i, j] = pval
 
-    fig, ax = plt.subplots(figsize = (8, 6))
+
+    fig, ax = plt.subplots(figsize =figsize)
     sns.heatmap(abs(R), vmin=0, vmax=1, cmap='Blues', ax=ax, annot=True , fmt='.3f')
-    ax.set_xticklabels(['PC' + str(i+1) for i in range(data2.shape[0])])
+    if not ticks :
+        x_ticks = ['PC' + str(i+1) for i in range(data2.shape[0])]
+        y_ticks = ['PC' + str(i+1) for i in range(data1.shape[0])]
+    else : 
+        x_ticks = ticks[0]
+        y_ticks = ticks[1]
+    ax.set_xticklabels(x_ticks, rotation = 90)
     ax.set_xlabel(labels[1])
-    ax.set_yticklabels(['PC' + str(i+1) for i in range(data1.shape[0])])
+    ax.set_yticklabels(y_ticks, rotation = 0)
     ax.set_ylabel(labels[0])
     ax.set_title('Spearman correlation of weights')
-    fig.savefig(out_path)
 
 ################################### DECODING ###################################
 def CheckTrials(X_train, y_train, event=list(EVENT_ID.keys())[:2] , out_path=OUT_PATH + '/Decoding', label = '', save=False, color_ev = {0 : 'r', 1 : 'b'}, freq='high_gamma', data_path=OUT_PATH + '/Data') : 
@@ -1841,164 +1846,6 @@ def CompareModelsGGPlot(score, band, pc_use, decoding_folder=OUT_PATH + '/Decodi
 
 ################################### STATS ###################################
 
-def PermLR_distrib(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=1) : 
-    acc =[]
-    acc_s =[]
-    scores=[]
-    scores_s=[]
-    for j in range(iter_perm) : 
-        Y_PRED = []
-        Y_TEST = []
-        Y_PRED_S= []
-        p=[]
-        p_s=[]
-        
-        for i in range(iteration) :   
-            X_train, y_train, X_test, y_test, _ , _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use)        
-            X_train, y_train = shuffle(X_train, y_train, random_state =0)
-            Y_TEST.extend(y_test)
-
-            if i == 0 :
-                param_grid = {
-                    'C': [0.01, 0.1, 1, 10],
-                    'penalty': ['l2'],
-                    'solver': ['lbfgs', 'liblinear']  # works with l2
-                }         
-
-
-                base_model = LogisticRegression(max_iter=1000)
-                grid = GridSearchCV(base_model, param_grid, cv=5)
-                grid.fit(X_train, y_train)
-                best_params = grid.best_params_
-            # model not shuffle
-            model = LogisticRegression(**best_params, max_iter=1000)
-            model.fit(X_train, y_train)
-            Y_PRED.extend(model.predict(X_test))
-
-            # model shuffle 
-
-            y_train_s = shuffle(y_train, random_state=0)
-            model_s = LogisticRegression(**best_params, max_iter=1000)
-            model_s.fit(X_train, y_train_s)    
-            Y_PRED_S.extend(model_s.predict(X_test)) 
-
-            p.extend(model.predict_proba(X_test)[:,1]) # CHECK THAT I M DOING THE RIGHT THINGS WITH THE LABELS
-            p_s.extend(model_s.predict_proba(X_test)[:,1])
-
-        acc.append(accuracy_score(y_pred=Y_PRED, y_true=Y_TEST))
-        acc_s.append(accuracy_score(y_pred=Y_PRED_S, y_true=Y_TEST))
-        scores.append(log_loss(Y_TEST, p))
-        scores_s.append(log_loss(Y_TEST, p_s))
-    
-    #2. summary
-    if not os.path.isdir(out_path + '/stats') : 
-        os.makedirs(out_path+'/stats')
-
-    sumsum = pd.DataFrame()
-    # info test
-    sumsum.loc['band', 0] = band
-    sumsum.loc['method_pca', 0] = method_pca
-    sumsum.loc['method_data_augm', 0] = data_aug_method
-    sumsum.loc['nb_iter', 0] = iteration # Iteration to built up the testing 
-
-    # info perm 
-    sumsum.loc['nb_iter_perm', 0] = iter_perm # Iteration to built up the pvalue
-    sumsum.loc['acc', 0] = acc
-    sumsum.loc['acc_p', 0] = acc_s
-    sumsum.loc['entropy', 0] = scores
-    sumsum.loc['entropy_p', 0] = scores_s
-
-    if save : 
-        sumsum.to_csv(out_path + f'/stats/PermDistrub_{band}_{method_pca}_{data_aug_method}.csv')
-
-    else : 
-        return sumsum
-
-def PermLR_null(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=1, accuracy = True, entropy=True) : 
-    sumsum = pd.DataFrame()
-    for s in range(3):
-        Y_PRED = []
-        Y_TEST = []
-        p=[]
-
-        for i in range(iteration) :   
-            X_train, y_train, X_test, y_test, _ , _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use)        
-            X_train, y_train = shuffle(X_train, y_train, random_state =0)
-
-            if i == 0 :
-                param_grid = {
-                    'C': [0.01, 0.1, 1, 10, 100],
-                    'penalty': ['l2'],
-                    'solver': ['lbfgs']  # works with l2
-                }
-
-                base_model = LogisticRegression(max_iter=1000)
-                grid = GridSearchCV(base_model, param_grid, cv=5)
-                grid.fit(X_train, y_train)
-                best_params = grid.best_params_
-
-            # model not shuffle
-            model = LogisticRegression(**best_params, max_iter=1000)
-            model.fit(X_train, y_train)
-            y_pred = model.predict(X_test)
-        
-            Y_PRED.extend(y_pred)
-            Y_TEST.extend(y_test)
-            p.extend(model.predict_proba(X_test)[:,1]) # CHECK THAT I M DOING THE RIGHT THINGS WITH THE LABELS
-        
-        # STATS BUILT UP THE NULL 
-        acc = accuracy_score(Y_TEST, Y_PRED)
-        if accuracy : 
-            acc_perm_list = []
-            for k in range(iter_perm):
-                acc_perm_list.append(accuracy_score(shuffle(Y_TEST), Y_PRED) )
-            
-            #perm_scores_array = np.array(acc_perm_list)
-            #mask = [perm_scores_array >= acc]
-            #p_value_acc = len(perm_scores_array[mask])/iter_perm
-
-        score = log_loss(Y_TEST, p)
-        if entropy :
-            perm_scores =[]
-            for k in range(iter_perm):
-                y_perm = np.random.permutation(Y_TEST)
-                score_k = log_loss(y_perm, p)
-                perm_scores.append(score_k)
-
-            #perm_scores_array = np.array(perm_scores)
-            #mask = [perm_scores_array <= score]
-            #p_value_entropy = len(perm_scores_array[mask])/iter_perm
-
-        #2. summary
-        if not os.path.isdir(out_path + 'stats/') : 
-            os.makedirs(out_path+'stats/')
-
-        
-        # info test
-        sumsum.loc['band', s] = band
-        sumsum.loc['method_pca', s] = method_pca
-        sumsum.loc['method_data_augm', s] = data_aug_method
-        sumsum.loc['nb_iter', s] = iteration # Iteration to built up the testing 
-
-        # info model capacities
-        sumsum.loc['acc', s] = np.round(acc, 3)
-        sumsum.loc['entropy', s] = np.round(score, 3)
-
-        # info perm 
-        sumsum.loc['nb_iter_perm', s] = iter_perm # Iteration to built up the pvalue
-        if entropy : 
-            sumsum.loc['entropy_p', s] = str(perm_scores)
-            #sumsum.loc['entropy_pvalue', 0] = p_value_entropy
-        if accuracy : 
-            sumsum.loc['acc_p', s] = str(acc_perm_list)
-            #sumsum.loc['acc_pvalues', 0] = p_value_acc
-
-    if save : 
-        sumsum.to_csv(out_path + f'/stats/PermNull_{band}_{method_pca}_{data_aug_method}_pc{PC_use+1}.csv')
-
-    else : 
-        return sumsum
-    
 def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=50, data_path=OUT_PATH + '/Data', model_name = 'LR') :
     truth = []
 
@@ -2052,9 +1899,9 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
 
             # Save for PCA computation at grp level
             if method_pca == 'concat' :
-                TFRm_list.append(np.concatenate([TFRm[i, :,:] for i in [0, 1]], axis = 1))
+                TFRm_list.append(np.concatenate([TFRm[i, :,:] for i in [0, 1]], axis = -1))
             if method_pca == 'mean' : 
-                TFRm_list.append(np.mean(TFRm[[0, 1], :,:], axis = 0))
+                TFRm_list.append(np.mean(TFRm, axis = 0))
 
             del TFRm
             # Get the trilas data
@@ -2149,13 +1996,31 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
         # SHUFFLED MODEL
         for j in range(iter_perm) : 
             # Shuffleing TFRm to compute PCA
-            # Split the concat shuffle the of one before one after 
-            concat_ev1 = concat_all[:, :int(concat_all.shape[1]/2)]
-            concat_ev2 = concat_all[:, int(concat_all.shape[1]/2):]
-            concat_ev12=np.concatenate([[concat_ev1], [concat_ev2]]) # got (2, channels, time) 
-            concat_ev12_shuffled = concat_ev12.copy()
-            np.random.shuffle(concat_ev12_shuffled)  # shuffle axis = 0
-            concat_all_sh = np.concat([concat_ev12_shuffled[i, :,:] for i in range(2)], axis = 1) # concat the time
+            if len(concat_all.shape) == 3 :
+                if method_pca == 'concat' : 
+                    concat_ev1 = concat_all[:, freq_id, :int(concat_all.shape[-1]/2)]
+                    concat_ev2 = concat_all[:, freq_id,  int(concat_all.shape[-1]/2):]
+            
+                    # shuffle the event to desconstruct the PC-concat orga ev1-- ev2
+                    concat_ev12=np.concatenate([[concat_ev1], [concat_ev2]]) # got (2, channels, time) 
+                    concat_ev12_shuffled = concat_ev12.copy()
+                    np.random.shuffle(concat_ev12_shuffled)  # shuffle axis = 0
+                    concat_all_sh = np.concat([concat_ev12_shuffled[i, :,:] for i in range(2)], axis = -1)
+                    
+                else : 
+                    concat_all_sh = concat_all[:, freq_id, :]
+            else:
+                if method_pca == 'concat' :
+                    concat_ev1 = concat_all[:, :int(concat_all.shape[-1]/2)]
+                    concat_ev2 = concat_all[:, int(concat_all.shape[-1]/2):]
+                    # shuffle the event to desconstruct the PC-concat orga ev1-- ev2
+                    concat_ev12=np.concatenate([[concat_ev1], [concat_ev2]]) # got (2, channels, time) 
+                    concat_ev12_shuffled = concat_ev12.copy()
+                    np.random.shuffle(concat_ev12_shuffled)  # shuffle axis = 0
+                    concat_all_sh = np.concat([concat_ev12_shuffled[i, :,:] for i in range(2)], axis = -1)
+                else : 
+                    concat_all_sh = concat_all
+
             df_Componants_sh, _, means = ConcatPCA({'grp' : concat_all_sh}, ch_id = False, nb_compo=3, freq_band=[band], return_mean=True)
             del concat_all_sh
 
@@ -2299,7 +2164,6 @@ def cleandfdecodingTS(df_final, shape_time) :
 
     return return_dict
     
-
 ################################### VIZ AND INTRO (CHAT) ###################################
     
 def PolarChannel(data1, title="Channels", elects=[], subjs = [], cmap_name = 'Blues', to_black = [], data_path = OUT_PATH + '/Data'):
@@ -2492,3 +2356,162 @@ def PolarChannelSequential(data1, data2, title="Channels", elects=[], subjs=[], 
     ax.legend(bbox_to_anchor=(1.6, 1))
     plt.show()
 
+########### TO DELETE ############
+def PermLR_distrib(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=1) : 
+    acc =[]
+    acc_s =[]
+    scores=[]
+    scores_s=[]
+    for j in range(iter_perm) : 
+        Y_PRED = []
+        Y_TEST = []
+        Y_PRED_S= []
+        p=[]
+        p_s=[]
+        
+        for i in range(iteration) :   
+            X_train, y_train, X_test, y_test, _ , _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use)        
+            X_train, y_train = shuffle(X_train, y_train, random_state =0)
+            Y_TEST.extend(y_test)
+
+            if i == 0 :
+                param_grid = {
+                    'C': [0.01, 0.1, 1, 10],
+                    'penalty': ['l2'],
+                    'solver': ['lbfgs', 'liblinear']  # works with l2
+                }         
+
+
+                base_model = LogisticRegression(max_iter=1000)
+                grid = GridSearchCV(base_model, param_grid, cv=5)
+                grid.fit(X_train, y_train)
+                best_params = grid.best_params_
+            # model not shuffle
+            model = LogisticRegression(**best_params, max_iter=1000)
+            model.fit(X_train, y_train)
+            Y_PRED.extend(model.predict(X_test))
+
+            # model shuffle 
+
+            y_train_s = shuffle(y_train, random_state=0)
+            model_s = LogisticRegression(**best_params, max_iter=1000)
+            model_s.fit(X_train, y_train_s)    
+            Y_PRED_S.extend(model_s.predict(X_test)) 
+
+            p.extend(model.predict_proba(X_test)[:,1]) # CHECK THAT I M DOING THE RIGHT THINGS WITH THE LABELS
+            p_s.extend(model_s.predict_proba(X_test)[:,1])
+
+        acc.append(accuracy_score(y_pred=Y_PRED, y_true=Y_TEST))
+        acc_s.append(accuracy_score(y_pred=Y_PRED_S, y_true=Y_TEST))
+        scores.append(log_loss(Y_TEST, p))
+        scores_s.append(log_loss(Y_TEST, p_s))
+    
+    #2. summary
+    if not os.path.isdir(out_path + '/stats') : 
+        os.makedirs(out_path+'/stats')
+
+    sumsum = pd.DataFrame()
+    # info test
+    sumsum.loc['band', 0] = band
+    sumsum.loc['method_pca', 0] = method_pca
+    sumsum.loc['method_data_augm', 0] = data_aug_method
+    sumsum.loc['nb_iter', 0] = iteration # Iteration to built up the testing 
+
+    # info perm 
+    sumsum.loc['nb_iter_perm', 0] = iter_perm # Iteration to built up the pvalue
+    sumsum.loc['acc', 0] = acc
+    sumsum.loc['acc_p', 0] = acc_s
+    sumsum.loc['entropy', 0] = scores
+    sumsum.loc['entropy_p', 0] = scores_s
+
+    if save : 
+        sumsum.to_csv(out_path + f'/stats/PermDistrub_{band}_{method_pca}_{data_aug_method}.csv')
+
+    else : 
+        return sumsum
+
+def PermLR_null(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=1, accuracy = True, entropy=True) : 
+    sumsum = pd.DataFrame()
+    for s in range(3):
+        Y_PRED = []
+        Y_TEST = []
+        p=[]
+
+        for i in range(iteration) :   
+            X_train, y_train, X_test, y_test, _ , _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use)        
+            X_train, y_train = shuffle(X_train, y_train, random_state =0)
+
+            if i == 0 :
+                param_grid = {
+                    'C': [0.01, 0.1, 1, 10, 100],
+                    'penalty': ['l2'],
+                    'solver': ['lbfgs']  # works with l2
+                }
+
+                base_model = LogisticRegression(max_iter=1000)
+                grid = GridSearchCV(base_model, param_grid, cv=5)
+                grid.fit(X_train, y_train)
+                best_params = grid.best_params_
+
+            # model not shuffle
+            model = LogisticRegression(**best_params, max_iter=1000)
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+        
+            Y_PRED.extend(y_pred)
+            Y_TEST.extend(y_test)
+            p.extend(model.predict_proba(X_test)[:,1]) # CHECK THAT I M DOING THE RIGHT THINGS WITH THE LABELS
+        
+        # STATS BUILT UP THE NULL 
+        acc = accuracy_score(Y_TEST, Y_PRED)
+        if accuracy : 
+            acc_perm_list = []
+            for k in range(iter_perm):
+                acc_perm_list.append(accuracy_score(shuffle(Y_TEST), Y_PRED) )
+            
+            #perm_scores_array = np.array(acc_perm_list)
+            #mask = [perm_scores_array >= acc]
+            #p_value_acc = len(perm_scores_array[mask])/iter_perm
+
+        score = log_loss(Y_TEST, p)
+        if entropy :
+            perm_scores =[]
+            for k in range(iter_perm):
+                y_perm = np.random.permutation(Y_TEST)
+                score_k = log_loss(y_perm, p)
+                perm_scores.append(score_k)
+
+            #perm_scores_array = np.array(perm_scores)
+            #mask = [perm_scores_array <= score]
+            #p_value_entropy = len(perm_scores_array[mask])/iter_perm
+
+        #2. summary
+        if not os.path.isdir(out_path + 'stats/') : 
+            os.makedirs(out_path+'stats/')
+
+        
+        # info test
+        sumsum.loc['band', s] = band
+        sumsum.loc['method_pca', s] = method_pca
+        sumsum.loc['method_data_augm', s] = data_aug_method
+        sumsum.loc['nb_iter', s] = iteration # Iteration to built up the testing 
+
+        # info model capacities
+        sumsum.loc['acc', s] = np.round(acc, 3)
+        sumsum.loc['entropy', s] = np.round(score, 3)
+
+        # info perm 
+        sumsum.loc['nb_iter_perm', s] = iter_perm # Iteration to built up the pvalue
+        if entropy : 
+            sumsum.loc['entropy_p', s] = str(perm_scores)
+            #sumsum.loc['entropy_pvalue', 0] = p_value_entropy
+        if accuracy : 
+            sumsum.loc['acc_p', s] = str(acc_perm_list)
+            #sumsum.loc['acc_pvalues', 0] = p_value_acc
+
+    if save : 
+        sumsum.to_csv(out_path + f'/stats/PermNull_{band}_{method_pca}_{data_aug_method}_pc{PC_use+1}.csv')
+
+    else : 
+        return sumsum
+    

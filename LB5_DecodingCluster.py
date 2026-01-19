@@ -106,13 +106,11 @@ def main_old(band, pc_use):
             #                          undersampling=False)
             
 
-def main(band, pc_use, model):
+def mainTS(band, pc_use, model, method_pca, data_aug_method):
     tfr_path = OUT_PATH + '/Data_shortWOBS'
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
     subj_included = ExcludSubj(subj_included, data_path=tfr_path)
 
-    method_pca = 'concat'
-    data_aug_method = 'duplicat'
     iteration = 100
     iter_perm = 50
 
@@ -128,15 +126,35 @@ def main(band, pc_use, model):
             data_path=tfr_path, 
             model_name = model)
     
+def mainTG(band, method_pca, data_aug_method):
+    tfr_path = OUT_PATH + '/Data_shortWOBS'
+    subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
+    subj_included = ExcludSubj(subj_included, data_path=tfr_path)
+
+    TemporalGeneralizationRaw(band, 
+                              data_aug_method, 
+                              subj_included, 
+                            save=True,
+                            PC_use=[0, 1],
+                            method_pca=method_pca, 
+                            undersampling=True, 
+                            data_path =tfr_path)  
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Specific frequency band")
     parser.add_argument("--band", type=str, choices=FREQ_BAND + ['broadband'], required=True,
                         help="Frequency band to process.")
-    parser.add_argument("--pc_use", type=int, choices=[0, 1, 2], required=True,
+    parser.add_argument("--pc_use", type=int, choices=[0, 1, 2], required=False,
                         help="PC to use to process.")
-    parser.add_argument("--model", type=str, choices=["LR", "SVC_linear", "SVC_rbf", "RandomForest"], required=True,
-                        help="Model to run")
+    parser.add_argument("--model", type=str, choices=["LR", "SVC_linear", "SVC_rbf", "RandomForest"], required=False,
+                        help="Model to run.")
+
+    parser.add_argument("--method_pca", type=str, choices=["concat", "mean"], required=True,
+                        help="PCA method to select.")
     
+    parser.add_argument("--method_data_aug", type=str, choices=["mean", "duplicat"], required=True,
+                        help="Method for data augmentation.")
     
     args = parser.parse_args()
-    main(args.band, args.pc_use, args.model)
+    mainTS(args.band, args.pc_use, args.model, args.method_pca, args.method_data_aug)
+    #mainTG(args.band, args.method_pca, args.method_data_aug)
