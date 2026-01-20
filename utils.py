@@ -687,7 +687,7 @@ def DataAugmentation(TFRtr,event_ids, data_aug_method='mean') :
 
     return np.concatenate([TFR_trials_filled[:,i, :, :] for i in [0, 1]], axis = 0), true_trials
 
-def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, subj_included=[], method_pca='mean', data_aug_method='mean', shuffle_index = False, data_path = OUT_PATH + '/Data', pol_cor=False, method ='pca') : 
+def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, nb_compo = 3,subj_included=[], method_pca='mean', data_aug_method='mean', shuffle_index = False, data_path = OUT_PATH + '/Data', pol_cor=False, method ='pca') : 
     TFRm_list = []
     
     Train_sample = []
@@ -768,7 +768,7 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, subj_included=[], 
         concat_all = PolarityCor(concat_all, method_pca=method_pca, subj_included=subj_included, data_path=data_path)
     
     del TFRm_list
-    df_Componants, _, means = ConcatPCA({'grp' : concat_all}, ch_id = False, nb_compo=3, freq_band=[freq],method=method, return_mean=True)
+    df_Componants, _, means = ConcatPCA({'grp' : concat_all}, ch_id = False, nb_compo=nb_compo, freq_band=[freq],method=method, return_mean=True)
     weights = df_Componants['grp'].query("freq == @freq").drop(columns = ['freq', 'compo']).values
     Train_all = np.concatenate(Train_sample, axis=1)
     Test_all = np.concatenate(Test_sample, axis =2)
@@ -1017,7 +1017,6 @@ def PlotTimeSerie(subj_list, df_X_transformed, out_path, region='', show=False, 
                 the_ax.plot(df_to_plot_1.loc['time', :], df_to_plot_1.loc['compo' + str(compo_id+1), :], label = f'PC{compo_id+1}', color=color_1[compo_id])
                 
                 # event2
-                print(df_to_plot)
                 df_to_plot_2 = df_to_plot.set_index('compo').loc[:, len(time):len(time)*2 -1]                 
                 df_to_plot_2.loc['time', :] = time
                 the_ax.plot(df_to_plot_2.loc['time', :], df_to_plot_2.loc['compo' + str(compo_id+1), :], label = f'PC{compo_id+1}', color=color_2[compo_id])
@@ -1941,7 +1940,7 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
         del Test_sample
 
         # NORMAL DECODING
-        df_Componants, _ , means = ConcatPCA({'grp' : concat_all}, ch_id = False, nb_compo=3, freq_band=[band], return_mean=True)
+        df_Componants, _ , means = ConcatPCA({'grp' : concat_all}, ch_id = False, nb_compo=PC_use+1, freq_band=[band], return_mean=True)
         weights = df_Componants['grp'].query("freq == @band").drop(columns = ['freq', 'compo']).values
         PCA_weights.append(weights[PC_use, :])
 
@@ -2021,7 +2020,7 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
                 else : 
                     concat_all_sh = concat_all
 
-            df_Componants_sh, _, means = ConcatPCA({'grp' : concat_all_sh}, ch_id = False, nb_compo=3, freq_band=[band], return_mean=True)
+            df_Componants_sh, _, means = ConcatPCA({'grp' : concat_all_sh}, ch_id = False, nb_compo=PC_use+1, freq_band=[band], return_mean=True)
             del concat_all_sh
 
             weights_sh = df_Componants_sh['grp'].query("freq == @band").drop(columns = ['freq', 'compo']).values

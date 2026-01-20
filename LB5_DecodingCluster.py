@@ -126,6 +126,26 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method):
             data_path=tfr_path, 
             model_name = model)
     
+def mainCompareClf(band, pc_use):
+    data_path = OUT_PATH + '/Data_shortWOBS'
+    subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(data_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
+    subj_included = ExcludSubj(subj_included, data_path=data_path)
+    iteration = 100
+
+    for perm in [True, False] :
+        for data_aug_method in ['mean', 'duplicat'] : 
+            for method_pca in ['mean', 'concat'] : 
+                CompareClassifier(band=band,
+                                method_pca=method_pca, 
+                                data_aug_method=data_aug_method, 
+                                subj_included=subj_included,
+                                PC_use=pc_use, 
+                                nb_iter = iteration,
+                                perm = perm,
+                                save=True, 
+                                data_path=data_path)
+    
+
 def mainTG(band, method_pca, data_aug_method):
     tfr_path = OUT_PATH + '/Data_shortWOBS'
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
@@ -144,17 +164,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Specific frequency band")
     parser.add_argument("--band", type=str, choices=FREQ_BAND + ['broadband'], required=True,
                         help="Frequency band to process.")
-    parser.add_argument("--pc_use", type=int, choices=[0, 1, 2], required=False,
+    
+    parser.add_argument("--pc_use", type=int, choices=[0, 1, 2, 3, 4], required=False,
                         help="PC to use to process.")
+    
     parser.add_argument("--model", type=str, choices=["LR", "SVC_linear", "SVC_rbf", "RandomForest"], required=False,
                         help="Model to run.")
 
-    parser.add_argument("--method_pca", type=str, choices=["concat", "mean"], required=True,
+    parser.add_argument("--method_pca", type=str, choices=["concat", "mean"], required=False,
                         help="PCA method to select.")
     
-    parser.add_argument("--method_data_aug", type=str, choices=["mean", "duplicat"], required=True,
+    parser.add_argument("--method_data_aug", type=str, choices=["mean", "duplicat"], required=False,
                         help="Method for data augmentation.")
     
     args = parser.parse_args()
     mainTS(args.band, args.pc_use, args.model, args.method_pca, args.method_data_aug)
+    #mainCompareClf(args.band, args.pc_use)
+
     #mainTG(args.band, args.method_pca, args.method_data_aug)
