@@ -1843,9 +1843,9 @@ def CompareModelsGGPlot(score, band, pc_use, decoding_folder=OUT_PATH + '/Decodi
 
     plt.show()
 
-################################### STATS ###################################
+################################### 'STATS' ###################################
 
-def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=50, data_path=OUT_PATH + '/Data', model_name = 'LR') :
+def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=50, data_path=OUT_PATH + '/Data', model_name = 'LR', crop_arg={'crop' :False, 't_id_min':0, 't_id_max':0 }) :
     truth = []
 
     # TO STORE
@@ -1929,9 +1929,9 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
         concat_all = np.concatenate(TFRm_list, axis = 0) 
         Train_all = np.concatenate(Train_sample, axis=1)
 
-        y_train = [1]*23 + [2]*23
+        y_train = [0]*23 + [1]*23
         Test_all = np.concatenate(Test_sample, axis =2)
-        y_test = [1, 2]
+        y_test = [0,1]
         Y_TEST.extend(y_test)
         
         del TFRtr
@@ -1958,6 +1958,14 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
         else : 
             Train_transformed = weights[PC_use, :] @ (Train_all - m_train)
             Test_transformed = weights[PC_use, :] @ (Test_all[:,0,:] - m_test)
+
+        # model BS?
+        if crop_arg['crop'] : 
+            Train_transformed = Train_transformed[:, crop_arg['t_id_min']:crop_arg['t_id_max']]
+            Test_transformed = Test_transformed[:, crop_arg['t_id_min']:crop_arg['t_id_max']]
+            l_crop = '_crp' + str(crop_arg['t_id_min']) + '_' + str(crop_arg['t_id_max']) + '_'
+        else : 
+            l_crop = ''
 
         if i == 0 :
             base_model = clone(clf)
@@ -2041,6 +2049,13 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
                 Train_transformed_sh = weights_sh[PC_use, :] @ Train_all
                 Test_transformed_sh = weights_sh[PC_use, :] @ Test_all[:,0,:]
             
+            if crop_arg['crop'] : 
+                Train_transformed_sh = Train_transformed_sh[:, crop_arg['t_id_min']:crop_arg['t_id_max']]
+                Test_transformed_sh = Test_transformed_sh[:, crop_arg['t_id_min']:crop_arg['t_id_max']]
+                l_crop = '_crp' + str(crop_arg['t_id_min']) + '_' + str(crop_arg['t_id_max']) + '_'
+            else : 
+                l_crop = ''
+
             # Shuffle the labels
             y_train_sh = shuffle(y_train)         
             # Applied the model
@@ -2090,7 +2105,7 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
         if not os.path.isdir(out_path + f'/{band}/fullmodel') : 
             os.makedirs(out_path + f'/{band}/fullmodel')
             
-        sumsum.to_csv(out_path + f'/{band}/fullmodel/{method_pca}_{data_aug_method}_{PC_use}_{model_name}full.csv')
+        sumsum.to_csv(out_path + f'/{band}/fullmodel/{method_pca}_{data_aug_method}_{PC_use}_{model_name}full{l_crop}.csv')
 
     else : 
         return sumsum

@@ -3,8 +3,10 @@ import os
 from utils import OUT_PATH, FREQ_BAND
 from utils import PermLR_distrib, PermLR_null, LR, TemporalLR, TemporalGeneralization, ExcludSubj, TemporalLRRaw, TemporalGeneralizationRaw, CompareClassifier
 from utils import decodingTS
+import json
 import warnings
 import argparse
+import numpy as np
 
 def main_old(band, pc_use):
     iteration =100
@@ -106,10 +108,24 @@ def main_old(band, pc_use):
             #                          undersampling=False)
             
 
-def mainTS(band, pc_use, model, method_pca, data_aug_method):
+def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
     tfr_path = OUT_PATH + '/Data_shortWOBS'
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
     subj_included = ExcludSubj(subj_included, data_path=tfr_path)
+
+    # get time 
+    if bs_decoding :
+        path = tfr_path + f'/{subj_included[0]}_info.json'
+        with open(path) as json_data:
+            d = json.load(json_data)
+            if band == 'broadband':
+                time = d['time_epoch']
+            else : 
+                time = d['time_tfr']
+
+        crop_arg = {'crop' : True, 't_id_min':0, 't_id_max' : time.index(np.array(time)[np.array(time) > 0][0])}
+    else : 
+        crop_arg = {'crop' : False, 't_id_min':None, 't_id_max' : None}
 
     iteration = 100
     iter_perm = 50
@@ -124,7 +140,8 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method):
             out_path=f'{OUT_PATH}/Decoding', 
             iter_perm=iter_perm, 
             data_path=tfr_path, 
-            model_name = model)
+            model_name = model, 
+            crop_arg=crop_arg)
     
 def mainCompareClf(band, pc_use):
     data_path = OUT_PATH + '/Data_shortWOBS'
@@ -145,7 +162,6 @@ def mainCompareClf(band, pc_use):
                                 save=True, 
                                 data_path=data_path)
     
-
 def mainTG(band, method_pca, data_aug_method):
     tfr_path = OUT_PATH + '/Data_shortWOBS'
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
@@ -165,7 +181,7 @@ if __name__ == "__main__":
     parser.add_argument("--band", type=str, choices=FREQ_BAND + ['broadband'], required=True,
                         help="Frequency band to process.")
     
-    parser.add_argument("--pc_use", type=int, choices=[0, 1, 2, 3, 4], required=False,
+    parser.add_argument("--pc_use", type=int, choices=[0, 1, 2, 3, 4, 5], required=False,
                         help="PC to use to process.")
     
     parser.add_argument("--model", type=str, choices=["LR", "SVC_linear", "SVC_rbf", "RandomForest"], required=False,
@@ -178,7 +194,7 @@ if __name__ == "__main__":
                         help="Method for data augmentation.")
     
     args = parser.parse_args()
-    mainTS(args.band, args.pc_use, args.model, args.method_pca, args.method_data_aug)
+    mainTS(args.band, args.pc_use, args.model, args.method_pca, args.method_data_aug, bs_decoding=False)
     #mainCompareClf(args.band, args.pc_use)
 
     #mainTG(args.band, args.method_pca, args.method_data_aug)
