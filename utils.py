@@ -72,13 +72,16 @@ FREQ_BAND_DICT = {
 FREQ_BAND = ['delta', 'theta','alpha', 'low_beta', 'high_beta', 'low_gamma', 'high_gamma']
 
 REGION = {'parietal': ['IPS','IP','SP','SPL','AG','SMG','TPJ'],
-        'premotor': ['SFG','SFS','MFG','FEF','SMA'],
-        'DLPFC': ['MFG','FEF','SFS','IFS'],
+        #'premotor': ['SFG','SFS','MFG','FEF','SMA'],
+        #'DLPFC': ['MFG','FEF','SFS','IFS'],
+        'premotor' : ['SFG','FEF','SMA'],
+        'DLPFC': ['MFG','SFS','IFS'],
         'M1': ['preCG','M1','PreCG'],
         'S1': ['postCG','PostCG'],
         'INS': ['INS'],
         'VLPFC': ['IFG','FOP','IFS'],
-        'MTL': ['HPC','EC','MEC','PRH','PHG','PHC','LEC'],
+        #'MTL': ['EC','HPC','MEC','PRH','PHG','PHC','LEC'],
+        'MTL': ['EC','MEC','PRH','LEC'],
         'A1': ['A1'],
         'MTG': ['MTG'],
         'AMY': ['AMY'],
@@ -93,6 +96,47 @@ REGION = {'parietal': ['IPS','IP','SP','SPL','AG','SMG','TPJ'],
         'VS': ['LG','FUG','ITG','ITS'], #ventral stream
         'THAL': ['THAL']}
 
+COL_REG = {
+    # --- Memory system (distinct blues)
+    'HPC':  '#0b2e8a',   # deep navy
+    'PHC':  '#2457c5',   # strong blue
+    'MTL':  '#6fa3ff',   # light blue
+    'PCC':  '#3b4f9f',   # blue–indigo
+
+    # --- Limbic / affective / reward (distinct purples)
+    'AMY':  '#5b1a8e',   # deep violet
+    'VS':   '#8e44ad',   # saturated purple
+    'OFC':  '#c39bd3',   # light lavender
+
+    # --- Prefrontal / executive control (clearly separated reds/oranges)
+    'DLPFC':"#7c1f16",   # dark red
+    'ACC':  "#aa3124",   # red
+    'VLPFC':"#b46433",   # orange
+
+    # --- Sensory–motor (clearly separated greens)
+    'M1':       '#145a32',   # dark green
+    'premotor': '#229954',   # medium green
+    'S1':       '#7dcea0',   # light green
+
+    # --- Auditory / temporal association (strongly separated pink–reds)
+    'A1':  "#e00101",   # dark rose
+    'STG': "#ae1a3d",   # crimson pink
+    'STS': '#e04b78',   # saturated pink
+    'MTG': "#fc92b2",   # light pink
+    'TP':  "#fbb1b1",   # very pale rose
+
+    # --- Insula (salience bridge: blue–cyan, isolated)
+    'INS': '#f1c40f',
+
+    # --- Parietal association (yellow–green, isolated)
+    'parietal': '#a3cb38',
+
+    # --- Thalamic relay (olive–brown, isolated)
+    'THAL': '#7f6d1f',
+
+    # --- Non-brain / baseline
+    'N': '#b3b3b3'
+}
 TASK = 'MusicMemory'
 
 ################################### FUNCTIONS PREPROC ################################### ok
@@ -394,7 +438,7 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
     if compute_TFR :
         n_cycles = np.array(freqs) * 2 / np.array(bwidth)
         TFR = MM_compute_TFR(epochs,np.array(freqs), n_cycles, baseline = (-1.5,4), zscore=True, trial_baseline = False, picks='all',n_jobs=1, summary = False)
-        TFR = TFR.crop(-1.5,4)
+        TFR = TFR.crop(-1,4)
 
         smooth_kwargs = {'tstep': 0.025, 'twin': .1}
         TFR = smooth(TFR, **smooth_kwargs)
@@ -414,7 +458,7 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
         del TFRtrials
         del TFR
 
-    epochs = epochs.crop(-1.5,4)
+    epochs = epochs.crop(-1,4)
     epochs = epochs.resample(new_sfreq)
 
     if save_epoch : 
@@ -518,6 +562,7 @@ def GetInfo(subj_included, project_path = PROJECT_PATH, data_path = OUT_PATH + '
         elect_list.extend(df['channels'])
         subj_list.extend([subj]*len(df['channels']))
     region = [FindRegion(a[0]) for a in areas]
+
     if save : 
         d = pd.DataFrame(coord, columns = ['x', 'y', 'z'])
         d.loc[:, ['area1', 'area2']] = areas
@@ -533,7 +578,7 @@ def FindRegion(x) :
     for key, val in REGION.items() : 
         if x in val : 
             return key
-    return None
+    return 'N'
 
 def ExcludSubj(subj_included, data_path = OUT_PATH + '/Data') : 
     '''
