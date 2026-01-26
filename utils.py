@@ -608,7 +608,7 @@ def ExcludSubj(subj_included, data_path = OUT_PATH + '/Data') :
 
     return subj_return
 
-def get_data_grp(subj_included, type_data='epoch', polarity_cor = (True, 0.7), return_subj=False, data_path=OUT_PATH + '/Data') : 
+def get_data_grp(subj_included, type_data='epoch', polarity_cor = (False, 0), return_subj=False, data_path=OUT_PATH + '/Data') : 
     data = []
     subj_list = []
     for subj in subj_included: 
@@ -759,11 +759,6 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, nb_compo = 3,subj_
         id_ev2 = list(id_ev2)
         id_ev2.remove(id_test[1])
         id_ev2 = np.array(id_ev2)
-
-        if shuffle_index : # TO ADJUST TODO
-            ev_shuffl= shuffle(np.concat([id_ev1, id_ev2]))
-            id_ev1_s = ev_shuffl[:id_ev1.shape[0]]
-            id_ev2_s = ev_shuffl[id_ev1.shape[0]:]
 
         # Compute TFRm 
         if freq == 'broadband' :

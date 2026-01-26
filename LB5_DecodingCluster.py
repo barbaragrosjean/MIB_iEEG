@@ -12,7 +12,7 @@ def main_old(band, pc_use):
     iteration =100
     iter_perm = 5
     perm =False
-    data_path = OUT_PATH + '/Data_shortWOBS'
+    data_path = OUT_PATH + '/Data_LongWOBS'
 
     warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -109,7 +109,7 @@ def main_old(band, pc_use):
             
 
 def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
-    tfr_path = OUT_PATH + '/Data_shortWOBS'
+    tfr_path = OUT_PATH + '/Data_longWOBS'
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
     subj_included = ExcludSubj(subj_included, data_path=tfr_path)
 
@@ -123,7 +123,7 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
             else : 
                 time = d['time_tfr']
 
-        crop_arg = {'crop' : True, 't_id_min':0, 't_id_max' : time.index(np.array(time)[np.array(time) > 0][0])}
+        crop_arg = {'crop' : True, 't_id_min':time.index(np.array(time)[np.array(time) > -0.5][0]), 't_id_max' : len(time)}
     else : 
         crop_arg = {'crop' : False, 't_id_min':None, 't_id_max' : None}
 
