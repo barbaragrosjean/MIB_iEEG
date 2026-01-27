@@ -35,17 +35,18 @@ event_idx = {0: 'Old', 1:'New'}
 color_event = {0: 'b', 1:'r'}
 interesting_ev = [0, 1]
 
-method_pca = 'concat'
+method_pca = 'mean'
 data_aug_method = 'mean'
 nb_compo=5
-fig, axs= plt.subplots(nb_compo,len(FREQ_BAND)+1, figsize=(18, 6))
+fig, axs= plt.subplots(nb_compo,len(FREQ_BAND)+1, figsize=(20, 14))
 fig.suptitle('Stability accross trials')
+
 for j in range(nb_compo) : 
     axs[j][0].set_ylabel('PC' + str(j+1))
 
 # share y
-ymin, ymax = -11, -8
-for ax in axs[:, -1:].flatten():   # not the last columns all the row
+ymin, ymax = -8, 10
+for ax in axs[:, :-1].flatten():   # not the last columns all the row
     ax.set_ylim(ymin, ymax)
 
 dict_corr = {'New': [], 'Old': []}
@@ -68,8 +69,21 @@ for ib, band in enumerate(FREQ_BAND) :
         id_new = np.where(y ==2)[0]
         # add copo time serie
         c = 'compo' + str(PC_use + 1)
-        time_serie = df_X_transformed.query('freq == @band and compo == @c').drop(columns = [ 'freq' , 'compo', 'subj', 'expl_var']).values
+
+        df_time_serie = df_X_transformed.query('freq == @band and compo == @c')
         
+        for col in ['Unnamed: 0', 'subj', 'compo', 'freq', 'error', 'expl_var'] : 
+            if col in df_time_serie.columns :
+                df_time_serie = df_time_serie.drop(columns = col)
+        time_serie = df_time_serie.values
+        
+        if band == 'alpha' and PC_use == 1: 
+            time_serie=-time_serie
+            X=-X
+        if band == 'low_gamma' and PC_use == 2 : 
+            time_serie=-time_serie
+            X=-X
+
         for i_ev,index_  in enumerate([id_old, id_new]) : 
             ax.plot(time_tfr, X[index_, :].mean(0), label = event_idx[i_ev], c = color_event[i_ev], ls='--', alpha = 0.6)
             ax.fill_between(time_tfr, X[index_, :].mean(0) - X[index_, :].std(0), X[index_, :].mean(0) + X[index_, :].std(0), alpha  = 0.2, color = color_event[i_ev]) 
@@ -93,14 +107,14 @@ for ib, band in enumerate(FREQ_BAND) :
 for PC_use in range(nb_compo)  :
     ax = axs[PC_use][-1]
     X_train, y_train, X_test, y_test, _, _ = DataTransformationM1(freq= 'broadband', 
-                                                                                      method_pca=method_pca, 
-                                                                                      data_aug_method=data_aug_method, 
-                                                                                      subj_included=subj_included, 
-                                                                                      PC_use=PC_use, 
-                                                                                      data_path=tfr_path,
-                                                                                      nb_compo=PC_use +1, 
-                                                                                      pol_cor=(False, 0), 
-                                                                                      method ='pca')        
+                                                                    method_pca=method_pca, 
+                                                                    data_aug_method=data_aug_method, 
+                                                                    subj_included=subj_included, 
+                                                                    PC_use=PC_use, 
+                                                                    data_path=tfr_path,
+                                                                    nb_compo=PC_use +1, 
+                                                                    pol_cor=False,
+                                                                    method ='pca')        
     X = np.concat([X_train, X_test])
     y = np.concat([y_train, y_test])
     id_old = np.where(y ==1)[0]
@@ -129,9 +143,10 @@ for PC_use in range(nb_compo)  :
         ax.ticklabel_format(axis='y', style='sci', scilimits=(0, 0))
     
     ax.grid()  
+
 axs[-1][-1].set_xlabel('Time (s)')
 axs[0][-1].set_title('Broadband')  
 axs[0][-1].legend(bbox_to_anchor = (1, 1))   
 
-plt.savefig(OUT_PATH + '/final/figG.png')
-pd.DataFrame(dict_corr).to_csv(OUT_PATH + '/final/corrTrials.csv')
+plt.savefig(OUT_PATH + '/final/figG_flipped_mean.png')
+pd.DataFrame(dict_corr).to_csv(OUT_PATH + '/final/corrTrials_mean.csv')

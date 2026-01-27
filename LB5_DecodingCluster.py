@@ -123,7 +123,9 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
             else : 
                 time = d['time_tfr']
 
-        crop_arg = {'crop' : True, 't_id_min':time.index(np.array(time)[np.array(time) > -0.5][0]), 't_id_max' : len(time)}
+        #crop_arg = {'crop' : True, 't_id_min':time.index(np.array(time)[np.array(time) > -0.5][0]), 't_id_max' : len(time)}
+        crop_arg = {'crop' : True, 't_id_min':0, 't_id_max' : time.index(np.array(time)[np.array(time) > -0.5][0])}
+
     else : 
         crop_arg = {'crop' : False, 't_id_min':None, 't_id_max' : None}
 
@@ -144,7 +146,7 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
             crop_arg=crop_arg)
     
 def mainCompareClf(band, pc_use):
-    data_path = OUT_PATH + '/Data_shortWOBS'
+    data_path = OUT_PATH + '/Data_longWOBS'
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(data_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
     subj_included = ExcludSubj(subj_included, data_path=data_path)
     iteration = 100
@@ -194,7 +196,7 @@ if __name__ == "__main__":
                         help="Method for data augmentation.")
     
     args = parser.parse_args()
-    mainTS(args.band, args.pc_use, args.model, args.method_pca, args.method_data_aug, bs_decoding=False)
-    #mainCompareClf(args.band, args.pc_use)
+    #mainTS(args.band, args.pc_use, args.model, args.method_pca, args.method_data_aug, bs_decoding=True)
+    mainCompareClf(args.band, args.pc_use)
 
     #mainTG(args.band, args.method_pca, args.method_data_aug)
