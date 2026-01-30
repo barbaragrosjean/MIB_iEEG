@@ -1224,7 +1224,7 @@ def WeightSpearman(data1, data2, labels=[], figsize=(8, 6), ticks=False) :
 
 
     fig, ax = plt.subplots(figsize =figsize)
-    sns.heatmap(abs(R), vmin=0, vmax=1, cmap='Blues', ax=ax, annot=True , fmt='.3f')
+    sns.heatmap(abs(R), vmin=0, vmax=1, cmap='Greys', ax=ax, annot=True , fmt='.3f')
     if not ticks :
         x_ticks = ['PC' + str(i+1) for i in range(data2.shape[0])]
         y_ticks = ['PC' + str(i+1) for i in range(data1.shape[0])]
