@@ -2187,9 +2187,11 @@ def cleandfdecodingTS(df_final, shape_time) :
         weight_sh = np.fromstring(numbers_only, sep=' ').reshape(int(df_final.loc[0, 'iter']), int(df_final.loc[0, 'iter_perm']), shape_time) # TO check
         return_dict['weight_sh_mean'] = weight_sh.reshape(-1, shape_time).mean(0)
         return_dict['weight_sh_std'] = weight_sh.reshape(-1, shape_time).std(0)
+        return_dict['weight_sh'] = weight_sh.reshape(-1, shape_time)
     except : 
          return_dict['weight_sh'] = None
-   
+    
+    return_dict['weight'] = weight
     return_dict['weight_mean'] = weight.mean(0)
     return_dict['weight_std'] = weight.std(0)
     return_dict['y_pred'] = y_pred
