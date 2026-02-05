@@ -139,7 +139,7 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
             iteration=iteration, 
             PC_use=pc_use, 
             save=True, 
-            out_path=f'{OUT_PATH}/Decoding', 
+            out_path=f'{OUT_PATH}/Decoding_shuffled_trials', 
             iter_perm=iter_perm, 
             data_path=tfr_path, 
             model_name = model, 
@@ -196,7 +196,7 @@ if __name__ == "__main__":
                         help="Method for data augmentation.")
     
     args = parser.parse_args()
-    mainTS(args.band, args.pc_use, args.model, args.method_pca, args.method_data_aug, bs_decoding=False)
+    mainTS(args.band, args.pc_use, args.model, args.method_pca, args.method_data_aug, bs_decoding=True)
     #mainCompareClf(args.band, args.pc_use)
 
     #mainTG(args.band, args.method_pca, args.method_data_aug)

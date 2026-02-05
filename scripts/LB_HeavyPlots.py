@@ -85,13 +85,13 @@ for ib, band in enumerate(FREQ_BAND) :
             X=-X
 
         for i_ev,index_  in enumerate([id_old, id_new]) : 
-            ax.plot(time_tfr, X[index_, :].mean(0), label = event_idx[i_ev], c = color_event[i_ev], ls='--', alpha = 0.6)
+            ax.plot(time_tfr, X[index_, :].mean(0), label = event_idx[i_ev], c = color_event[i_ev], ls='--', alpha = 0.6,  linewidth = 0.5)
             ax.fill_between(time_tfr, X[index_, :].mean(0) - X[index_, :].std(0), X[index_, :].mean(0) + X[index_, :].std(0), alpha  = 0.2, color = color_event[i_ev]) 
             
             if i_ev == 0 :
-                ax.plot(time_tfr, time_serie[0, :int(time_serie.shape[1]/2)], label = 'Mean Grp level', c = color_event[i_ev], alpha = 1, ls='-')
+                ax.plot(time_tfr, time_serie[0, :int(time_serie.shape[1]/2)], label = 'Mean Grp level', c = color_event[i_ev], alpha = 1, ls='-', linewidth = 0.5)
             elif i_ev == 1 : 
-                ax.plot(time_tfr, time_serie[0, int(time_serie.shape[1]/2):], label = 'Mean Grp level', c = color_event[i_ev], alpha = 1, ls='-')
+                ax.plot(time_tfr, time_serie[0, int(time_serie.shape[1]/2):], label = 'Mean Grp level', c = color_event[i_ev], alpha = 1, ls='-', linewidth = 0.5)
             
             # compute the corr coef
             corr =np.mean(spearmanr(X[index_, :].T).statistic)
@@ -128,13 +128,13 @@ for PC_use in range(nb_compo)  :
     time_serie = df_time_serie.values
 
     for i_ev,index_  in enumerate([id_old, id_new]) : 
-        ax.plot(time_epoch, X[index_, :].mean(0), label = f'Trial level: {event_idx[i_ev]}' , c = color_event[i_ev], ls='--', alpha = 0.6, linewidth=1)
+        ax.plot(time_epoch, X[index_, :].mean(0), label = f'Trial level: {event_idx[i_ev]}' , c = color_event[i_ev], ls='--', alpha = 0.6, linewidth=0.5)
         ax.fill_between(time_epoch, X[index_, :].mean(0) - X[index_, :].std(0), X[index_, :].mean(0) + X[index_, :].std(0), alpha  = 0.2, color = color_event[i_ev]) 
 
         if i_ev == 0 :
-            ax.plot(time_epoch, time_serie[PC_use, :int(time_serie.shape[1]/2)], label = f'Mean level: {event_idx[i_ev]}', c = color_event[i_ev], alpha = 1, ls='-')
+            ax.plot(time_epoch, time_serie[PC_use, :int(time_serie.shape[1]/2)], label = f'Mean level: {event_idx[i_ev]}', c = color_event[i_ev], alpha = 1, ls='-',linewidth=0.5 )
         elif i_ev == 1 : 
-            ax.plot(time_epoch, time_serie[PC_use,  int(time_serie.shape[1]/2):], label = f'Mean level: {event_idx[i_ev]}', c = color_event[i_ev], alpha = 1, ls='-')
+            ax.plot(time_epoch, time_serie[PC_use,  int(time_serie.shape[1]/2):], label = f'Mean level: {event_idx[i_ev]}', c = color_event[i_ev], alpha = 1, ls='-', linewidth=0.5)
         
         corr =np.mean(spearmanr(X[index_, :].T).statistic)
         dict_corr[event_idx[i_ev]].append(corr)
@@ -148,5 +148,5 @@ axs[-1][-1].set_xlabel('Time (s)')
 axs[0][-1].set_title('Broadband')  
 axs[0][-1].legend(bbox_to_anchor = (1, 1))   
 
-plt.savefig(OUT_PATH + '/final/figG_flipped_mean.png')
-pd.DataFrame(dict_corr).to_csv(OUT_PATH + '/final/corrTrials_mean.csv')
+plt.savefig(OUT_PATH + '/final/figG_flipped_concat.png')
+pd.DataFrame(dict_corr).to_csv(OUT_PATH + '/final/corrTrials_concat.csv')

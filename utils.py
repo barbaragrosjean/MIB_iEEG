@@ -1885,6 +1885,7 @@ def CompareModelsGGPlot(score, band, pc_use, decoding_folder=OUT_PATH + '/Decodi
 
 ################################### 'STATS' ###################################
 
+
 def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=50, data_path=OUT_PATH + '/Data', model_name = 'LR', crop_arg={'crop' :False, 't_id_min':0, 't_id_max':0 }) :
     truth = []
 
@@ -1950,8 +1951,6 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
                     TFRtr = pickle.load(f)  
 
                 TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
-                Train_sample.append(TFRtr_augmented)
-                truth.append(true_trials)
                 Test_sample.append(TFRtr[id_test,:, :])
 
             else :
@@ -1961,18 +1960,31 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
 
                 # Augment the data
                 TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, freq_id, :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
-                Train_sample.append(TFRtr_augmented)
-
-                truth.append(true_trials)
                 Test_sample.append(TFRtr[id_test,:, freq_id, :])
+            
+            a = np.concat([TFRtr_augmented[None, :23, :, :], TFRtr_augmented[None, 23:, :, :]], axis = 0)
+            perm_trials = np.random.permutation(a.shape[1])
+            a[0, :, :, :] = a[0, perm_trials, :, :]
+            perm_trials = np.random.permutation(a.shape[1])
+            a[1, :, :, :] = a[1, perm_trials, :, :]
+            TFRtr_augmented = np.concat([a[0, :, :, :], a[1, :, :, :]], axis = 0)
 
+            Train_sample.append(TFRtr_augmented)
+            truth.append(true_trials)
+            
         concat_all = np.concatenate(TFRm_list, axis = 0) 
         Train_all = np.concatenate(Train_sample, axis=1)
 
+        # create test sample and labels 
         y_train = [0]*23 + [1]*23
         Test_all = np.concatenate(Test_sample, axis =2)
         y_test = [0,1]
         Y_TEST.extend(y_test)
+
+        # shuffle trials 
+        perm_trials = np.random.permutation(Train_all.shape[0])
+        Train_all = Train_all[perm_trials, :, :]
+        y_train = [y_train[i] for i in perm_trials]
         
         del TFRtr
         del TFRm_list
@@ -1983,6 +1995,12 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
         df_Componants, _ , means = ConcatPCA({'grp' : concat_all}, ch_id = False, nb_compo=PC_use+1, freq_band=[band], return_mean=True)
         weights = df_Componants['grp'].query("freq == @band").drop(columns = ['freq', 'compo']).values
         PCA_weights.append(weights[PC_use, :])
+
+        # Shuffle electrods
+        permutation_ch = np.random.permutation(concat_all.shape[0])
+        Train_all = Train_all[:, permutation_ch, :] 
+        weights = weights[:, permutation_ch]
+        Test_all = Test_all[:, :, permutation_ch, :]
 
         mean_pca = means[band]
         m_train= mean_pca[None, :, None]
@@ -2149,7 +2167,8 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
 
     else : 
         return sumsum
-
+    
+    
 def select_model(model_name) : 
     classifiers = {
         'LR': LogisticRegression(max_iter=1000),
