@@ -35,7 +35,7 @@ event_idx = {0: 'Old', 1:'New'}
 color_event = {0: 'b', 1:'r'}
 interesting_ev = [0, 1]
 
-method_pca = 'mean'
+method_pca = 'concat'
 data_aug_method = 'mean'
 nb_compo=5
 fig, axs= plt.subplots(nb_compo,len(FREQ_BAND)+1, figsize=(20, 14))
