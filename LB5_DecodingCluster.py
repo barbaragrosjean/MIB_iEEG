@@ -124,7 +124,7 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
                 time = d['time_tfr']
 
         #crop_arg = {'crop' : True, 't_id_min':time.index(np.array(time)[np.array(time) > -0.5][0]), 't_id_max' : len(time)}
-        crop_arg = {'crop' : True, 't_id_min':0, 't_id_max' : time.index(np.array(time)[np.array(time) > -0.5][0])}
+        crop_arg = {'crop' : True, 't_id_min':time.index(np.array(time)[np.array(time) > -0.5][0]), 't_id_max' : len(time)}
 
     else : 
         crop_arg = {'crop' : False, 't_id_min':None, 't_id_max' : None}
