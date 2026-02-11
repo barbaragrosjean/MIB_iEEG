@@ -196,7 +196,11 @@ if __name__ == "__main__":
                         help="Method for data augmentation.")
     
     args = parser.parse_args()
-    mainTS(args.band, args.pc_use, args.model, args.method_pca, args.method_data_aug, bs_decoding=True)
+    for model in ['LR', 'SVC_linear', 'RandomForest', 'SVC_rbf'] :
+            mainTS(args.band, args.pc_use, model, args.method_pca, args.method_data_aug, bs_decoding=False)
+
+    
+    #mainTS(args.band, args.pc_use, args.model, args.method_pca, args.method_data_aug, bs_decoding=False)
     #mainCompareClf(args.band, args.pc_use)
 
     #mainTG(args.band, args.method_pca, args.method_data_aug)
