@@ -763,9 +763,7 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, nb_compo = 3,subj_
         # Compute TFRm 
         if freq == 'broadband' :
             TFRm = BbEvents(subj, test_id = id_test, events_index=events_index, data_path=data_path)
-            if pol_cor : 
-                TFRm = PolarityCor(TFRm, subj_included=subj_included, data_path =data_path, method_pca=method_pca)
-            
+             
         else : 
             freq_id = freq_band.index(freq)
             TFRm = TFRmEvents(subj, test_id = id_test, freq_id = freq_id, events_index=events_index, data_path=data_path)
@@ -776,18 +774,12 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, nb_compo = 3,subj_
         if method_pca == 'mean' : 
             TFRm_list.append(np.mean(TFRm[[0, 1], :,:], axis = 0))
 
-        # Get the data
         if freq == 'broadband' :
             file = data_path + f'/{subj}_epochs.p'
             with open(file, "rb") as f:
                 TFRtr = pickle.load(f)  
 
-            if pol_cor : 
-                TFRtr = PolarityCor(TFRtr, subj_included=subj_included, data_path =data_path, method_pca=method_pca)
-
-            TFRtr_augmented, true_trials = DataAugmentation(TFRtr, [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
-            Train_sample.append(TFRtr_augmented)
-            truth.append(true_trials)
+            TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
             Test_sample.append(TFRtr[id_test,:, :])
 
         else :
@@ -796,11 +788,21 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, nb_compo = 3,subj_
                 TFRtr = pickle.load(f)  
 
             # Augment the data
-            TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, freq_id, :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
-            Train_sample.append(TFRtr_augmented)
+            TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, FREQ_BAND.index(freq), :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
+            Test_sample.append(TFRtr[id_test,:, FREQ_BAND.index(freq), :])
+        
+        a = np.concat([TFRtr_augmented[None, :23, :, :], TFRtr_augmented[None, 23:, :, :]], axis = 0)
+        perm_trials = np.random.permutation(a.shape[1])
+        a[0, :, :, :] = a[0, perm_trials, :, :]
+        perm_trials = np.random.permutation(a.shape[1])
+        a[1, :, :, :] = a[1, perm_trials, :, :]
+        TFRtr_augmented = np.concat([a[0, :, :, :], a[1, :, :, :]], axis = 0)
 
-            truth.append(true_trials)
-            Test_sample.append(TFRtr[id_test,:, freq_id, :])
+        Train_sample.append(TFRtr_augmented)
+        truth.append(true_trials)
+
+    Train_all = np.concatenate(Train_sample, axis=1)
+    Test_all = np.concatenate(Test_sample, axis =2)
 
 
     concat_all = np.concatenate(TFRm_list, axis = 0)
@@ -858,30 +860,32 @@ def DataTransformationM1Raw(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, subj
         id_ev2.remove(id_test[1])
         id_ev2 = np.array(id_ev2)
 
-        # Get the data
         if freq == 'broadband' :
             file = data_path + f'/{subj}_epochs.p'
             with open(file, "rb") as f:
                 TFRtr = pickle.load(f)  
-            if pol_cor : 
-                TFRtr = PolarityCor(TFRtr, subj_included=subj_included, data_path =data_path, method_pca=method_pca)
+
             TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
-            Train_sample.append(TFRtr_augmented)
-            truth.append(true_trials)
             Test_sample.append(TFRtr[id_test,:, :])
 
         else :
-            freq_id = freq_band.index(freq)
             file = data_path + f'/{subj}_TFRtrials.p'
             with open(file, "rb") as f:
                 TFRtr = pickle.load(f)  
 
             # Augment the data
-            TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, freq_id, :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
-            Train_sample.append(TFRtr_augmented)
+            TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, FREQ_BAND.index(freq), :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
+            Test_sample.append(TFRtr[id_test,:, FREQ_BAND.index(freq), :])
+        
+        a = np.concat([TFRtr_augmented[None, :23, :, :], TFRtr_augmented[None, 23:, :, :]], axis = 0)
+        perm_trials = np.random.permutation(a.shape[1])
+        a[0, :, :, :] = a[0, perm_trials, :, :]
+        perm_trials = np.random.permutation(a.shape[1])
+        a[1, :, :, :] = a[1, perm_trials, :, :]
+        TFRtr_augmented = np.concat([a[0, :, :, :], a[1, :, :, :]], axis = 0)
 
-            truth.append(true_trials)
-            Test_sample.append(TFRtr[id_test,:, freq_id, :])
+        Train_sample.append(TFRtr_augmented)
+        truth.append(true_trials)
 
     Train_all = np.concatenate(Train_sample, axis=1)
     Test_all = np.concatenate(Test_sample, axis =2)
@@ -1550,12 +1554,17 @@ def TemporalLR(band, method_pca, data_aug_method,subj_included, iteration=100, P
         plt.plot()
         return sumsum
 
-def TemporalLRRaw(band, data_aug_method,subj_included, iteration=100, PC_use=False, method_pca=False, save=False, data_path = OUT_PATH + '/Data', pol_cor=False):
+def TemporalLRRaw(band, data_aug_method,subj_included=[], iteration=100, PC_use=False, method_pca=False, save=False, data_path = OUT_PATH + '/Data', pol_cor=False, out_path = OUT_PATH + '/Decoding'):
     Y_PRED = []
     Y_TEST = []
+    LOSS = []
     MODELS_weights = []
     best_params = {}
     param_grid = {'C': [0.01, 0.1, 1, 10], 'penalty': ['l2'], 'solver': ['lbfgs', 'liblinear']}
+
+    if subj_included ==[] : 
+        subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(data_path) if file[-len('TFRtrials.p'):] == 'TFRtrials.p']
+        subj_included = ExcludSubj(subj_included, data_path=data_path)
 
     for i in range(iteration) :     
         if PC_use == False : 
@@ -1568,6 +1577,7 @@ def TemporalLRRaw(band, data_aug_method,subj_included, iteration=100, PC_use=Fal
         weights = []
         y_pred= []
         y_test_all = []
+        loss = []
         for t_point in range(X_train.shape[-1]) :
             if i == 0 : 
                 cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=0)
@@ -1656,6 +1666,7 @@ def TemporalLRRaw(band, data_aug_method,subj_included, iteration=100, PC_use=Fal
     axs[-1].set_title(f"Accuracy per Time Point {l} - mean : {np.round(np.mean(accuracies), 2)}", size = 10)
     axs[-1].legend()
     axs[-1].set_xlabel("Time")
+    axs[-1].grid()
 
     #2. summary
     sumsum = pd.DataFrame()
@@ -1663,10 +1674,13 @@ def TemporalLRRaw(band, data_aug_method,subj_included, iteration=100, PC_use=Fal
     sumsum.loc['band', 0] = band
     sumsum.loc['method_data_augm', 0] = data_aug_method
     sumsum.loc['nb_iter', 0] = iteration
-    sumsum.loc['accuracy', 0] = np.round(np.mean(accuracies), 2)
+    sumsum.loc['gg_accuracy', 0] = np.round(np.mean(accuracies), 2)
+    sumsum.loc['acc_mean', 0] = [accuracies]
+    sumsum.loc['acc_std', 0] = [std]
+    sumsum.loc['weights', 0] = [weights_clf]
     # save
     if save :
-        out_dir = f'{OUT_PATH}/Decoding/{band}'
+        out_dir = out_path + f'/{band}'
         if not os.path.exists(out_dir) : 
             os.makedirs(out_dir)
         sumsum.to_csv(out_dir + f'/{band}_{l}_{data_aug_method}_TpointSummary.csv')
@@ -1884,9 +1898,7 @@ def CompareModelsGGPlot(score, band, pc_use, decoding_folder=OUT_PATH + '/Decodi
     plt.show()
 
 ################################### 'STATS' ###################################
-
-
-def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=50, data_path=OUT_PATH + '/Data', model_name = 'LR', crop_arg={'crop' :False, 't_id_min':0, 't_id_max':0 }) :
+def decodingTS(band, method_pca, data_aug_method,subj_included=[], iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=50, data_path=OUT_PATH + '/Data', model_name = 'LR', crop_arg={'crop' :False, 't_id_min':0, 't_id_max':0 }) :
     truth = []
 
     # TO STORE
@@ -2167,7 +2179,6 @@ def decodingTS(band, method_pca, data_aug_method,subj_included, iteration=100, P
 
     else : 
         return sumsum
-    
     
 def select_model(model_name) : 
     classifiers = {

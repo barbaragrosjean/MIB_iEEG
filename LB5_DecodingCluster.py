@@ -91,13 +91,13 @@ def main_old(band, pc_use):
             # Combine 2 componants
             #####################
 
-            #TemporalLRRaw(band=band, 
-            #              data_aug_method=data_aug_method,
-            #              subj_included=subj_included, 
-            #              iteration=iteration, 
-            #              PC_use=[0, 1], 
-            #              method_pca=method_pca, 
-            #              save=True)
+            TemporalLRRaw(band=band, 
+                          data_aug_method=data_aug_method,
+                          subj_included=subj_included, 
+                          iteration=iteration, 
+                          PC_use=False, 
+                          method_pca=method_pca, 
+                          save=True)
 
             #TemporalGeneralizationRaw(band=band, 
             #                          data_aug_method=data_aug_method, 
@@ -124,7 +124,7 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
                 time = d['time_tfr']
 
         #crop_arg = {'crop' : True, 't_id_min':time.index(np.array(time)[np.array(time) > -0.5][0]), 't_id_max' : len(time)}
-        crop_arg = {'crop' : True, 't_id_min':time.index(np.array(time)[np.array(time) > -0.5][0]), 't_id_max' : len(time)}
+        crop_arg = {'crop' : True, 't_id_min':time.index(np.array(time)[np.array(time) > -0.5][0]), 't_id_max' :len(time) }
 
     else : 
         crop_arg = {'crop' : False, 't_id_min':None, 't_id_max' : None}
@@ -196,9 +196,11 @@ if __name__ == "__main__":
                         help="Method for data augmentation.")
     
     args = parser.parse_args()
-    for model in ['LR', 'SVC_linear', 'RandomForest', 'SVC_rbf'] :
-            mainTS(args.band, args.pc_use, model, args.method_pca, args.method_data_aug, bs_decoding=False)
+    #for model in ['RandomForest', 'SVC_rbf', 'LR', 'SVC_linear'] : 
+    #    mainTS(args.band, args.pc_use, model, args.method_pca, args.method_data_aug, bs_decoding=True)
 
+
+    TemporalLRRaw(band=args.band, data_aug_method=args.method_data_aug, data_path = OUT_PATH + '/Data_longWOBS',iteration=100, PC_use=False, method_pca=False, save=True, out_path=f'{OUT_PATH}/Decoding_shuffled_trials')
     
     #mainTS(args.band, args.pc_use, args.model, args.method_pca, args.method_data_aug, bs_decoding=False)
     #mainCompareClf(args.band, args.pc_use)
