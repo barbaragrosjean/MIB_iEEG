@@ -1557,7 +1557,6 @@ def TemporalLR(band, method_pca, data_aug_method,subj_included, iteration=100, P
 def TemporalLRRaw(band, data_aug_method,subj_included=[], iteration=100, PC_use=False, method_pca=False, save=False, data_path = OUT_PATH + '/Data', pol_cor=False, out_path = OUT_PATH + '/Decoding'):
     Y_PRED = []
     Y_TEST = []
-    LOSS = []
     MODELS_weights = []
     best_params = {}
     param_grid = {'C': [0.01, 0.1, 1, 10], 'penalty': ['l2'], 'solver': ['lbfgs', 'liblinear']}
@@ -1671,18 +1670,20 @@ def TemporalLRRaw(band, data_aug_method,subj_included=[], iteration=100, PC_use=
     #2. summary
     sumsum = pd.DataFrame()
     # info test
-    sumsum.loc['band', 0] = band
-    sumsum.loc['method_data_augm', 0] = data_aug_method
-    sumsum.loc['nb_iter', 0] = iteration
-    sumsum.loc['gg_accuracy', 0] = np.round(np.mean(accuracies), 2)
-    sumsum.loc['acc_mean', 0] = [accuracies]
-    sumsum.loc['acc_std', 0] = [std]
-    sumsum.loc['weights', 0] = [weights_clf]
+    sumsum['band'] = band
+    sumsum['method_data_augm'] = data_aug_method
+    sumsum['nb_iter'] = iteration
+    sumsum['gg_accuracy'] = np.round(np.mean(accuracies), 2)
+    sumsum['acc_mean'] = [accuracies]
+    sumsum['acc_std'] = [std]
+    sumsum['weights_clf'] =[weights_clf]
+    
     # save
     if save :
         out_dir = out_path + f'/{band}'
         if not os.path.exists(out_dir) : 
             os.makedirs(out_dir)
+        pd.DataFrame(weights_clf).to_csv(out_dir + f'/{band}_{l}_{data_aug_method}_weights_CLF.csv')
         sumsum.to_csv(out_dir + f'/{band}_{l}_{data_aug_method}_TpointSummary.csv')
         fig.savefig(out_dir + f'/{band}_{l}_{data_aug_method}_TpointTemporalImportance.png' )
         plt.close()
