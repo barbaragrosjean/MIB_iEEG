@@ -123,8 +123,8 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
             else : 
                 time = d['time_tfr']
 
-        crop_arg = {'crop' : True, 't_id_min':time.index(np.array(time)[np.array(time) > -0.5][0]), 't_id_max' : len(time)}
-        #crop_arg = {'crop' : True, 't_id_min':0, 't_id_max' :time.index(np.array(time)[np.array(time) > -0.5][0]) }
+        #crop_arg = {'crop' : True, 't_id_min':time.index(np.array(time)[np.array(time) > -0.5][0]), 't_id_max' : len(time)}
+        crop_arg = {'crop' : True, 't_id_min':0, 't_id_max' :time.index(np.array(time)[np.array(time) > -0.5][0]) }
 
     else : 
         crop_arg = {'crop' : False, 't_id_min':None, 't_id_max' : None}
@@ -196,11 +196,14 @@ if __name__ == "__main__":
                         help="Method for data augmentation.")
     
     args = parser.parse_args()
-    for model in ['RandomForest', 'SVC_rbf', 'LR', 'SVC_linear'] : 
-        mainTS(args.band, args.pc_use, model, args.method_pca, args.method_data_aug, bs_decoding=False)
+    #for model in ['RandomForest', 'SVC_rbf', 'LR', 'SVC_linear'] : 
+    #    mainTS(args.band, args.pc_use, model, args.method_pca, args.method_data_aug, bs_decoding=False)
 
 
-    #TemporalLRRaw(band=args.band, data_aug_method=args.method_data_aug, data_path = OUT_PATH + '/Data_longWOBS',iteration=100, PC_use=False, method_pca=False, save=True, out_path=f'{OUT_PATH}/Decoding_shuffled_trials')
+    TemporalLRRaw(band=args.band, data_aug_method=args.method_data_aug, 
+                  data_path = OUT_PATH + '/Data_longWOBS',iteration=100, 
+                  PC_use=[0, 1, 2], method_pca=args.method_pca, 
+                  save=True, out_path=f'{OUT_PATH}/Decoding_shuffled_trials')
     
     #mainTS(args.band, args.pc_use, args.model, args.method_pca, args.method_data_aug, bs_decoding=True)
     #mainCompareClf(args.band, args.pc_use)
