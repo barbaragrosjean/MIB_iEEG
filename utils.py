@@ -1624,7 +1624,7 @@ def TemporalLRRaw(band, data_aug_method,subj_included=[], iteration=100, PC_use=
         X_test_to_plot = X_test.mean(1)
         title_label = 'Mean channels'
         l = 'Raw'
-        fig, axs = plt.subplots(3, 1, figsize = (10, 8),height_ratios=[0.4, 0.4, 0.4], sharex=False)
+        fig, axs = plt.subplots(3, 1, figsize = (10, 8), sharex=False)
         for ev_i, ev in enumerate([id_ev1, id_ev2]) : 
             axs[0].plot(time, X_train_to_plot[ev, :].mean(0), color = color_ev[ev_i], label =event[ev_i] + ' - Mean over Training')
             axs[0].fill_between(time, X_train_to_plot[ev,:].mean(0) - X_train_to_plot[ev, :].std(0), X_train_to_plot[ev, :].mean(0) + X_train_to_plot[ev, :].std(0), color = color_ev[ev_i], alpha = 0.2,  label =event[ev_i] + ' - Std over Training')
@@ -1636,7 +1636,7 @@ def TemporalLRRaw(band, data_aug_method,subj_included=[], iteration=100, PC_use=
         axs[-2].set_ylabel('Channels')
     else : 
        
-        fig, axs = plt.subplots(4, 1, figsize = (10, 8),height_ratios=[0.4, 0.4, 0.4], sharex=False)
+        fig, axs = plt.subplots(4, 1, figsize = (10, 8), sharex=False)
         for pc in PC_use:
             X_train_to_plot = X_train[:, pc, :]
             X_test_to_plot = X_test[:, pc, :]
