@@ -9,7 +9,7 @@ from scipy.stats import pearsonr
 
 plt.style.use('seaborn-v0_8-dark')
 OUT_PATH = 'outs'    
-from preproc import TFRmEvents, BbEvents
+from scripts.preproc_fn import TFRmEvents, BbEvents
 ################################### GLOBAL VARIABLES ###################################
 
 EVENT_ID = {'old/correct': 1,
