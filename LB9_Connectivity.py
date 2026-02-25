@@ -41,7 +41,7 @@ def bandpass(data: np.ndarray, edges: list[float], sample_rate: float, poles: in
     filtered_data = sosfiltfilt(sos, data)
     return filtered_data
 
-def compute_aec(x, y, fisher=True): # for env
+def compute_aec(x, y, fisher=False): # for env
     n_trials = x.shape[0]
     corrs = []
 
@@ -127,7 +127,7 @@ def group_hilbert(band, param_filter,subj_list, data_ch, tfr_path, events,spl_ra
     trials_env ={ev:[] for ev in events}
     trials_phase ={ev:[] for ev in events}
 
-    for subj in np.unique(subj_list)[:1]:
+    for subj in np.unique(subj_list):
         data_subj = data_ch.query('subj == @subj').reset_index()
         ch = data_subj.query("ch1 == True").index
 
@@ -204,6 +204,7 @@ def compute_connectivity(band, pc, rois, trials,method, events, param_filter=Non
         for i,x in enumerate(data):
             for j,y in enumerate(data) :
                 min_trial = np.min([x.shape[0], y.shape[0]])
+
                 if method == 'spearman' :
                     con[i, j] = np.mean(spearmanr(x[:min_trial, :], y[:min_trial, :]).statistic)  #np.mean(spearmanr(x[:min_trial, :], y[:min_trial, :]).statistic) 
 
@@ -219,11 +220,11 @@ def compute_connectivity(band, pc, rois, trials,method, events, param_filter=Non
                 if method == 'granger' :
                     con[i, j] = compute_granger(x[:min_trial, :], y[:min_trial, :])
 
-            df = pd.DataFrame(con, columns = rois)
-            df['rois'] = rois
-            df= df.set_index('rois')
-            df = df.reset_index().groupby('rois').mean().T.reset_index().groupby('index').mean().T
-            df.to_csv(OUT_PATH + f'/Connectivity/{band}/{method}_{pc}_{ev[:3]}_all.csv')
+        df = pd.DataFrame(con, columns = rois)
+        df['rois'] = rois
+        df= df.set_index('rois')
+        df = df.reset_index().groupby('rois').mean().T.reset_index().groupby('index').mean().T
+        df.to_csv(OUT_PATH + f'/Connectivity/{band}/{method}_{pc}_{ev[:3]}_all.csv')
 
 if __name__ == "__main__":
     events = ['old/correct', 'new/correct']
