@@ -163,6 +163,7 @@ def mainCompareClf(band, pc_use):
                                 perm = perm,
                                 save=True, 
                                 data_path=data_path)
+
 def TSwTemporalMasking(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
     tfr_path = OUT_PATH + '/Data_longWOBS'
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
@@ -181,10 +182,10 @@ def TSwTemporalMasking(band, pc_use, model, method_pca, data_aug_method, bs_deco
             time = d['time_tfr']
 
     # slice timming into 10 slices 
-
     id_time = np.linspace(0, len(time), 10, dtype = int)
+    id_time = id_time[7:]
     for i in range(len(id_time)-1) : 
-        crop_arg = {'crop' : True, 't_id_min':0, 't_id_max' : id_time[i+1]}
+        crop_arg = {'crop' : True, 't_id_min':id_time[i], 't_id_max' : id_time[i+1]}#id_time[i]
         decodingTS(band, 
                 method_pca, 
                 data_aug_method,
@@ -198,7 +199,6 @@ def TSwTemporalMasking(band, pc_use, model, method_pca, data_aug_method, bs_deco
                 model_name = model, 
                 crop_arg=crop_arg)
         
-    
 def mainTG(band, method_pca, data_aug_method):
     tfr_path = OUT_PATH + '/Data_shortWOBS'
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
@@ -232,7 +232,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    TSwTemporalMasking(args.band, args.pc_use, 'SVC_rbf', 'concat', 'duplicat', bs_decoding=False)
+    TSwTemporalMasking(args.band, args.pc_use, 'SVC_rbf', 'mean', args.method_data_aug, bs_decoding=False)
 
     #for model in ['RandomForest', 'SVC_rbf', 'LR', 'SVC_linear'] : 
         #mainTS(args.band, args.pc_use, model, args.method_pca, args.method_data_aug, bs_decoding=False)
