@@ -3,7 +3,8 @@ import numpy as np
 import json
 import os
 import pickle
-from scipy.stats import spearmanr, zscore, f
+
+from scipy.stats import spearmanr, zscore, f, ttest_1samp
 from scipy.signal import welch, csd
 from scipy.linalg import lstsq
 
@@ -41,7 +42,8 @@ def bandpass(data: np.ndarray, edges: list[float], sample_rate: float, poles: in
     filtered_data = sosfiltfilt(sos, data)
     return filtered_data
 
-def compute_aec(x, y, fisher=False): # for env
+def compute_aec(x, y, fisher=True):
+    # Pearson product-moment correlation coefficients between envelops.
     n_trials = x.shape[0]
     corrs = []
 
@@ -53,21 +55,22 @@ def compute_aec(x, y, fisher=False): # for env
 
     corrs = np.array(corrs)
 
-    if fisher:
-        corrs = np.arctanh(corrs)
+    if fisher: # normalize to run the stat test with 0
+        corrs_z = np.arctanh(corrs)
+        tval, pval = ttest_1samp(corrs_z, 0)
+        mean_z = np.mean(corrs_z)
+        mean_r = np.tanh(mean_z)  
+    else:
+        tval, pval = ttest_1samp(corrs, 0)
+        mean_r = np.mean(corrs)
 
-    return np.mean(corrs)
+    return mean_r, pval
 
-def compute_plv(x_phase, y_phase): # on phase
-    n_trials = x_phase.shape[0]
-    plvs = []
-
-    for t in range(n_trials):
-        phase_diff = x_phase[t] - y_phase[t]
-        plv = np.abs(np.mean(np.exp(1j * phase_diff)))
-        plvs.append(plv)
-
-    return np.mean(plvs)
+def compute_plv(x_phase, y_phase):
+    phase_diff = x_phase - y_phase  
+    complex_phase = np.exp(1j * phase_diff)
+    plv_time = np.abs(np.mean(complex_phase, axis=0))  
+    return np.mean(plv_time)  
 
 def compute_granger(x, y, maxlag=10): # on raw of filtered before hilbert, F-statistic across trials
 
@@ -164,7 +167,7 @@ def group_hilbert(band, param_filter,subj_list, data_ch, tfr_path, events,spl_ra
 def group_time_domain(band, param_filter,subj_list, data_ch, tfr_path, events,spl_rate=200 ): 
     trials ={ev:[] for ev in events}
 
-    for subj in np.unique(subj_list)[:1]:
+    for subj in np.unique(subj_list):
         data_subj = data_ch.query('subj == @subj').reset_index()
         ch = data_subj.query("ch1 == True").index
 
@@ -174,7 +177,7 @@ def group_time_domain(band, param_filter,subj_list, data_ch, tfr_path, events,sp
             filtered = np.zeros_like(tr)
             for c in range(tr.shape[1]) : 
                 for e in range(tr.shape[0]) :
-                    filtered = bandpass(tr[e, c,:], param_filter[band], spl_rate)
+                    filtered[e, c,:] = bandpass(tr[e, c,:], param_filter[band], spl_rate)
                     
         info_file = tfr_path + f'/{subj}_info.json'
         with open(info_file) as f:
@@ -193,38 +196,63 @@ def group_time_domain(band, param_filter,subj_list, data_ch, tfr_path, events,sp
 
     return trials
 
-def compute_connectivity(band, pc, rois, trials,method, events, param_filter=None, spl_rate=None):
+def compute_connectivity(band, pc, rois, trials,method, events, param_filter=None, spl_rate=None, out_path=OUT_PATH, tw=['all']):
+    pval_bool = False
     for ev in events :
         data =[]
         for tr in trials[ev] : 
             data.extend([tr[:,c,:] for c in range(tr.shape[1])])
 
-        print('Computing static connectivity: ', ev, method)
-        con = np.zeros([len(data), len(data)])
-        for i,x in enumerate(data):
-            for j,y in enumerate(data) :
-                min_trial = np.min([x.shape[0], y.shape[0]])
+        for t_win in tw : 
+            if t_win == 'all' : 
+                tstart = 0
+                tend=-1
+                lab = 'all'
+            else :
+                tstart = t_win[0]
+                tend=t_win[1]
+                lab = f'{tstart}_{tend}'
 
-                if method == 'spearman' :
-                    con[i, j] = np.mean(spearmanr(x[:min_trial, :], y[:min_trial, :]).statistic)  #np.mean(spearmanr(x[:min_trial, :], y[:min_trial, :]).statistic) 
+            print('Computing connectivity: ', ev, method, pc, lab)
+            con = np.zeros([len(data), len(data)])
+            pval = np.zeros([len(data), len(data)])
+            
+            for i,x_ in enumerate(data):
+                x = x_[:, tstart:tend]
+                for j,y_ in enumerate(data) :
+                    min_trial = np.min([x_.shape[0], y_.shape[0]])
+                    y = y_[:, tstart:tend]
+                    if method == 'spearman' :
+                        con[i, j] = np.mean(spearmanr(x[:min_trial, :], y[:min_trial, :]).statistic)  #np.mean(spearmanr(x[:min_trial, :], y[:min_trial, :]).statistic) 
 
-                if method == 'aec' :
-                    con[i, j] = compute_aec(x[:min_trial, :], y[:min_trial, :])
+                    if method == 'aec' :
+                        pval_bool = True
+                        con[i, j], pval[i, j] = compute_aec(x[:min_trial, :], y[:min_trial, :])
 
-                if method =='plv':
-                    con[i, j] = compute_plv(x[:min_trial, :], y[:min_trial, :])
+                    if method =='plv':
+                        con[i, j] = compute_plv(x[:min_trial, :], y[:min_trial, :])
 
-                if method == 'psi' :
-                    con[i, j] = compute_psi(x[:min_trial, :], y[:min_trial, :], fs=spl_rate, fmin=param_filter[band][0], fmax=param_filter[band][1])
+                    if method == 'psi' :
+                        con[i, j] = compute_psi(x[:min_trial, :], y[:min_trial, :], fs=spl_rate, fmin=param_filter[band][0], fmax=param_filter[band][1])
 
-                if method == 'granger' :
-                    con[i, j] = compute_granger(x[:min_trial, :], y[:min_trial, :])
+                    if method == 'granger' :
+                        con[i, j] = compute_granger(x[:min_trial, :], y[:min_trial, :])
+                        
+            df = pd.DataFrame(con, columns = rois)
+            df['rois'] = rois
+            df= df.set_index('rois')
+            df = df.reset_index().groupby('rois').mean().T.reset_index().groupby('index').mean().T
+            df.to_csv(out_path+ f'/{method}_{pc}_{ev[:3]}_{lab}.csv')
 
-        df = pd.DataFrame(con, columns = rois)
-        df['rois'] = rois
-        df= df.set_index('rois')
-        df = df.reset_index().groupby('rois').mean().T.reset_index().groupby('index').mean().T
-        df.to_csv(OUT_PATH + f'/Connectivity/{band}/{method}_{pc}_{ev[:3]}_all.csv')
+            if pval_bool:
+                df2 = pd.DataFrame(con, columns = rois)
+                df2['rois'] = rois
+                df2= df2.set_index('rois')
+                #df2 = df2.reset_index().groupby('rois').mean().T.reset_index().groupby('index').mean().T
+                df2.to_csv(out_path+ f'/{method}_pval_{pc}_{ev[:3]}_{lab}_ch.csv')
+
+
+
 
 if __name__ == "__main__":
     events = ['old/correct', 'new/correct']
@@ -238,26 +266,34 @@ if __name__ == "__main__":
         d = json.load(json_data)
         time_tfr=d['time_tfr']
         
-    _, _, _, subj_list, regions = GetInfo(subj_included, data_path=tfr_path)
+    coord, areas, elect_list, subj_list, regions = GetInfo(subj_included, data_path=tfr_path) 
 
     band = 'high_gamma'
     pc='compo3'
+    method_pca = 'concat'
+    tw= [(25, 67), (67, 109)] #[(15, 73), (73, 131)]  #compo2 [(25, 67), (67, 109)] #compo3
 
-    weight = pd.read_csv(OUT_PATH + '/grpPCA/supsubj_concat/grp_concat_Compo_PCA5.csv').query('freq == @band & compo == @pc').drop(columns = ['Unnamed: 0', 'freq', 'compo']).values[0, :]
+    #if not pc :
+    weight = pd.read_csv(OUT_PATH + f'/grpPCA/supsubj_{method_pca}/grp_{method_pca}_Compo_PCA5.csv').query('freq == @band & compo == @pc').drop(columns = ['Unnamed: 0', 'freq', 'compo']).values[0, :]
     data_ch = pd.DataFrame()
     data_ch['ch1'] = np.where(abs(weight) > abs(weight).mean() + abs(weight).std(), True, False)
+    # else : 
+        #data_ch = pd.DataFrame()
+        #data_ch['ch1'] = [True]*len(subj_list)
+
     data_ch['subj'] = subj_list
-    data_ch['ROIs'] = regions
+    data_ch['ROIs'] = [a[0] for a in areas] #regions
     rois = data_ch[data_ch['ch1'] == True]['ROIs'].values
 
-    if not os.path.exists(OUT_PATH+f'/Connectivity/{band}') :
-        os.makedirs(OUT_PATH+f'/Connectivity/{band}')
+    out_path = OUT_PATH+f'/Connectivity_area/{band}'
+    if not os.path.exists(out_path) :
+        os.makedirs(out_path)
 
     trials_env, trials_phase = group_hilbert(band=band, param_filter=param_filter, subj_list=subj_list, data_ch=data_ch,tfr_path=tfr_path, events=events)
-    compute_connectivity(band=band, pc=pc, rois=rois, trials=trials_env,method='aec', events=events)
-    #compute_connectivity(band=band, pc=pc, rois=rois, trials=trials_phase,methods='plv', events=events)
+    compute_connectivity(band=band, pc=pc, rois=rois, trials=trials_env,method='aec', events=events, out_path=out_path, tw=tw)
+    #compute_connectivity(band=band, pc=pc, rois=rois, trials=trials_phase,method='plv', events=events, out_path=out_path, tw=tw)
 
-    #trials_time = group_time_domain(band, param_filter, subj_list, data_ch, tfr_path)
-    #compute_connectivity(band=band, pc=pc, rois=rois, trials=trials_time,methods='granger', event=events)
-    #compute_connectivity(band=band, pc=pc, rois=rois, trials=trials_time,methods='psi', event=events, param_filter=param_filter, spl_rate=spl_rate)
+    trials_time = group_time_domain(band=band, param_filter=param_filter, subj_list=subj_list, data_ch=data_ch, tfr_path=tfr_path, events=events)
+    #compute_connectivity(band=band, pc=pc, rois=rois, trials=trials_time, method='granger', events=events, out_path=out_path, tw=tw)
+    #compute_connectivity(band=band, pc=pc, rois=rois, trials=trials_time,method='psi', events=events, param_filter=param_filter, spl_rate=spl_rate, out_path=out_path, tw=tw)
 

@@ -81,7 +81,8 @@ REGION = {'parietal': ['IPS','IP','SP','SPL','AG','SMG','TPJ'],
         'INS': ['INS'],
         'VLPFC': ['IFG','FOP','IFS'],
         #'MTL': ['EC','HPC','MEC','PRH','PHG','PHC','LEC'],
-        'MTL': ['EC','MEC','PRH','LEC'],
+        'EC': ['EC','MEC','LEC'],
+        'PRH' : ['PRH'],
         'A1': ['A1'],
         'MTG': ['MTG'],
         'AMY': ['AMY'],
@@ -100,8 +101,9 @@ COL_REG = {
     # --- Memory system (distinct blues)
     'HPC':  '#0b2e8a',   # deep navy
     'PHC':  '#2457c5',   # strong blue
-    'MTL':  '#6fa3ff',   # light blue
+    'EC':  '#6fa3ff',   # light blue
     'PCC':  '#3b4f9f',   # blue–indigo
+    'PRH' : '#528EA4',
 
     # --- Limbic / affective / reward (distinct purples)
     'AMY':  '#5b1a8e',   # deep violet
@@ -414,6 +416,7 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
     h_freq=None
     raw.filter(l_freq=l_freq, h_freq=h_freq)
     nfreqs = np.arange(1,np.ceil(raw.info['lowpass']/raw.info['line_freq']))*raw.info['line_freq']
+
 
     if nfreqs.size>0:            
         raw.notch_filter(freqs=nfreqs)
