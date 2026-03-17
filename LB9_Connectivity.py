@@ -7,9 +7,10 @@ import pickle
 from scipy.stats import spearmanr, zscore, f, ttest_1samp
 from scipy.signal import welch, csd
 from scipy.linalg import lstsq
-
-from utils import OUT_PATH, GetInfo, ExcludSubj, FREQ_BAND, EVENT_ID
 from scipy.signal import hilbert, butter, sosfiltfilt
+
+from src.config import OUT_PATH, FREQ_BAND, EVENT_ID, events
+from src.setting import GetInfo, ExcludSubj
 
 def group_TFRm(band, subj_list, data_ch, tfr_path, events) :  
 
@@ -252,10 +253,7 @@ def compute_connectivity(band, pc, rois, trials,method, events, param_filter=Non
                 df2.to_csv(out_path+ f'/{method}_pval_{pc}_{ev[:3]}_{lab}_ch.csv')
 
 
-
-
 if __name__ == "__main__":
-    events = ['old/correct', 'new/correct']
     param_filter={'high_gamma' : [55, 99]}
     spl_rate=200
     tfr_path = OUT_PATH+ '/Data_longWOBS'
@@ -266,7 +264,7 @@ if __name__ == "__main__":
         d = json.load(json_data)
         time_tfr=d['time_tfr']
         
-    coord, areas, elect_list, subj_list, regions = GetInfo(subj_included, data_path=tfr_path) 
+    coord, areas, _, subj_list, regions = GetInfo(subj_included, data_path=tfr_path) 
 
     band = 'high_gamma'
     pc='compo3'
