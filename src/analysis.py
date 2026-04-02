@@ -10,7 +10,7 @@ from scipy.signal import find_peaks
 
 from sklearn.decomposition import PCA
 from numpy.linalg import lstsq
-from scipy.stats import ttest_1samp
+from scipy.stats import ttest_1samp, f
 
 plt.style.use('seaborn-v0_8-dark')
 
@@ -166,7 +166,7 @@ def cross_cor(X_0, X_1) :
         
     return lags, cc
 
-def compute_tr_gc(x, y, time_tfr, z=None, window_len=20, step_len=2, maxlag=7):
+def compute_tr_gc_win(x, y, time_tfr,window_len,step_len,maxlag,  z=None):
     
     n_trials, n_times = x.shape
     win_samples = window_len
@@ -176,6 +176,8 @@ def compute_tr_gc(x, y, time_tfr, z=None, window_len=20, step_len=2, maxlag=7):
     gc_time = np.zeros(n_windows)
     times = np.zeros(n_windows)
     bics = np.zeros(n_windows)
+    Fval = np.zeros(n_windows)
+    pval = np.zeros(n_windows)
 
     for w in range(n_windows):
         start = w * step_samples
@@ -213,7 +215,7 @@ def compute_tr_gc(x, y, time_tfr, z=None, window_len=20, step_len=2, maxlag=7):
         sigma_f = np.var(resid_f)
         
         # Reduced model (remove X and Z lags)
-        cols_keep = [0]  # intercept
+        cols_keep = [0]  
         for lag in range(maxlag):
             cols_keep.append(1 + lag * (2 if z is None else 3))  # Y lag columns only
         X_r = X_full[:, cols_keep]
@@ -224,11 +226,75 @@ def compute_tr_gc(x, y, time_tfr, z=None, window_len=20, step_len=2, maxlag=7):
         gc_time[w] = np.log(sigma_r / sigma_f)
         times[w] = time_tfr[start:end].mean()
 
-        # BIC
-        bics[w] = np.log(sigma_f) + (2 * maxlag * np.log(len(data_window))) / len(data_window)
+        # Fvalues 
+        RSS_f = np.sum(resid_f**2)
+        RSS_r = np.sum(resid_r**2)
+        q = X_full.shape[1] - X_r.shape[1]
+        Fval[w] = ((RSS_r - RSS_f) / q) / (RSS_f / (len(Y_dep) - X_full.shape[1]))
+        pval[w] = 1 - f.cdf(Fval[w], q, len(Y_dep) - X_full.shape[1])
 
+        # BIC
+        bics[w] = np.log(sigma_f) + (X_full.shape[1] * np.log(len(Y_dep))) / len(Y_dep)
+        
+    return gc_time, times, bics, Fval, pval
+
+def compute_tr_gc(x, y, start,end, maxlag, z=None):
+  
+    n_trials, _ = x.shape
+    Y_window = []
     
-    return gc_time, times, bics
+    for tr in range(n_trials):
+        xt = x[tr, start:end] - np.mean(x[tr, start:end])
+        yt = y[tr, start:end] - np.mean(y[tr, start:end])
+        
+        if z is not None:
+            zt = z[tr, start:end] - np.mean(z[tr, start:end])
+            data_tr = np.column_stack([yt, xt, zt])
+        else:
+            data_tr = np.column_stack([yt, xt])
+        
+        Y_window.append(data_tr)
+    
+    data_window = np.vstack(Y_window)
+    T_window = data_window.shape[0]
+    
+    Y_dep = data_window[maxlag:, 0]  # current Y values
+    
+    # Build full design matrix with lags
+    X_full = np.ones((T_window - maxlag, 1))  # intercept
+    for lag in range(1, maxlag + 1):
+        X_full = np.column_stack([X_full, data_window[maxlag - lag:-lag, 0]])  # Y lag
+        X_full = np.column_stack([X_full, data_window[maxlag - lag:-lag, 1]])  # X lag
+        if z is not None:
+            X_full = np.column_stack([X_full, data_window[maxlag - lag:-lag, 2]])  # Z lag
+    
+    # Full model
+    beta_f, _, _, _ = lstsq(X_full, Y_dep, rcond=None)
+    resid_f = Y_dep - X_full @ beta_f
+    sigma_f = np.var(resid_f)
+    
+    # Reduced model (remove X and Z lags)
+    cols_keep = [0]  
+    for lag in range(maxlag):
+        cols_keep.append(1 + lag * (2 if z is None else 3))  # Y lag columns only
+    X_r = X_full[:, cols_keep]
+    beta_r, _, _, _ = lstsq(X_r, Y_dep, rcond=None)
+    resid_r = Y_dep - X_r @ beta_r
+    sigma_r = np.var(resid_r)
+    
+    gc = np.log(sigma_r / sigma_f)
+
+    # Stats
+    RSS_f = np.sum(resid_f**2)
+    RSS_r = np.sum(resid_r**2)
+    q = X_full.shape[1] - X_r.shape[1]
+    Fval = ((RSS_r - RSS_f) / q) / (RSS_f / (len(Y_dep) - X_full.shape[1]))
+    pval = 1 - f.cdf(Fval, q, len(Y_dep) - X_full.shape[1])
+
+    # BIC
+    bic = np.log(sigma_f) + (X_full.shape[1] * np.log(len(Y_dep))) / len(Y_dep)
+
+    return gc, bic, Fval, pval
 
 ################################### VIZ AND INTRO (CHAT) ###################################
     
