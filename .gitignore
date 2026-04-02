@@ -1,11 +1,10 @@
 outs/
 trash/
 __pycache__/
+.vscode/
 
 py-wrapper_*
 
 .DS_Store
 
 ._*
-
-scripts/._*
