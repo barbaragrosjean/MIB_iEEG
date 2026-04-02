@@ -253,13 +253,23 @@ def CompoThr(data, replace=0) :
 
     return data_thr
 
-def DataAugmentation(TFRtr,event_ids, data_aug_method='mean') : 
+def DataAugmentation(TFRtr,event_ids, data_aug_method='mean', nb_trials=23) : 
     id_ev1 = event_ids[0]
     id_ev2 = event_ids[1]
-    TFR_trials_filled = np.full((23, 2, TFRtr.shape[1], TFRtr.shape[2]), np.nan)
-    TFR_trials_filled[:len(id_ev1), 0, :] =  TFRtr[id_ev1, :, :] 
-    TFR_trials_filled[:len(id_ev2), 1, :] =  TFRtr[id_ev2, :, :]
+    TFR_trials_filled = np.full((nb_trials, 2, TFRtr.shape[1], TFRtr.shape[2]), np.nan)
+    
+    if len(id_ev1) > nb_trials:
+        TFR_trials_filled[:nb_trials, 0, :] =  TFRtr[random.sample(list(id_ev1), nb_trials), :, :] 
+    else : 
+        TFR_trials_filled[:len(id_ev1), 0, :] =  TFRtr[id_ev1, :, :] 
+
+    if len(id_ev2) > nb_trials:
+        TFR_trials_filled[:nb_trials, 1, :] =  TFRtr[random.sample(list(id_ev2), nb_trials), :, :]
+    else :
+        TFR_trials_filled[:len(id_ev2), 1, :] =  TFRtr[id_ev2, :, :]
+
     true_trials = ~np.any(np.isnan(TFR_trials_filled), axis=(2, 3))
+
 
     if data_aug_method == 'mean':
         for i in range(2):  
@@ -267,23 +277,23 @@ def DataAugmentation(TFRtr,event_ids, data_aug_method='mean') :
             nan_mask = np.isnan(TFR_trials_filled[:, i, :, :])
             TFR_trials_filled[:, i, :, :] = np.where(nan_mask, event_means, TFR_trials_filled[:, i, :, :])
 
-    if data_aug_method == 'duplicat' :
+    elif data_aug_method == 'duplicat' :
         ids_w_fake1 = id_ev1
         ids_w_fake2 = id_ev2
-        while len(ids_w_fake1) + len(id_ev1) < 23 : 
+        while len(ids_w_fake1) + len(id_ev1) < nb_trials : 
             ids_w_fake1 = np.concat([ids_w_fake1,id_ev1], axis=0)
-        ids_w_fake1 = np.concat([ids_w_fake1, random.sample(list(id_ev1), 23-ids_w_fake1.shape[0])]).astype(int)
+        ids_w_fake1 = np.concat([ids_w_fake1, random.sample(list(id_ev1), nb_trials-ids_w_fake1.shape[0])]).astype(int)
 
-        while len(ids_w_fake2) + len(id_ev2) < 23 : 
+        while len(ids_w_fake2) + len(id_ev2) < nb_trials : 
             ids_w_fake2 = np.concat([ids_w_fake2,id_ev2], axis=0)
-        ids_w_fake2 = np.concat([ids_w_fake2, random.sample(list(id_ev2), 23-ids_w_fake2.shape[0])]).astype(int)
+        ids_w_fake2 = np.concat([ids_w_fake2, random.sample(list(id_ev2), nb_trials-ids_w_fake2.shape[0])]).astype(int)
 
         TFR_trials_filled[:, 0, :, :] =  TFRtr[ids_w_fake1, :, :] 
-        TFR_trials_filled[:, 1, :, :] =  TFRtr[ids_w_fake2, :, :]
+        TFR_trials_filled[:, 1, :, :] =  TFRtr[ids_w_fake2, :, :]  
 
     return np.concatenate([TFR_trials_filled[:,i, :, :] for i in [0, 1]], axis = 0), true_trials
 
-def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, nb_compo = 3,subj_included=[], method_pca='mean', data_aug_method='mean', data_path = OUT_PATH + '/Data', pol_cor=False, method ='pca') : 
+def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0,nb_trials=23, nb_compo = 3,subj_included=[], method_pca='mean', data_aug_method='mean', data_path = OUT_PATH + '/Data', pol_cor=False, method ='pca') : 
     TFRm_list = []
     
     Train_sample = []
@@ -330,7 +340,7 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, nb_compo = 3,subj_
             with open(file, "rb") as f:
                 TFRtr = pickle.load(f)  
 
-            TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
+            TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, :], [id_ev1, id_ev2], data_aug_method, nb_trials=nb_trials) # return 48, ch, time
             Test_sample.append(TFRtr[id_test,:, :])
 
         else :
@@ -339,10 +349,10 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, nb_compo = 3,subj_
                 TFRtr = pickle.load(f)  
 
             # Augment the data
-            TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, freq_band.index(freq), :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
+            TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, freq_band.index(freq), :], [id_ev1, id_ev2], data_aug_method, nb_trials=nb_trials) # return 48, ch, time
             Test_sample.append(TFRtr[id_test,:, freq_band.index(freq), :])
         
-        a = np.concat([TFRtr_augmented[None, :23, :, :], TFRtr_augmented[None, 23:, :, :]], axis = 0)
+        a = np.concat([TFRtr_augmented[None, :nb_trials, :, :], TFRtr_augmented[None, nb_trials:, :, :]], axis = 0)
         perm_trials = np.random.permutation(a.shape[1])
         a[0, :, :, :] = a[0, perm_trials, :, :]
         perm_trials = np.random.permutation(a.shape[1])
@@ -383,7 +393,7 @@ def DataTransformationM1(freq, freq_band=FREQ_BAND, PC_use=0, nb_compo = 3,subj_
         Train_transformed = weights[PC_use, :] @ (Train_all -m_train)
         Test_transformed = weights[PC_use, :] @ (Test_all[:,0,:] - m_test)
 
-    return Train_transformed, [1]*23 + [2]*23, Test_transformed, [1, 2], np.stack(truth, axis=2)*1, weights # X_train, y_train, X_test, y_test, subj_track_train, proportion of true trail in each supersample
+    return Train_transformed, [1]*nb_trials + [2]*nb_trials, Test_transformed, [1, 2], np.stack(truth, axis=2)*1, weights # X_train, y_train, X_test, y_test, subj_track_train, proportion of true trail in each supersample
  
 def DataTransformationM1Raw(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, subj_included=[], data_aug_method='mean', data_path = OUT_PATH + '/Data', pol_cor=False) :
     Train_sample = []
@@ -443,13 +453,12 @@ def DataTransformationM1Raw(freq, freq_band=FREQ_BAND, out_path = OUT_PATH, subj
 
     return Train_all, [1]*23 + [2]*23, Test_all[:, 0, :,:], [1, 2], np.stack(truth, axis=2)*1 
 
-def prep_data_trial(band, method_pca, data_aug_method, subj_included, PC_use,data_path=OUT_PATH + '/Data') : 
-    X_train0, y_train0, X_test0, y_test0, _, _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use, data_path=data_path)      
+def prep_data_trial(band, method_pca, data_aug_method, subj_included, PC_use,data_path=OUT_PATH + '/Data', nb_trials=23) : 
+    X_train0, y_train0, X_test0, y_test0, true_trials, _ = DataTransformationM1(freq= band, method_pca=method_pca, data_aug_method=data_aug_method, subj_included=subj_included, PC_use=PC_use, data_path=data_path, nb_trials=nb_trials)      
 
     X_0 = np.concat([X_train0, X_test0], axis=0)
     y_0 = np.concat([y_train0, y_test0], axis=0)
     X_0_old = X_0[np.where(y_0 == 1)]
     X_0_new = X_0[np.where(y_0 == 2)]
-    
-    return X_0, X_0_old, X_0_new, y_0
 
+    return X_0,  X_0_old, X_0_new, y_0, true_trials
