@@ -4,7 +4,6 @@ from utils import preproc, ExcludSubj
 import warnings
 
 
-
 if __name__ == "__main__":
     warnings.filterwarnings("ignore", category=FutureWarning)
     subj_included = [file.replace('_epochs.p', '') for file in os.listdir(OUT_PATH + '/Data_shortWOBS') if file[-len('epochs.p'):] == 'epochs.p']
