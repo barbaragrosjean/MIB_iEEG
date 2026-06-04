@@ -11,7 +11,6 @@ from scipy.signal import find_peaks
 from sklearn.decomposition import PCA
 from numpy.linalg import lstsq
 from scipy.stats import ttest_1samp, f
-
 plt.style.use('seaborn-v0_8-dark')
 
 from src.config import OUT_PATH
@@ -238,13 +237,25 @@ def compute_tr_gc_win(x, y, time_tfr,window_len,step_len,maxlag,  z=None):
         
     return gc_time, times, bics, Fval, pval
 
-def compute_tr_gc(x, y, start,end, maxlag, z=None):
+def compute_tr_gc(x, y, start,end, maxlag, z=None, perm = None):
   
     n_trials, _ = x.shape
     Y_window = []
     
     for tr in range(n_trials):
         xt = x[tr, start:end] - np.mean(x[tr, start:end])
+
+        if perm == 'circular' : 
+            shift = np.random.randint(1, len(xt))
+            xt = np.roll(xt, shift)
+        elif perm == 'shuffle':
+            xt=np.random.permutation(xt)
+        elif perm == 'block' : 
+            block_size = 5
+            blocks = np.array_split(xt,np.arange(block_size, len(xt), block_size))
+            np.random.shuffle(blocks)
+            xt = np.concatenate(blocks)
+
         yt = y[tr, start:end] - np.mean(y[tr, start:end])
         
         if z is not None:
@@ -295,6 +306,18 @@ def compute_tr_gc(x, y, start,end, maxlag, z=None):
     bic = np.log(sigma_f) + (X_full.shape[1] * np.log(len(Y_dep))) / len(Y_dep)
 
     return gc, bic, Fval, pval
+
+def compute_tr_gc_surrogate(x, y, start, end, maxlag, z=None,n_perm=2, perm=None):
+    gc_obs, bic_obs, F_obs, p_obs = compute_tr_gc(x, y, start, end, maxlag, z)
+    F_null = np.zeros(n_perm)
+    Gc_null=np.zeros(n_perm)
+    for iperm in range(n_perm):
+        gc_s, _, F_s, _ = compute_tr_gc(x,y,start,end,maxlag,z, perm=perm)
+        F_null[iperm] = F_s
+        Gc_null[iperm] = gc_s
+    p_emp = (np.sum(F_null >= F_obs) + 1) / (n_perm + 1)
+
+    return gc_obs,bic_obs, F_obs, p_obs, p_emp, np.percentile(F_null, 95), np.percentile(Gc_null, 95), np.mean(Gc_null), np.std(Gc_null)
 
 ################################### VIZ AND INTRO (CHAT) ###################################
     
