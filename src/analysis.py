@@ -317,7 +317,7 @@ def compute_tr_gc_surrogate(x, y, start, end, maxlag, z=None,n_perm=2, perm=None
         Gc_null[iperm] = gc_s
     p_emp = (np.sum(F_null >= F_obs) + 1) / (n_perm + 1)
 
-    return gc_obs,bic_obs, F_obs, p_obs, p_emp, np.percentile(F_null, 95), np.percentile(Gc_null, 95), np.mean(Gc_null), np.std(Gc_null)
+    return gc_obs,bic_obs, F_obs, p_obs, p_emp, np.percentile(F_null, 95),np.mean(F_null),np.std(F_null), np.percentile(Gc_null, 95), np.mean(Gc_null), np.std(Gc_null)
 
 ################################### VIZ AND INTRO (CHAT) ###################################
     
