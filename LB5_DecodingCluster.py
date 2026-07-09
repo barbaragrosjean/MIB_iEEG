@@ -1,8 +1,9 @@
 
 import os
-from utils import OUT_PATH, FREQ_BAND
-from utils import PermLR_distrib, PermLR_null, LR, TemporalLR, TemporalGeneralization, ExcludSubj, TemporalLRRaw, TemporalGeneralizationRaw, CompareClassifier
-from utils import decodingTS
+from src.config import  OUT_PATH, FREQ_BAND
+from src.decoding import decodingTS, LR, TemporalLR, TemporalGeneralization, TemporalLRRaw, TemporalGeneralizationRaw, CompareClassifier
+from src.config import ExcludSubj
+
 import json
 import warnings
 import argparse
@@ -107,11 +108,15 @@ def main_old(band, pc_use):
             #                          save=True, 
             #                          undersampling=False)
             
-
 def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
     tfr_path = OUT_PATH + '/Data_longWOBS'
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
     subj_included = ExcludSubj(subj_included, data_path=tfr_path)
+    subj_included_restricted = {16: ['BJH072', 'LL36', 'BJH069', 'SLCH020', 'BJH045', 'LL14', 'BJH050',
+       'BJH027', 'OS70', 'BJH052', 'OS61', 'BJH041', 'BJH046', 'BJH056',
+       'LL31', 'BJH039', 'BJH042', 'BJH026', 'LL08', 'SLCH018', 'BJH029',
+       'DA037', 'BJH058', 'SLCH024', 'BJH049']}
+    subj_included = subj_included_restricted[16]
 
     # get time 
     if bs_decoding :
@@ -139,11 +144,12 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
             iteration=iteration, 
             PC_use=pc_use, 
             save=True, 
-            out_path=f'{OUT_PATH}/Decoding_shuffled_trials', 
+            out_path=f'{OUT_PATH}/Decoding_shuffled_trials_res16', 
             iter_perm=iter_perm, 
             data_path=tfr_path, 
             model_name = model, 
-            crop_arg=crop_arg)
+            crop_arg=crop_arg, 
+            n_tr=16)
     
 def mainCompareClf(band, pc_use):
     data_path = OUT_PATH + '/Data_longWOBS'
@@ -232,10 +238,10 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    TSwTemporalMasking(args.band, args.pc_use, 'SVC_rbf', 'mean', args.method_data_aug, bs_decoding=False)
+    #TSwTemporalMasking(args.band, args.pc_use, 'SVC_rbf', 'mean', args.method_data_aug, bs_decoding=False)
 
     #for model in ['RandomForest', 'SVC_rbf', 'LR', 'SVC_linear'] : 
-        #mainTS(args.band, args.pc_use, model, args.method_pca, args.method_data_aug, bs_decoding=False)
+    mainTS(args.band, args.pc_use, 'LR', args.method_pca, args.method_data_aug, bs_decoding=False)
 
 
     # TemporalLRRaw(band=args.band, data_aug_method=args.method_data_aug, 

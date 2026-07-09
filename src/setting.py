@@ -5,8 +5,6 @@ import matplotlib.pyplot as plt
 from scipy.stats import pearsonr
 from sklearn.decomposition import PCA
 
-plt.style.use('seaborn-v0_8-dark')
-
 from src.config import PROJECT_PATH, OUT_PATH, REGION
 from src.preproc import TFRmEvents, BbEvents
 

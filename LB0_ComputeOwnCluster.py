@@ -1,6 +1,7 @@
 import os
-from utils import PROJECT_PATH, OUT_PATH
-from utils import preproc, ExcludSubj
+from src.config import OUT_PATH
+from src.preproc import preproc
+from src.setting import ExcludSubj
 import warnings
 
 

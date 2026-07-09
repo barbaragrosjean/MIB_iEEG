@@ -9,7 +9,6 @@ import pandas as pd
 import re
 import matplotlib.pyplot as plt
 
-plt.style.use('seaborn-v0_8-dark')
 from src.config import PROJECT_PATH, OUT_PATH, FREQ_BAND_DICT, FREQS, EVENT_ID, BWIDTH
     
 def get_bads(SBJ, bads_path, elec_path, segments_path=None):

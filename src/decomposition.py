@@ -13,8 +13,6 @@ from sklearn.decomposition import PCA
 
 from PIL import Image
 
-plt.style.use('seaborn-v0_8-dark')
-
 from src.config import PROJECT_PATH, OUT_PATH, FREQ_BAND
 from src.preproc import BbEvents, TFRmEvents
 from src.setting import PolarityCor

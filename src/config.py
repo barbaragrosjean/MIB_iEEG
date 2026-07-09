@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from matplotlib.colors import LinearSegmentedColormap
-plt.style.use('seaborn-v0_8-dark')
+plt.style.use('petroff10')
 
 PROJECT_PATH = '../MINDLAB2021_MEG-TempSeqAges/scratch/learning_bach_iEEG'
 OUT_PATH = 'outs'    

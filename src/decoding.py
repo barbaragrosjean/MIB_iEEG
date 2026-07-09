@@ -20,9 +20,6 @@ from sklearn.model_selection import KFold
 from scipy.stats import spearmanr, pearsonr
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 
-
-plt.style.use('seaborn-v0_8-dark')
-
 from src.config import OUT_PATH, EVENT_ID
 from src.decomposition import DataTransformationM1, DataTransformationM1Raw
    
