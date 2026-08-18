@@ -243,6 +243,7 @@ def run_nmf_multistart(X, n_components, n_runs=10, random_states=None, max_iter=
 
 # Transform
 def CompoThr(data, replace=0) : 
+    
     data_thr = data.copy()
     for i in range(data.shape[0]):
         thr = data[i,:].mean() + abs(data[i, :].std())      

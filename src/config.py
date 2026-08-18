@@ -13,17 +13,32 @@ EVENT_ID = {'old/correct': 1,
  'old/null': 201,
  'new/null': 202}
 
-FREQS = [0.5,1,2,3,4,5,6,7,8,9,10,11,12,13,15,17,19,21,24,27,30,35,40,45,50,55,60,70,80,90,100,110,120,130,140,150,160,180]
-BWIDTH = np.array([0.5,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,3,3,3,5,5,5,5,5,5,10,10,10,10,10,10,10,10,10,10,20])
+FREQS = [
+    0.5,
+    1,2,3,4,5,6,7,8,9,10,11,12,13,
+    15,17,19,
+    21,24,27,30,
+    35,40,45,50,55,60,
+    70,80,90,100,110,120,130,140,150,160,180
+]
+
+BWIDTH = np.array([
+    0.5,                                    # 0.5 Hz
+    1,1,1,1,1,1,1,1,1,1,1,1,1,              # 1–13 Hz
+    2,2,2,                                  # 15–19 Hz
+    3,3,3,3,                                # 21–30 Hz
+    5,5,5,5,5,5,                            # 35–60 Hz
+    10,10,10,10,10,10,10,10,10,10,10,       # 70–180 Hz
+])
 
 FREQ_BAND_DICT = {
-    'Delta': [0.5, 1, 2, 3, 4],
-    'Theta': [4, 5, 6, 7, 8],
-    'Alpha': [8, 9, 10, 11, 12, 13],
-    'Low_Beta': [13, 15, 17, 19],
-    'High_Beta': [21, 24, 27, 30],
-    'Low_Gamma': [30, 35, 40, 45, 50, 55],
-    'High_Gamma': [55, 60, 70, 80, 90, 100]
+    'Delta'      : [0.5, 1, 2, 3],
+    'Theta'      : [4, 5, 6, 7],
+    'Alpha'      : [8, 9, 10, 11, 12],
+    'Low_Beta'   : [13, 15, 17, 19],
+    'High_Beta'  : [21, 24, 27, 30],
+    'Low_Gamma'  : [35, 40, 45, 50, 55, 60],
+    'High_Gamma' : [70, 80, 90, 100, 110, 120, 130, 140, 150, 160]
 }
 
 FREQ_BAND = ['delta', 'theta','alpha', 'low_beta', 'high_beta', 'low_gamma', 'high_gamma']
@@ -31,8 +46,8 @@ FREQ_BAND = ['delta', 'theta','alpha', 'low_beta', 'high_beta', 'low_gamma', 'hi
 REGION = {'parietal': ['IPS','IP','SP','SPL','AG','SMG','TPJ'],
         #'premotor': ['SFG','SFS','MFG','FEF','SMA'],
         #'DLPFC': ['MFG','FEF','SFS','IFS'],
-        'premotor' : ['SFG','FEF','SMA'],
-        'DLPFC': ['MFG','SFS','IFS'],
+        'premotor' : ['FEF','SMA'],
+        'DLPFC': ['MFG','SFS','IFS', 'SFG'],
         'M1': ['preCG','M1','PreCG'],
         'S1': ['postCG','PostCG'],
         'INS': ['INS'],

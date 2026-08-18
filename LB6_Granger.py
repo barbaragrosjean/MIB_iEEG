@@ -8,7 +8,7 @@ from src.config import OUT_PATH
 from src.decomposition import prep_data_trial
 from src.analysis import compute_tr_gc_surrogate
 
-tfr_path = OUT_PATH+ '/Data_longWOBS'
+tfr_path = OUT_PATH+ '/Data_longWOBS_mf70-160'
 
 nb_trials = 16
 subj_included_restricted = {16: ['BJH072', 'LL36', 'BJH069', 'SLCH020', 'BJH045', 'LL14', 'BJH050',
@@ -24,7 +24,7 @@ with open(path) as json_data:
 band = 'high_gamma'
 method_pca = 'concat'
 
-out_path = OUT_PATH + f'/Granger/{band}'
+out_path = OUT_PATH + f'/Granger_mf70-160/{band}'
 if not os.path.exists(out_path):
     os.makedirs(out_path)
 
@@ -33,9 +33,11 @@ if not os.path.exists(out_path):
     
 lags = [2, 3, 4, 5, 6, 7, 8, 9, 10, 15] 
 window_len=15
-method_perm = 'shuffle'   #circular, shuffle, block
-n_perm=50
-nb_run=50
+method_perm = 'block'   #circular, shuffle, block
+n_perm=50 # 50
+nb_run=20 #50
+
+print('Method perm', method_perm)
 
 for r in range(nb_run):
     _,  X_0_old, X_0_new, _, _ = prep_data_trial(band, method_pca, None, subj_included_restricted[nb_trials], 0,tfr_path, nb_trials=nb_trials-1)

@@ -20,8 +20,9 @@ from sklearn.model_selection import KFold
 from scipy.stats import spearmanr, pearsonr
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 
-from src.config import OUT_PATH, EVENT_ID
-from src.decomposition import DataTransformationM1, DataTransformationM1Raw
+from src.config import OUT_PATH, EVENT_ID, FREQ_BAND
+from src.decomposition import DataTransformationM1, DataTransformationM1Raw, DataAugmentation, ConcatPCA
+from src.setting import ExcludSubj, TFRmEvents, BbEvents
    
     
 def CheckTrials(X_train, y_train, event=list(EVENT_ID.keys())[:2] , out_path=OUT_PATH + '/Decoding', label = '', save=False, color_ev = {0 : 'r', 1 : 'b'}, freq='high_gamma', data_path=OUT_PATH + '/Data') : 
@@ -681,7 +682,7 @@ def CompareModelsGGPlot(score, band, pc_use, decoding_folder=OUT_PATH + '/Decodi
     plt.show()
 
 ################################### 'STATS' ###################################
-def decodingTS(band, method_pca, data_aug_method,subj_included=[], iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=50, data_path=OUT_PATH + '/Data', model_name = 'LR', crop_arg={'crop' :False, 't_id_min':0, 't_id_max':0 }) :
+def decodingTS(band, method_pca, data_aug_method,subj_included=[], iteration=100, PC_use=0, save=False, out_path=f'{OUT_PATH}/Decoding', iter_perm=50, data_path=OUT_PATH + '/Data', model_name = 'LR', crop_arg={'crop' :False, 't_id_min':0, 't_id_max':0 }, n_tr=24) :
     truth = []
 
     # TO STORE
@@ -745,7 +746,7 @@ def decodingTS(band, method_pca, data_aug_method,subj_included=[], iteration=100
                 with open(file, "rb") as f:
                     TFRtr = pickle.load(f)  
 
-                TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
+                TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, :], [id_ev1, id_ev2], data_aug_method, nb_trials=n_tr-1) # return 48, ch, time
                 Test_sample.append(TFRtr[id_test,:, :])
 
             else :
@@ -754,10 +755,10 @@ def decodingTS(band, method_pca, data_aug_method,subj_included=[], iteration=100
                     TFRtr = pickle.load(f)  
 
                 # Augment the data
-                TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, freq_id, :], [id_ev1, id_ev2], data_aug_method) # return 48, ch, time
+                TFRtr_augmented, true_trials = DataAugmentation(TFRtr[:, :, freq_id, :], [id_ev1, id_ev2], data_aug_method, nb_trials=n_tr-1) # return 48, ch, time
                 Test_sample.append(TFRtr[id_test,:, freq_id, :])
             
-            a = np.concat([TFRtr_augmented[None, :23, :, :], TFRtr_augmented[None, 23:, :, :]], axis = 0)
+            a = np.concat([TFRtr_augmented[None, :n_tr-1, :, :], TFRtr_augmented[None, n_tr-1:, :, :]], axis = 0)
             perm_trials = np.random.permutation(a.shape[1])
             a[0, :, :, :] = a[0, perm_trials, :, :]
             perm_trials = np.random.permutation(a.shape[1])

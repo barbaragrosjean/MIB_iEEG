@@ -2,7 +2,7 @@
 import os
 from src.config import  OUT_PATH, FREQ_BAND
 from src.decoding import decodingTS, LR, TemporalLR, TemporalGeneralization, TemporalLRRaw, TemporalGeneralizationRaw, CompareClassifier
-from src.config import ExcludSubj
+from src.setting import ExcludSubj
 
 import json
 import warnings
@@ -109,7 +109,7 @@ def main_old(band, pc_use):
             #                          undersampling=False)
             
 def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
-    tfr_path = OUT_PATH + '/Data_longWOBS'
+    tfr_path = OUT_PATH + '/Data_longWOBS_mf70-160'
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
     subj_included = ExcludSubj(subj_included, data_path=tfr_path)
     subj_included_restricted = {16: ['BJH072', 'LL36', 'BJH069', 'SLCH020', 'BJH045', 'LL14', 'BJH050',
@@ -128,15 +128,15 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
             else : 
                 time = d['time_tfr']
         
-        crop_arg = {'crop' : True, 't_id_min':time.index(np.array(time)[np.array(time) > -0.5][0]), 't_id_max' : len(time)}
-        #crop_arg = {'crop' : True, 't_id_min':0, 't_id_max' :time.index(np.array(time)[np.array(time) > -0.5][0]) }
+        #crop_arg = {'crop' : True, 't_id_min':time.index(np.array(time)[np.array(time) > -0.5][0]), 't_id_max' : len(time)}
+        crop_arg = {'crop' : True, 't_id_min':0, 't_id_max' :time.index(np.array(time)[np.array(time) > -0.5][0]) }
 
     else : 
         crop_arg = {'crop' : False, 't_id_min':None, 't_id_max' : None}
 
     iteration = 100
-    iter_perm = 50
-
+    iter_perm = 100
+    nb_trials = 16 #24
     decodingTS(band, 
             method_pca, 
             data_aug_method,
@@ -144,12 +144,12 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
             iteration=iteration, 
             PC_use=pc_use, 
             save=True, 
-            out_path=f'{OUT_PATH}/Decoding_shuffled_trials_res16', 
+            out_path=f'{OUT_PATH}/Decoding_shuffled_trials_mf70-160_res', 
             iter_perm=iter_perm, 
             data_path=tfr_path, 
             model_name = model, 
             crop_arg=crop_arg, 
-            n_tr=16)
+            n_tr=nb_trials)
     
 def mainCompareClf(band, pc_use):
     data_path = OUT_PATH + '/Data_longWOBS'
@@ -206,7 +206,7 @@ def TSwTemporalMasking(band, pc_use, model, method_pca, data_aug_method, bs_deco
                 crop_arg=crop_arg)
         
 def mainTG(band, method_pca, data_aug_method):
-    tfr_path = OUT_PATH + '/Data_shortWOBS'
+    tfr_path = OUT_PATH + '/Data_longWOBS_full'
     subj_included = [file.replace('_TFRtrials.p', '') for file in os.listdir(tfr_path) if file[-len('_TFRtrials.p'):] == '_TFRtrials.p']
     subj_included = ExcludSubj(subj_included, data_path=tfr_path)
 
@@ -221,7 +221,7 @@ def mainTG(band, method_pca, data_aug_method):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Specific frequency band")
-    parser.add_argument("--band", type=str, choices=FREQ_BAND + ['broadband'], required=True,
+    parser.add_argument("--band", type=str, choices=FREQ_BAND + ['broadband'], required=False,
                         help="Frequency band to process.")
     
     parser.add_argument("--pc_use", type=int, choices=[0, 1, 2, 3, 4, 5], required=False,
@@ -240,8 +240,11 @@ if __name__ == "__main__":
 
     #TSwTemporalMasking(args.band, args.pc_use, 'SVC_rbf', 'mean', args.method_data_aug, bs_decoding=False)
 
-    #for model in ['RandomForest', 'SVC_rbf', 'LR', 'SVC_linear'] : 
-    mainTS(args.band, args.pc_use, 'LR', args.method_pca, args.method_data_aug, bs_decoding=False)
+    for pc_use in [0, 1, 2] : 
+        print('Pc:', pc_use)
+        for model in ['RandomForest'] : 
+            print('Model:', model)
+            mainTS('high_gamma', pc_use, model, 'concat', None, bs_decoding=False)
 
 
     # TemporalLRRaw(band=args.band, data_aug_method=args.method_data_aug, 

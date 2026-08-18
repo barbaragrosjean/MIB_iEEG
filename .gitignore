@@ -1,6 +1,12 @@
 outs/
+
+iEEGvsMEG/out/
+iEEGvsMEG/MEG/
+iEEGvsMEG/ieeg_shortWOBS_fs250/
 trash/
+
 __pycache__/
+
 .vscode/
 
 py-wrapper_*

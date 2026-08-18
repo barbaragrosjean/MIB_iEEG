@@ -122,7 +122,7 @@ def get_slop_pc3(i, signals, time) :
 def get_slop_pc2(i, signals, time) : 
     signal = gaussian_filter1d(signals[i, :], sigma=10)
     crossing  = get_cross_point(i, signals, tstart=50, tend=115)
-    minima = np.argmin(signals[i, 100:]) + 100
+    minima = np.argmax(signals[i, 100:]) + 100
     x = np.array(time)[crossing:minima]
     y = signal[crossing:minima]
     slope1 = linregress(x, y).slope
@@ -135,7 +135,7 @@ def get_slop_pc2(i, signals, time) :
 
 def area_pc2(i, signals): 
     signal = gaussian_filter1d(signals[i, :], sigma=10)
-    minima = np.argmin(signal)
+    minima = np.argmax(signal)
     signal_neg = np.where(signal < 0, signal, 0)
     signal_pos = np.where(signal> 0, signal, 0)
 

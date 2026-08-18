@@ -9,7 +9,7 @@ import pandas as pd
 import re
 import matplotlib.pyplot as plt
 
-from src.config import PROJECT_PATH, OUT_PATH, FREQ_BAND_DICT, FREQS, EVENT_ID, BWIDTH
+from src.config import PROJECT_PATH, OUT_PATH, FREQ_BAND_DICT, FREQS, EVENT_ID, BWIDTH, TASK
     
 def get_bads(SBJ, bads_path, elec_path, segments_path=None):
 
@@ -215,11 +215,14 @@ def MM_compute_TFR(epochs, freqs, n_cycles, baseline, zscore=True, trial_baselin
         TFR.data -= bmean 
     return TFR
 
-def TFR_mean(TFR,freq_bands=FREQ_BAND_DICT, freqs=FREQS, event_id= EVENT_ID, trials=True): 
+def TFR_mean(TFR,freq_bands=FREQ_BAND_DICT, freqs=FREQS, event_id= EVENT_ID, trials=True, bwitdh=BWIDTH): 
     band_indices = {band: [freqs.index(f) for f in band_freqs if f in freqs] for band, band_freqs in freq_bands.items()}
     TFR_mean_band = np.zeros((TFR.data.shape[0], TFR.data.shape[1], len(freq_bands), TFR.data.shape[3]))
     for i, inde in enumerate(band_indices.values()):
-        TFR_mean_band[:, :, i, :] = np.mean(TFR.data[:, :, inde, :], axis=2)
+        #TFR_mean_band[:, :, i, :] = np.mean(TFR.data[:, :, inde, :], axis=2) 
+        weights = bwitdh[inde] #MODIF
+        weights = weights / weights.sum()
+        TFR_mean_band[:, :, i, :] = np.average(TFR.data[:, :, inde, :],axis=2,weights=weights)
 
     unique_ev = np.unique(TFR.events[:, 2])
     id_ev ={}
@@ -305,7 +308,7 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
     del raw
 
     if compute_TFR :
-        n_cycles = np.array(freqs) * 2 / np.array(bwidth)
+        n_cycles = np.array(freqs) * 2 / np.array(bwidth) 
         TFR = MM_compute_TFR(epochs,np.array(freqs), n_cycles, baseline = (-1.5,4), zscore=True, trial_baseline = False, picks='all',n_jobs=1, summary = False)
         TFR = TFR.crop(-1,4)
 
@@ -327,7 +330,7 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
         del TFRtrials
         del TFR
 
-    epochs = epochs.crop(-1,4)
+    epochs = epochs.crop(-1,4) 
     epochs = epochs.resample(new_sfreq)
 
     if save_epoch : 
