@@ -42,6 +42,8 @@ out_path='out/freq'
 nb_compo = 1026
 eigenvalue_spectrum = np.zeros((len(frequencies_common), nb_compo))
 explained_variance_ratio = np.zeros((len(frequencies_common), nb_compo))
+X_trans = None 
+total_power = None
 
 for i, frequency in enumerate(frequencies_common):
     # meg data 
@@ -91,6 +93,9 @@ if compute_ieeg :
     nb_compo = 1026 # eventually change this 
     eigenvalue_spectrum = np.zeros((len(frequencies), nb_compo))
     explained_variance_ratio = np.zeros((len(frequencies), nb_compo))
+    X_trans = None 
+    total_power = None
+
 
     for i, frequency in enumerate(frequencies):
         ieeg_list = []
