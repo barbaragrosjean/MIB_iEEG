@@ -330,7 +330,7 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
         del TFRtrials
         del TFR
 
-    epochs = epochs.crop(-1,4) 
+    epochs = epochs.crop(-0.5,4) 
     epochs = epochs.resample(new_sfreq)
 
     if save_epoch : 

@@ -3,6 +3,7 @@ outs/
 iEEGvsMEG/out/
 iEEGvsMEG/MEG/
 iEEGvsMEG/ieeg_shortWOBS_fs250/
+iEEGvsMEG/ieeg_shortWOBS_fs400/
 trash/
 
 __pycache__/
