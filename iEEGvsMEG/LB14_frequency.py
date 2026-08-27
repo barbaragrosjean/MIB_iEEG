@@ -113,7 +113,7 @@ if compute_ieeg :
         eigenvalue_spectrum[i, :] = pca.explained_variance_
         explained_variance_ratio[i, :] = pca.explained_variance_ratio_
 
-    with open(out_path + f'/ieeg_avg_power_{nb_compo}.p', "wb") as f:
+    with open(out_path + f'/ieeg_power_{nb_compo}.p', "wb") as f:
         pickle.dump(total_power, f)
     with open(out_path + f'/ieeg_trans_{nb_compo}.p', "wb") as f:
         pickle.dump(X_trans, f)
