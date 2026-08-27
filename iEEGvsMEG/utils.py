@@ -26,53 +26,10 @@ import pickle
 import json
 import matplotlib.pyplot as plt
 
-
-def structure_coefficients(X, scores):
-    """
-    Correlation between original variables and latent scores.
-    """
-    return np.corrcoef(X.T, scores.T)[:X.shape[1], X.shape[1]:]
-
-def update_COL_REG(col_reg,all_regions, show=False):
-    used_colors = {c.lower() for c in col_reg.values()}
-    cmap = plt.get_cmap("tab20", max(20, len(all_regions)))
-
-    color_idx = 0
-    for region in all_regions:
-        if region not in col_reg:
-            while True:
-                color = mcolors.to_hex(cmap(color_idx))
-                color_idx += 1
-                if color.lower() not in used_colors:
-                    break
-
-            col_reg[region] = color
-            used_colors.add(color.lower())
-
-    if show : 
-        fig, ax = plt.subplots(figsize=(4, len(col_reg) * 0.4))
-
-        for i, (region, color) in enumerate(col_reg.items()):
-            ax.scatter(0, -i, s=200, color=color)
-            ax.text(0.1, -i, region, va='center', fontsize=12)
-
-        ax.set_xlim(-0.1, 1)
-        ax.set_ylim(-len(col_reg), 1)
-        ax.axis('off')
-
-    return col_reg
-
-def canonical_to_region(label):
-    for region, names in REGION.items():
-        if label in names:
-            return region
-    return None
-
-def get_ieeg_data(ieeg_datapath,ieeg_subj_list) : 
+def get_ieeg_data(ieeg_datapath,ieeg_subj_list, tr_avg=True) : 
     ieeg_data ={}
-    info_file = ieeg_datapath + f'/{ieeg_subj_list[0]}_info.json'
-
     for subj in ieeg_subj_list :
+        info_file = ieeg_datapath + f'/{subj}_info.json'
         with open(info_file) as json_data:
             d = json.load(json_data)
             events_index = np.array([int(i) for i in d['event_id']])
@@ -89,12 +46,20 @@ def get_ieeg_data(ieeg_datapath,ieeg_subj_list) :
 
     # mean tr
     subj_data= []
-    for subj in ieeg_subj_list :
-        subj_data.append(np.nanmean(ieeg_data[subj], axis=1))
-        if len(np.unique(np.isnan(np.nanmean(ieeg_data[subj], axis=1)))) >1 :
-            print(subj)
-    ieeg_data_mean = np.concat(subj_data, axis=1)
-    return ieeg_data_mean
+    if tr_avg :
+
+        for subj in ieeg_subj_list :
+            subj_data.append(np.nanmean(ieeg_data[subj], axis=1))
+            if len(np.unique(np.isnan(np.nanmean(ieeg_data[subj], axis=1)))) >1 :
+                print(subj)
+        ieeg_data_mean = np.concat(subj_data, axis=1)
+        return ieeg_data_mean
+    
+    else : 
+        for subj in ieeg_subj_list :
+            subj_data.append(ieeg_data[subj])
+
+        return subj_data # list of 30 subj trial level 
 
 def get_meg_data(meg_outpath,meg_subj_list, type='source' ) :
     meg_data_source=[]
@@ -193,6 +158,120 @@ def mask_meg(data, coord, radius_1=5, radius_2=3, show=False, return_mask=False)
         return mask
     else : 
         return data[:,:, mask, :]
+
+def gaussian_frequency_filter(X, fs, center_frequency, bandwidth):
+    """
+    Frequency-domain Gaussian filtering.
+
+    Parameters
+    ----------
+    X : array, shape (n_samples, n_channels)
+        Broadband multivariate signal.
+
+    fs : float
+        Sampling frequency in Hz.
+
+    center_frequency : float
+        Center frequency of the Gaussian filter.
+
+    bandwidth : float
+        Full width at half maximum (FWHM) in Hz.
+
+    Returns
+    -------
+    X_filtered : array, shape (n_samples, n_channels)
+        Narrowband filtered signal.
+    """
+
+    X = np.asarray(X, dtype=float)
+
+    n_samples = X.shape[0]
+
+    # ---------------------------------------------------------
+    # Frequency axis
+    # ---------------------------------------------------------
+
+    frequencies = np.fft.fftfreq(
+        n_samples,
+        d=1 / fs
+    )
+
+    # ---------------------------------------------------------
+    # Convert FWHM to sigma
+    # ---------------------------------------------------------
+
+    sigma = bandwidth / (
+        2 * np.sqrt(2 * np.log(2))
+    )
+
+    # ---------------------------------------------------------
+    # Gaussian frequency-domain kernel
+    # ---------------------------------------------------------
+
+    kernel = np.exp(
+        -0.5 * (
+            (np.abs(frequencies) - center_frequency)
+            / sigma
+        )**2
+    )
+
+    # ---------------------------------------------------------
+    # FFT
+    # ---------------------------------------------------------
+
+    X_fft = np.fft.fft(
+        X,
+        axis=0
+    )
+
+    # ---------------------------------------------------------
+    # Apply Gaussian filter
+    # ---------------------------------------------------------
+
+    X_fft_filtered = (
+        X_fft
+        * kernel[:, None]
+    )
+
+    # ---------------------------------------------------------
+    # Inverse FFT
+    # ---------------------------------------------------------
+
+    X_filtered = np.fft.ifft(
+        X_fft_filtered,
+        axis=0
+    ).real
+
+    return X_filtered
+
+def update_COL_REG(col_reg,all_regions, show=False):
+    used_colors = {c.lower() for c in col_reg.values()}
+    cmap = plt.get_cmap("tab20", max(20, len(all_regions)))
+
+    color_idx = 0
+    for region in all_regions:
+        if region not in col_reg:
+            while True:
+                color = mcolors.to_hex(cmap(color_idx))
+                color_idx += 1
+                if color.lower() not in used_colors:
+                    break
+
+            col_reg[region] = color
+            used_colors.add(color.lower())
+
+    if show : 
+        fig, ax = plt.subplots(figsize=(4, len(col_reg) * 0.4))
+
+        for i, (region, color) in enumerate(col_reg.items()):
+            ax.scatter(0, -i, s=200, color=color)
+            ax.text(0.1, -i, region, va='center', fontsize=12)
+
+        ax.set_xlim(-0.1, 1)
+        ax.set_ylim(-len(col_reg), 1)
+        ax.axis('off')
+
+    return col_reg
 
 def get_region_label(pos_m) : 
     # Load atlas
