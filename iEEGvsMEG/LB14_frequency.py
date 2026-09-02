@@ -20,7 +20,7 @@ print('MEG Subject number : ', len(meg_subj_list))
 ieeg_subj_list = [file.replace('_epochs.p', '') for file in os.listdir(ieeg_datapath) if file[-len('epochs.p'):] == 'epochs.p']
 print('iEEG Subject number : ', len(ieeg_subj_list))
 
-compute_ieeg = True
+compute_ieeg = False
 # Get the coordinate
 project_path = '../' + PROJECT_PATH
 coord, areas, elect_list, subj_list, regions_ieeg = GetInfo(ieeg_subj_list, data_path=ieeg_datapath, project_path=project_path)
@@ -37,7 +37,7 @@ frequencies = 0.5 * ratio ** np.arange(n_ieeg)
 frequencies = frequencies[frequencies <= 180]
 
 # MEG 
-type_ = 'match'
+type_ = 'source_avg'
 out_path='out/freq' 
 nb_compo = 1026
 eigenvalue_spectrum = np.zeros((len(frequencies_common), nb_compo))

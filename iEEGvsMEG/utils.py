@@ -115,11 +115,11 @@ def match_meg(meg_data_source,ieeg_subj_list,coord,meg_subj_list,subj_list,retur
 
         if average_subject:
             matched_subj = []
-            for meg_subj in meg_subj_list:
+            for j, meg_subj in enumerate(meg_subj_list):
                 pos = pd.read_csv(f'MEG/dataMEG/{meg_subj}_pos.csv').drop(columns='Unnamed: 0')
                 tree = cKDTree(pos)
                 _, nearest_idx = tree.query(coord_subj, k=1)
-                to_keep = meg_data_source[i, :, nearest_idx, :]
+                to_keep = meg_data_source[j, :, nearest_idx, :]
                 matched_subj.append(to_keep)
                 mask[meg_subj] = nearest_idx
             to_keep = np.mean(matched_subj, axis=0)
@@ -160,88 +160,14 @@ def mask_meg(data, coord, radius_1=5, radius_2=3, show=False, return_mask=False)
         return data[:,:, mask, :]
 
 def gaussian_frequency_filter(X, fs, center_frequency, bandwidth):
-    """
-    Frequency-domain Gaussian filtering.
-
-    Parameters
-    ----------
-    X : array, shape (n_samples, n_channels)
-        Broadband multivariate signal.
-
-    fs : float
-        Sampling frequency in Hz.
-
-    center_frequency : float
-        Center frequency of the Gaussian filter.
-
-    bandwidth : float
-        Full width at half maximum (FWHM) in Hz.
-
-    Returns
-    -------
-    X_filtered : array, shape (n_samples, n_channels)
-        Narrowband filtered signal.
-    """
-
     X = np.asarray(X, dtype=float)
-
     n_samples = X.shape[0]
-
-    # ---------------------------------------------------------
-    # Frequency axis
-    # ---------------------------------------------------------
-
-    frequencies = np.fft.fftfreq(
-        n_samples,
-        d=1 / fs
-    )
-
-    # ---------------------------------------------------------
-    # Convert FWHM to sigma
-    # ---------------------------------------------------------
-
-    sigma = bandwidth / (
-        2 * np.sqrt(2 * np.log(2))
-    )
-
-    # ---------------------------------------------------------
-    # Gaussian frequency-domain kernel
-    # ---------------------------------------------------------
-
-    kernel = np.exp(
-        -0.5 * (
-            (np.abs(frequencies) - center_frequency)
-            / sigma
-        )**2
-    )
-
-    # ---------------------------------------------------------
-    # FFT
-    # ---------------------------------------------------------
-
-    X_fft = np.fft.fft(
-        X,
-        axis=0
-    )
-
-    # ---------------------------------------------------------
-    # Apply Gaussian filter
-    # ---------------------------------------------------------
-
-    X_fft_filtered = (
-        X_fft
-        * kernel[:, None]
-    )
-
-    # ---------------------------------------------------------
-    # Inverse FFT
-    # ---------------------------------------------------------
-
-    X_filtered = np.fft.ifft(
-        X_fft_filtered,
-        axis=0
-    ).real
-
+    frequencies = np.fft.fftfreq(n_samples,d=1 / fs)
+    sigma = bandwidth / (2 * np.sqrt(2 * np.log(2)))
+    kernel = np.exp(-0.5 * ((np.abs(frequencies) - center_frequency)/ sigma)**2)
+    X_fft = np.fft.fft(X,axis=0)
+    X_fft_filtered = (X_fft* kernel[:, None])
+    X_filtered = np.fft.ifft(X_fft_filtered,axis=0).real
     return X_filtered
 
 def update_COL_REG(col_reg,all_regions, show=False):

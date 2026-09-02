@@ -40,9 +40,9 @@ r=5
 ieeg_data_mean = get_ieeg_data(ieeg_datapath, ieeg_subj_list)*1000 # Stupid parameter in the preproc TO REMOVE 
 ieeg_data= ieeg_data_mean.mean(0)
 meg_data_source = get_meg_data(meg_outpath, meg_subj_list)
-data_matched = match_meg(meg_data_source, ieeg_subj_list, coord, meg_subj_list, subj_list, average_subject=False).mean(0)
+data_matched = match_meg(meg_data_source, ieeg_subj_list, coord, meg_subj_list, subj_list, average_subject=True).mean(0)
 #meg_data = np.concat([meg_data_source[s, :, :,:] for s in range(meg_data_source.shape[0])], axis=1).mean(0)
-meg_data = data_matched
+meg_data = data_matched #meg_data_source.mean(0).mean(0)  
 
 # scaler  --> NO
 #zero = np.argmin(abs(np.array(time_ieeg)))
@@ -62,8 +62,8 @@ total_var_Y = np.sum(meg_scaled.T**2)
 
 # PLS SVD
 name = 'PLSSVD'
-scale_ = True
-cca = PLSSVD(n_components=10, scale=scale_)
+scale_ = False
+cca = PLSSVD(n_components=200, scale=scale_)
 X_c, Y_c = cca.fit_transform(ieeg_scaled.T, meg_scaled.T)
 
 T = ieeg_scaled.T @ cca.x_weights_    
@@ -91,7 +91,7 @@ df['correlation'] = [np.corrcoef(X_c[:, i],Y_c[:, i])[0, 1] for i in range(10)]
 df['explained_X'] = explained_X
 df['explained_Y'] = explained_Y
 
-outs=f'out/cross_models_scale_{str(scale_)}_match'
+outs=f'out/cross_models/cross_models_scale_{str(scale_)}_match_avg'
 if not os.path.exists(outs):
     os.makedirs(outs)
 
