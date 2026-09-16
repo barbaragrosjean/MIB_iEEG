@@ -1,13 +1,13 @@
-
 import os
-from src.config import  OUT_PATH, FREQ_BAND
-from src.decoding import decodingTS, LR, TemporalLR, TemporalGeneralization, TemporalLRRaw, TemporalGeneralizationRaw, CompareClassifier
-from src.setting import ExcludSubj
-
 import json
 import warnings
 import argparse
 import numpy as np
+
+from src.config import  OUT_PATH, FREQ_BAND
+from src.decoding import decodingTS, LR, TemporalLR, TemporalGeneralization, TemporalLRRaw, TemporalGeneralizationRaw, CompareClassifier
+from src.setting import ExcludSubj
+
 
 def main_old(band, pc_use):
     iteration =100
@@ -116,7 +116,7 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
        'BJH027', 'OS70', 'BJH052', 'OS61', 'BJH041', 'BJH046', 'BJH056',
        'LL31', 'BJH039', 'BJH042', 'BJH026', 'LL08', 'SLCH018', 'BJH029',
        'DA037', 'BJH058', 'SLCH024', 'BJH049']}
-    subj_included = subj_included_restricted[16]
+    #subj_included = subj_included_restricted[16]
 
     # get time 
     if bs_decoding :
@@ -135,8 +135,8 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
         crop_arg = {'crop' : False, 't_id_min':None, 't_id_max' : None}
 
     iteration = 100
-    iter_perm = 100
-    nb_trials = 16 #24
+    iter_perm = 1000
+    nb_trials = 24
     decodingTS(band, 
             method_pca, 
             data_aug_method,
@@ -144,7 +144,7 @@ def mainTS(band, pc_use, model, method_pca, data_aug_method, bs_decoding=False):
             iteration=iteration, 
             PC_use=pc_use, 
             save=True, 
-            out_path=f'{OUT_PATH}/Decoding_shuffled_trials_mf70-160_res', 
+            out_path=f'{OUT_PATH}/Decoding_shuffled_trials_mf70-160_perm10000', 
             iter_perm=iter_perm, 
             data_path=tfr_path, 
             model_name = model, 
@@ -221,31 +221,40 @@ def mainTG(band, method_pca, data_aug_method):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Specific frequency band")
-    parser.add_argument("--band", type=str, choices=FREQ_BAND + ['broadband'], required=False,
+    parser.add_argument("--band", 
+                        type=str, 
+                        choices=FREQ_BAND + ['broadband'], 
+                        required=False,
                         help="Frequency band to process.")
     
-    parser.add_argument("--pc_use", type=int, choices=[0, 1, 2, 3, 4, 5], required=False,
+    parser.add_argument("--pc_use", 
+                        type=int, 
+                        choices=[0, 1, 2, 3, 4, 5], 
+                        required=False,
                         help="PC to use to process.")
     
-    parser.add_argument("--model", type=str, choices=["LR", "SVC_linear", "SVC_rbf", "RandomForest"], required=False,
+    parser.add_argument("--model", 
+                        type=str, 
+                        choices=["LR", "SVC_linear", "SVC_rbf", "RandomForest"], 
+                        required=False,
                         help="Model to run.")
 
-    parser.add_argument("--method_pca", type=str, choices=["concat", "mean"], required=False,
+    parser.add_argument("--method_pca", 
+                        type=str, 
+                        choices=["concat", "mean"], 
+                        required=False,
                         help="PCA method to select.")
     
-    parser.add_argument("--method_data_aug", type=str, choices=["mean", "duplicat"], required=False,
+    parser.add_argument("--method_data_aug", 
+                        type=str, 
+                        choices=["mean", "duplicat"], 
+                        required=False,
                         help="Method for data augmentation.")
     
     args = parser.parse_args()
 
     #TSwTemporalMasking(args.band, args.pc_use, 'SVC_rbf', 'mean', args.method_data_aug, bs_decoding=False)
-
-    for pc_use in [0, 1, 2] : 
-        print('Pc:', pc_use)
-        for model in ['RandomForest'] : 
-            print('Model:', model)
-            mainTS('high_gamma', pc_use, model, 'concat', None, bs_decoding=False)
-
+    mainTS('high_gamma', 2, 'RandomForest', 'concat', 'mean', bs_decoding=False)
 
     # TemporalLRRaw(band=args.band, data_aug_method=args.method_data_aug, 
     #               data_path = OUT_PATH + '/Data_longWOBS',iteration=100, 
