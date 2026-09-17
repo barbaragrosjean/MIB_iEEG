@@ -305,7 +305,7 @@ def compute_tr_gc(x, y, start,end, maxlag, z=None, perm = None):
 
     return gc, bic, Fval, pval
 
-def compute_tr_gc_surrogate(x, y, start, end, maxlag, z=None,n_perm=2, perm=None):
+def compute_tr_gc_surrogate_old(x, y, start, end, maxlag, z=None,n_perm=2, perm=None):
     gc_obs, bic_obs, F_obs, p_obs = compute_tr_gc(x, y, start, end, maxlag, z)
     F_null = np.zeros(n_perm)
     Gc_null=np.zeros(n_perm)
@@ -316,6 +316,15 @@ def compute_tr_gc_surrogate(x, y, start, end, maxlag, z=None,n_perm=2, perm=None
     p_emp = (np.sum(F_null >= F_obs) + 1) / (n_perm + 1)
 
     return gc_obs,bic_obs, F_obs, p_obs, p_emp, str(F_null), np.percentile(F_null, 95),np.mean(F_null),np.std(F_null), np.percentile(Gc_null, 95), np.mean(Gc_null), np.std(Gc_null)
+
+def compute_tr_gc_surrogate(x, y, start, end, maxlag,z=None, n_perm=50, perm=None):
+    gc_obs, bic_obs, F_obs, p_obs = compute_tr_gc(x, y, start, end, maxlag, z)
+    Gc_null = np.zeros(n_perm)
+    for iperm in range(n_perm):
+        gc_s, _, _, _ = compute_tr_gc(x, y,start, end,maxlag,z,perm=perm)
+        Gc_null[iperm] = gc_s
+    return gc_obs, bic_obs, F_obs, p_obs, Gc_null
+
 
 ################################### VIZ AND INTRO (CHAT) ###################################
     
