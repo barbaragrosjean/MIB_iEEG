@@ -1,8 +1,6 @@
 import numpy as np
-import pandas as pd
 import os
 import json
-import random
 
 from src.config import OUT_PATH
 from src.decomposition import prep_data_trial
@@ -30,16 +28,14 @@ if not os.path.exists(out_path):
 
 #seed=42
 #random.seed(seed) 
-    
 lags = [2, 3, 4, 5, 6, 7, 8, 9, 10, 15] 
 window_len=15
 n_windows = len(time) - window_len
 directions = [(0, 1), (1, 0),(0, 2), (2, 0),(1, 2), (2, 1)]
 
-method_perm = 'block'   #circular, shuffle, block
-n_perm=50 # 50
+method_perm = 'circular'   #circular, shuffle, block
+n_perm=100 # 50
 nb_run=20 #50
-
 
 print('Method perm', method_perm)
 
@@ -96,9 +92,8 @@ for r in range(nb_run):
                 tstart[e] = time[start]
                 tend_arr[e] = time[tend - 1]
 
-            path_to_save = (out_path + f"/{lab}_{n}_{method_perm}{n_perm}/")
-            os.makedirs(path_to_save,exist_ok=True)
-            np.savez_compressed(path_to_save + f"/r{r}.npz",
+            os.makedirs(out_path,exist_ok=True)
+            np.savez_compressed(out_path + f"/{lab}_{n}_{method_perm}{n_perm}_r{r}.npz",
                                 gc_obs=gc_obs,
                                 bic_obs=bic_obs,
                                 F_obs=F_obs,
