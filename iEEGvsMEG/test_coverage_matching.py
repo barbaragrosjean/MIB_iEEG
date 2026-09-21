@@ -143,6 +143,15 @@ class CoverageTests(unittest.TestCase):
             np.testing.assert_allclose(data['ieeg'][0], epochs[:30].mean(0))
             np.testing.assert_array_equal(data['electrode_positions'][:, 0], [10, 20, 30])
             self.assertEqual(data['trial_counts'].n_trials.tolist(), [30, 30])
+            prepared = load_project_data(meg, ieeg,
+                **{**kwargs, 'metadata_csv': None, 'electrode_metadata': meta,
+                   'meg_subjects': ['M'], 'ieeg_subjects': ['I']})
+            np.testing.assert_array_equal(prepared['electrode_positions'], data['electrode_positions'])
+            self.assertEqual(prepared['load_config']['metadata_source'], 'prepared_dataframe')
+            with self.assertRaisesRegex(ValueError, 'not both'):
+                load_project_data(meg, ieeg, **kwargs, electrode_metadata=meta)
+            with self.assertRaisesRegex(ValueError, 'duplicates'):
+                load_project_data(meg, ieeg, **kwargs, meg_subjects=['M', 'M'])
             with self.assertRaisesRegex(ValueError, 'not aligned'):
                 load_project_data(meg, ieeg, **{**kwargs, 'meg_tmin': 0})
             with self.assertRaisesRegex(ValueError, 'verified MEG_TMIN'):

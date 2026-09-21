@@ -52,6 +52,7 @@ def _preprocess(a, mode, multiplier=1.):
 
 
 def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
+                      electrode_metadata=None, meg_subjects=None, ieeg_subjects=None,
                       project_path=None, meg_coordinate_unit='m',
                       ieeg_coordinate_unit='mm', meg_scaling='channel_zscore',
                       ieeg_scaling='none', ieeg_multiplier=1000.,
@@ -62,7 +63,10 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
     MEG: <subject>_source.p and <subject>_pos.csv. iEEG:
     <subject>_epochs.p (trial x channel x time), <subject>_info.json.
     CSV metadata: subject, channel_index (zero-based within saved epochs),
-    x, y, z; optional channel/region. Alternatively use original GetInfo.
+    x, y, z; optional channel/region. Pass the same columns directly as an
+    electrode_metadata DataFrame to reuse already prepared GetInfo metadata.
+    Optional subject lists preserve the supplied participant selection/order.
+    Alternatively use original GetInfo.
     Pickles must come from a trusted source.
 
     MEG time must be supplied as .npy/.csv or explicit tmin and sfreq.
@@ -70,8 +74,14 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
     matches the iEEG time vector after removing exactly that sample.
     """
     meg_dir, ieeg_dir = Path(meg_dir), Path(ieeg_dir)
-    meg_subjects = sorted(p.name.removesuffix('_source.p') for p in meg_dir.glob('*_source.p'))
-    ieeg_subjects = sorted(p.name.removesuffix('_epochs.p') for p in ieeg_dir.glob('*_epochs.p'))
+    meg_subjects = (sorted(p.name.removesuffix('_source.p') for p in meg_dir.glob('*_source.p'))
+                    if meg_subjects is None else list(map(str, meg_subjects)))
+    ieeg_subjects = (sorted(p.name.removesuffix('_epochs.p') for p in ieeg_dir.glob('*_epochs.p'))
+                     if ieeg_subjects is None else list(map(str, ieeg_subjects)))
+    if len(set(meg_subjects)) != len(meg_subjects) or len(set(ieeg_subjects)) != len(ieeg_subjects):
+        raise ValueError('Participant lists must not contain duplicates.')
+    if metadata_csv is not None and electrode_metadata is not None:
+        raise ValueError('Provide metadata_csv or electrode_metadata, not both.')
     if not meg_subjects or not ieeg_subjects:
         raise FileNotFoundError(f'No source/epoch pickles found. Check {meg_dir} and {ieeg_dir}.')
     ieeg_arrays, counts, trial_rows, times = [], [], [], None
@@ -99,11 +109,13 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
         ieeg_arrays.append(_preprocess(np.stack(averages), ieeg_scaling, ieeg_multiplier))
         counts.append(epochs.shape[1])
     owners = np.repeat(ieeg_subjects, counts)
-    if metadata_csv is not None:
-        meta = pd.read_csv(metadata_csv, dtype={'subject': str})
+    if metadata_csv is not None or electrode_metadata is not None:
+        meta = (pd.read_csv(metadata_csv, dtype={'subject': str})
+                if electrode_metadata is None else electrode_metadata.copy())
         required = {'subject', 'channel_index', 'x', 'y', 'z'}
         if not required <= set(meta.columns):
-            raise ValueError(f'Metadata CSV requires {sorted(required)}.')
+            raise ValueError(f'Electrode metadata requires {sorted(required)}.')
+        meta['subject'] = meta['subject'].astype(str)
         if meta.duplicated(['subject', 'channel_index']).any():
             raise ValueError('Duplicate subject/channel_index metadata.')
         expected = pd.MultiIndex.from_tuples(
@@ -157,7 +169,14 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
                 ieeg=np.concatenate(ieeg_arrays, axis=1), ieeg_subjects=ieeg_subjects,
                 electrode_subjects=owners, electrode_positions=coord,
                 electrode_metadata=meta, times=times,
-                trial_counts=pd.DataFrame(trial_rows))
+                trial_counts=pd.DataFrame(trial_rows),
+                load_config=dict(meg_dir=str(meg_dir), ieeg_dir=str(ieeg_dir),
+                    metadata_source=('prepared_dataframe' if electrode_metadata is not None else
+                                     str(metadata_csv) if metadata_csv is not None else 'GetInfo'),
+                    meg_coordinate_unit=meg_coordinate_unit, ieeg_coordinate_unit=ieeg_coordinate_unit,
+                    meg_scaling=meg_scaling, ieeg_scaling=ieeg_scaling, ieeg_multiplier=ieeg_multiplier,
+                    meg_times_file=str(meg_times_file) if meg_times_file is not None else None,
+                    meg_tmin=meg_tmin, sfreq=sfreq, conditions=list(conditions)))
 
 
 def observations(a, condition_mode='average'):
