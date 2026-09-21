@@ -33,9 +33,16 @@ window_len=15
 n_windows = len(time) - window_len
 directions = [(0, 1), (1, 0),(0, 2), (2, 0),(1, 2), (2, 1)]
 
-method_perm = 'circular'   #circular, shuffle, block
-n_perm=100 # 50
-nb_run=20 #50
+method_perm = 'block'   #circular, shuffle, block
+n_perm=100 
+nb_run=20 
+reverse_time = True
+
+if reverse_time :
+    time_rev = time[::-1]
+    particule = '_reversed'
+else :
+    particule = ''
 
 print('Method perm', method_perm)
 
@@ -46,6 +53,10 @@ for r in range(nb_run):
     _, X_2_old, X_2_new, _, _ = prep_data_trial(band, method_pca, None,subj_included_restricted[nb_trials],2, tfr_path,nb_trials=nb_trials - 1)
     X_old = [X_0_old, X_1_old, X_2_old]
     X_new = [X_0_new, X_1_new, X_2_new]
+
+    if reverse_time:
+        X_old = [x[:, ::-1] for x in X_old]
+        X_new = [x[:, ::-1] for x in X_new]
 
     for X, n in zip([X_old, X_new],["old", "new"]):
         for idx0, idx1 in directions:
@@ -93,7 +104,7 @@ for r in range(nb_run):
                 tend_arr[e] = time[tend - 1]
 
             os.makedirs(out_path,exist_ok=True)
-            np.savez_compressed(out_path + f"/{lab}_{n}_{method_perm}{n_perm}_r{r}.npz",
+            np.savez_compressed(out_path + f"/{lab}_{n}_{method_perm}{n_perm}_r{r}{particule}.npz",
                                 gc_obs=gc_obs,
                                 bic_obs=bic_obs,
                                 F_obs=F_obs,
@@ -103,51 +114,3 @@ for r in range(nb_run):
                                 tmean=tmean,
                                 tstart=tstart,
                                 tend=tend_arr)
-
-'''
-
-for r in range(nb_run):
-    _,  X_0_old, X_0_new, _, _ = prep_data_trial(band, method_pca, None, subj_included_restricted[nb_trials], 0,tfr_path, nb_trials=nb_trials-1)
-    _,  X_1_old, X_1_new, _, _ = prep_data_trial(band, method_pca, None,  subj_included_restricted[nb_trials], 1,tfr_path, nb_trials=nb_trials-1)
-    _,  X_2_old, X_2_new, _, _ = prep_data_trial(band, method_pca, None, subj_included_restricted[nb_trials], 2,tfr_path, nb_trials=nb_trials-1)
-    X_old=[X_0_old, X_1_old, X_2_old]
-    X_new=[X_0_new, X_1_new, X_2_new]
-
-
-    for X, n in zip([X_old, X_new], ['old',  'new']):
-        Res_all ={}
-        for idx0, idx1 in [(0, 1), (1, 0), (0, 2), (2, 0), (1, 2), (2, 1)]:
-            lab=f'{idx0}to{idx1}'
-            data=(X[idx0], X[idx1])
-            Res_all[lab] = pd.DataFrame(columns = ["gc_obs", "bic_obs", "F_obs", "p_obs", "Gc_null",
-                                                   'lag (tp)', 'lag (ms)', 'tmean', 'tstart', 'tend'])
-                                                   #'gc', 'bic', 'Fval', 'pval','p_emp','F_null', 'F_null_p', 
-                                                #'F_null_m', 'F_null_sd','gc_s_p', 'gc_s_m', 'gc_s_sd', 
-                                                
-            for e in range(len(time)-window_len):
-                start = e
-                tend = e+ window_len
-                res = pd.DataFrame(columns = ["gc_obs", "bic_obs", "F_obs", "p_obs", "Gc_null"])
-                    #columns = ['gc', 'bic', 'Fval', 'pval','p_emp','F_null', 'F_null_p','F_null_m', 'F_null_sd', 'gc_s_p', 'gc_s_m', 'gc_s_sd'])
-    
-                for l, mlag in enumerate(lags) :
-                    if ((data[0].shape[0] * ((window_len) - mlag)) / (2*mlag) >= 10) and (mlag <= abs(window_len)):
-                        res.loc[l, :] = compute_tr_gc_surrogate(x=data[0], y=data[1], start=start, end=tend, maxlag=mlag, z=None,n_perm=n_perm, perm=method_perm)
-                    else : 
-                        res.loc[l, :] = [np.nan, np.nan,np.nan, np.nan,np.nan , np.nan, np.nan,np.nan ,np.nan,np.nan , np.nan, np.nan]
-
-                res.loc[:, 'lag (tp)'] = lags
-                res.loc[:, 'lag (ms)'] = [1000*l/40 for l in lags]
-                res.loc[:, 'tmean'] = np.mean(time[start:tend])
-                res.loc[:, 'tstart'] = time[start]
-                res.loc[:, 'tend'] = time[tend]
-                Res_all[lab].loc[e, :] = res.loc[np.argmin(res['bic']), :]
-            
-
-            path_to_save = out_path + f'/{lab}_{n}_{method_perm}{n_perm}/'
-            if not os.path.exists(path_to_save) :
-                os.makedirs(path_to_save)
-
-            Res_all[lab].to_csv(path_to_save +f'/r{r}.csv')
-
-'''
