@@ -15,7 +15,8 @@ from sklearn.decomposition import PCA
 from utils_updated import (
     construct_five_datasets, synthetic_inputs, fit_block_pca,
     observations, make_ieeg_dataset, variance_summary, compare_to_ieeg,
-    load_project_data,
+    load_project_data, load_dataset, compute_variance, compute_pca,
+    correlate_timecourses, correlate_weights,
 )
 
 
@@ -118,6 +119,28 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(result.scores.shape[1], 1)
         self.assertAlmostEqual(result.explained_variance_ratio.sum(), 1.)
 
+    def test_simple_api_selects_one_setup_and_preserves_comparisons(self):
+        reference = make_ieeg_dataset(self.inputs['ieeg'], self.inputs['electrode_metadata'])
+        reference.source_data = self.inputs
+        expected, _, _ = self.build(seed=2026)
+        reference_pca = compute_pca(reference)
+        for kind in expected:
+            selected = load_dataset(kind, reference=reference)
+            self.assertIs(selected.source_data, self.inputs)
+            for a, b in zip(selected.arrays, expected[kind].arrays):
+                np.testing.assert_array_equal(a, b)
+            selected_pca = compute_pca(selected)
+            self.assertAlmostEqual(compute_variance(selected)['total_variance'],
+                                   selected_pca.total_variance, places=6)
+            c = compare_to_ieeg(selected, selected_pca, reference_pca)
+            np.testing.assert_allclose(correlate_timecourses(selected_pca, reference_pca, plot=False), c['time'])
+            np.testing.assert_allclose(correlate_weights(selected_pca, reference_pca, plot=False), c['weights'])
+        paired = load_dataset('paired_coverage', reference=reference)
+        random = load_dataset('random_control', reference=reference)
+        self.assertEqual(paired.pairing, random.pairing)
+        with self.assertRaises(ValueError):
+            load_dataset('invalid', reference=reference)
+
     def test_original_file_layout_loading_and_temporal_validation(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -143,6 +166,10 @@ class CoverageTests(unittest.TestCase):
             np.testing.assert_allclose(data['ieeg'][0], epochs[:30].mean(0))
             np.testing.assert_array_equal(data['electrode_positions'][:, 0], [10, 20, 30])
             self.assertEqual(data['trial_counts'].n_trials.tolist(), [30, 30])
+            loaded = load_dataset('ieeg', meg_dir=meg, ieeg_dir=ieeg, **kwargs)
+            self.assertEqual(loaded.name, 'iEEG')
+            np.testing.assert_array_equal(loaded.arrays[0], data['ieeg'])
+            self.assertEqual(load_dataset('paired_coverage', reference=loaded).n_features, 3)
             prepared = load_project_data(meg, ieeg,
                 **{**kwargs, 'metadata_csv': None, 'electrode_metadata': meta,
                    'meg_subjects': ['M'], 'ieeg_subjects': ['I']})

@@ -195,6 +195,9 @@ class Dataset:
     metadata: pd.DataFrame
     electrode_to_feature: np.ndarray
     condition_mode: str = 'average'
+    source_data: dict = None  # shared loaded arrays; populated by load_dataset
+    matching: pd.DataFrame = None
+    pairing: dict = None
 
     def blocks(self):
         for a in self.arrays:
@@ -219,7 +222,8 @@ def _metadata(pos, subject, source_index=None):
 
 def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_positions,
                             electrode_subjects, *, seed=2026, pairing=None,
-                            condition_mode='average', random_preserve_duplicates=True):
+                            condition_mode='average', random_preserve_duplicates=True,
+                            kinds=None):
     """Build five setups, preserving electrode row identity in all matches.
 
     Full concatenation is a list of participant blocks, never a giant matrix.
@@ -230,6 +234,9 @@ def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_position
     replacement. The control keeps that pairing and randomises source locations.
     By default it also preserves matched-source duplication multiplicities.
     """
+    requested = set(SETUP_NAMES if kinds is None else kinds)
+    if not requested or not requested <= set(SETUP_NAMES):
+        raise ValueError(f'Unknown MEG setup: {requested - set(SETUP_NAMES)}')
     meg_subjects = list(map(str, meg_subjects))
     owners = np.asarray(electrode_subjects, dtype=str)
     coords = np.asarray(electrode_positions, dtype=float)
@@ -270,12 +277,17 @@ def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_position
         nearest.append(ix)
         distances.append(d)
     working_dtype = np.result_type(np.float32, *[a.dtype for a in meg])
-    avg = np.zeros(shape, dtype=working_dtype)
-    group = np.zeros((shape[0], n, shape[2]), dtype=working_dtype)
-    for a, ix in zip(meg, nearest):
-        avg += a / len(meg)
-        group += np.take(a, ix, axis=1) / len(meg)
-    paired, control = np.empty_like(group), np.empty_like(group)
+    matched_shape = (shape[0], n, shape[2])
+    avg = np.zeros(shape, dtype=working_dtype) if 'full_average' in requested else None
+    group = np.zeros(matched_shape, dtype=working_dtype) if 'coverage_average' in requested else None
+    if avg is not None or group is not None:
+        for a, ix in zip(meg, nearest):
+            if avg is not None:
+                avg += a / len(meg)
+            if group is not None:
+                group += np.take(a, ix, axis=1) / len(meg)
+    paired = np.empty(matched_shape, dtype=working_dtype) if 'paired_coverage' in requested else None
+    control = np.empty(matched_shape, dtype=working_dtype) if 'random_control' in requested else None
     paired_pos, random_pos = np.empty((n, 3)), np.empty((n, 3))
     paired_indices, random_indices = np.empty(n, int), np.empty(n, int)
     paired_subjects = np.empty(n, object)
@@ -293,8 +305,10 @@ def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_position
             if len(rows) > meg[j].shape[1]:
                 raise ValueError('More electrodes than available random sources.')
             rx = control_rng.choice(meg[j].shape[1], len(rows), replace=False)
-        paired[:, rows, :] = np.take(meg[j], ix, axis=1)
-        control[:, rows, :] = np.take(meg[j], rx, axis=1)
+        if paired is not None:
+            paired[:, rows, :] = np.take(meg[j], ix, axis=1)
+        if control is not None:
+            control[:, rows, :] = np.take(meg[j], rx, axis=1)
         paired_pos[rows], random_pos[rows] = meg_positions[j][ix], meg_positions[j][rx]
         paired_indices[rows], random_indices[rows] = ix, rx
         paired_subjects[rows] = meg_subjects[j]
@@ -305,16 +319,18 @@ def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_position
                               random_source_index=int(random_source),
                               distance_mm=float(distances[j][row]),
                               random_distance_mm=float(np.linalg.norm(meg_positions[j][random_source] - coords[row]))))
-    full_meta = pd.concat([_metadata(p, s) for p, s in zip(meg_positions, meg_subjects)], ignore_index=True)
+    full_meta = (pd.concat([_metadata(p, s) for p, s in zip(meg_positions, meg_subjects)], ignore_index=True)
+                 if 'full_concatenated' in requested else None)
     group_pos = np.mean([p[ix] for p, ix in zip(meg_positions, nearest)], axis=0)
-    datasets = {
-        'full_average': Dataset('full_average', [avg], _metadata(meg_positions[0], 'participant_average'), nearest[0], condition_mode),
-        'full_concatenated': Dataset('full_concatenated', meg, full_meta, full_map, condition_mode),
-        'coverage_average': Dataset('coverage_average', [group], _metadata(group_pos, 'participant_average', nearest[0]), np.arange(n), condition_mode),
-        'paired_coverage': Dataset('paired_coverage', [paired], _metadata(paired_pos, paired_subjects, paired_indices), np.arange(n), condition_mode),
-        'random_control': Dataset('random_control', [control], _metadata(random_pos, paired_subjects, random_indices), np.arange(n), condition_mode),
+    builders = {
+        'full_average': lambda: Dataset('full_average', [avg], _metadata(meg_positions[0], 'participant_average'), nearest[0], condition_mode),
+        'full_concatenated': lambda: Dataset('full_concatenated', meg, full_meta, full_map, condition_mode),
+        'coverage_average': lambda: Dataset('coverage_average', [group], _metadata(group_pos, 'participant_average', nearest[0]), np.arange(n), condition_mode),
+        'paired_coverage': lambda: Dataset('paired_coverage', [paired], _metadata(paired_pos, paired_subjects, paired_indices), np.arange(n), condition_mode),
+        'random_control': lambda: Dataset('random_control', [control], _metadata(random_pos, paired_subjects, random_indices), np.arange(n), condition_mode),
     }
-    for name in SETUP_NAMES[2:]:
+    datasets = {name: builders[name]() for name in SETUP_NAMES if name in requested}
+    for name in requested.intersection(SETUP_NAMES[2:]):
         datasets[name].metadata['electrode_index'] = np.arange(n)
         datasets[name].metadata['ieeg_subject'] = owners
     for ds in datasets.values():
@@ -353,6 +369,7 @@ class PCAResult:
     explained_variance: np.ndarray
     explained_variance_ratio: np.ndarray
     total_variance: float
+    dataset: Dataset = None  # attached by compute_pca for plotting/comparison
 
 
 def fit_block_pca(dataset, n_components=10, feature_chunk=1024, max_gram_gib=2.):
@@ -545,3 +562,183 @@ def synthetic_inputs(seed=0):
                 meg_subjects=['M1', 'M2', 'M3', 'M4'], electrode_positions=coords,
                 electrode_subjects=owners, ieeg=ieeg, electrode_metadata=meta,
                 times=times, trial_counts=pd.DataFrame())
+
+
+# Simple notebook API --------------------------------------------------------
+
+def load_dataset(kind, *, reference=None, condition_mode=None, seed=2026,
+                 pairing=None, **file_options):
+    """Load 'ieeg' or one MEG setup and keep everything needed downstream.
+
+    First call: load_dataset('ieeg', meg_dir=..., ieeg_dir=..., ...).
+    Subsequent calls: load_dataset('paired_coverage', reference=ieeg).
+    File options are those of load_project_data. A reference reuses the loaded
+    arrays (no disk reload). Only the requested MEG dataset is constructed.
+    Use the same seed/pairing for the paired and random-control setups.
+    """
+    if kind not in ('ieeg', 'iEEG', *SETUP_NAMES):
+        raise ValueError(f'Choose ieeg or one of {SETUP_NAMES}.')
+    if reference is None:
+        inputs = load_project_data(**file_options)
+    else:
+        if file_options:
+            raise ValueError('Pass file options on the first load only; reference reuses those data.')
+        inputs = reference.source_data
+        if inputs is None:
+            raise ValueError('reference must come from load_dataset.')
+    mode = condition_mode or (reference.condition_mode if reference is not None else 'average')
+    if mode not in ('average', 'stack'):
+        raise ValueError("condition_mode must be 'average' or 'stack'.")
+    if kind.lower() == 'ieeg':
+        dataset = make_ieeg_dataset(inputs['ieeg'], inputs['electrode_metadata'], mode)
+    else:
+        selected, audit, used_pairing = construct_five_datasets(
+            inputs['meg'], inputs['meg_positions'], inputs['meg_subjects'],
+            inputs['electrode_positions'], inputs['electrode_subjects'],
+            seed=seed, pairing=pairing, condition_mode=mode, kinds=[kind],
+        )
+        dataset = selected[kind]
+        dataset.matching = audit
+        dataset.pairing = used_pairing
+    dataset.source_data = inputs
+    return dataset
+
+
+def compute_variance(dataset):
+    """Total/mean feature variance, feature count and observation count."""
+    return variance_summary({dataset.name: dataset}).loc[dataset.name, [
+        'n_observations', 'n_features', 'total_variance', 'mean_feature_variance',
+    ]]
+
+
+def show_coverage(dataset, max_points=20000):
+    """Show MNI channel/source positions on a glass brain; skip large sets."""
+    if dataset.n_features > max_points:
+        print(f'Skipping {dataset.name} coverage: {dataset.n_features:,} features.')
+        return None
+    from nilearn import plotting
+    pos = dataset.metadata[['x', 'y', 'z']].drop_duplicates().to_numpy()
+    fig = plt.figure(figsize=(11, 3.5))
+    plotting.plot_markers(
+        np.ones(len(pos)), pos, node_size=8, node_cmap='Blues',
+        node_vmin=0, node_vmax=1, node_threshold=None,
+        figure=fig, colorbar=False,
+        title=f'{dataset.name}: {dataset.n_features:,} features / {len(pos):,} locations',
+    )
+    plt.show()
+    plt.close(fig)
+    return fig
+
+
+def compute_pca(dataset, n_components=10):
+    """Compute centred, unwhitened PCA; retain dataset metadata for plots."""
+    result = fit_block_pca(dataset, n_components=n_components)
+    result.dataset = dataset
+    return result
+
+
+def plot_pca_timecourses(result):
+    """Show all retained score time courses and individual/cumulative EVR."""
+    data = result.dataset
+    if data is None or data.source_data is None:
+        raise ValueError('Use compute_pca on a dataset from load_dataset.')
+    conditions = data.source_data.get('load_config', {}).get(
+        'conditions', list(range(1, data.arrays[0].shape[0] + 1)))
+    temporal = plot_pca(result, data.name, data.source_data['times'],
+                        data.condition_mode, conditions)
+    plt.show()
+    plt.close(temporal)
+    variance = plot_explained_variance({data.name: result})
+    plt.show()
+    plt.close(variance)
+    return temporal, variance
+
+
+def plot_pca_weights(result, n_components=3):
+    """Signed PCA extraction weights on glass brains (MNI mm).
+
+    Co-located weights are averaged ONLY for plotting, especially participant
+    blocks in full_concatenated. Underlying PCA weights stay unchanged. Each
+    component uses its own symmetric colour range, without magnitude threshold.
+    """
+    from nilearn import plotting
+    if result.dataset is None:
+        raise ValueError('Use compute_pca to attach source locations.')
+    if n_components < 1:
+        raise ValueError('n_components must be positive.')
+    k = min(n_components, result.weights.shape[1])
+    table = result.dataset.metadata[['x', 'y', 'z']].copy()
+    if len(table) != len(result.weights):
+        raise ValueError('Weight rows do not match feature coordinates.')
+    columns = [f'PC{i+1}' for i in range(k)]
+    table[columns] = result.weights[:, :k]
+    grouped = table.groupby(['x', 'y', 'z'], sort=False)[columns].mean().reset_index()
+    note = ' (mean at co-located features)' if len(grouped) < len(table) else ''
+    fig, axes = plt.subplots(k, 1, figsize=(12, 3.3 * k), squeeze=False)
+    for pc, ax in enumerate(axes[:, 0]):
+        values = grouped[columns[pc]].to_numpy()
+        limit = float(np.max(np.abs(values))) or 1.
+        plotting.plot_markers(
+            values, grouped[['x', 'y', 'z']].to_numpy(),
+            node_size=7, node_cmap='RdBu_r', node_vmin=-limit, node_vmax=limit,
+            node_threshold=None, colorbar=True, figure=fig, axes=ax,
+            title=f'{result.dataset.name}: PC{pc+1}{note}',
+        )
+    plt.show()
+    plt.close(fig)
+    return fig
+
+
+def _correlation_plot(matrix, name, title, plot):
+    frame = pd.DataFrame(matrix,
+                         index=[f'MEG PC{i+1}' for i in range(matrix.shape[0])],
+                         columns=[f'iEEG PC{i+1}' for i in range(matrix.shape[1])])
+    if plot:
+        fig, ax = plt.subplots(figsize=(6, 5), constrained_layout=True)
+        im = ax.imshow(matrix, vmin=-1, vmax=1, cmap='RdBu_r', aspect='auto')
+        ax.set(title=f'{name}: {title}', xlabel='iEEG PC', ylabel='MEG PC',
+               xticks=range(matrix.shape[1]), xticklabels=range(1, matrix.shape[1]+1),
+               yticks=range(matrix.shape[0]), yticklabels=range(1, matrix.shape[0]+1))
+        fig.colorbar(im, ax=ax, label='Signed Pearson r')
+        plt.show()
+        plt.close(fig)
+    return frame
+
+
+def _check_comparison(meg, ieeg):
+    if meg.dataset is None or ieeg.dataset is None:
+        raise ValueError('Both PCA results must come from compute_pca.')
+    a, b = meg.dataset.source_data, ieeg.dataset.source_data
+    if a is None or b is None:
+        raise ValueError('Both datasets must come from load_dataset.')
+    if ieeg.dataset.name != 'iEEG':
+        raise ValueError('The second PCA must be the iEEG reference.')
+    if meg.dataset.condition_mode != ieeg.dataset.condition_mode:
+        raise ValueError('PCA condition modes differ.')
+    if not np.array_equal(a['times'], b['times']):
+        raise ValueError('Time axes differ.')
+    if a.get('load_config', {}).get('conditions') != b.get('load_config', {}).get('conditions'):
+        raise ValueError('Condition order differs.')
+    if (not np.array_equal(a['electrode_subjects'], b['electrode_subjects']) or
+            not np.array_equal(a['electrode_positions'], b['electrode_positions'])):
+        raise ValueError('iEEG electrode reference/order differs.')
+
+
+def correlate_timecourses(meg, ieeg, plot=True):
+    """All MEG-PC x iEEG-PC score correlations; return a DataFrame and plot."""
+    _check_comparison(meg, ieeg)
+    matrix = cross_correlations(meg.scores, ieeg.scores)
+    return _correlation_plot(matrix, meg.dataset.name, 'time courses', plot)
+
+
+def correlate_weights(meg, ieeg, plot=True):
+    """All PC weight correlations in the stored iEEG electrode correspondence.
+
+    Full-source weights are sampled at nearest-source mappings. Random-control
+    weights use non-anatomical random slots. No sign optimisation or p-values.
+    """
+    _check_comparison(meg, ieeg)
+    weights = meg.weights[meg.dataset.electrode_to_feature]
+    matrix = cross_correlations(weights, ieeg.weights)
+    title = 'weights (random, non-anatomical slots)' if meg.dataset.name == 'random_control' else 'weights'
+    return _correlation_plot(matrix, meg.dataset.name, title, plot)
