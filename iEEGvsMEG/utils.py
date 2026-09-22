@@ -5,7 +5,7 @@ from scipy.spatial import cKDTree
 import pandas as pd
 import numpy as np
 import sys
-sys.path.append("..")
+sys.path.append("../LB")
 from sklearn.decomposition import PCA
 from scipy.spatial import cKDTree
 import scipy
@@ -80,30 +80,6 @@ def get_meg_data(meg_outpath,meg_subj_list, type='source' ) :
     
     return meg_data_source  #(32, 2, 3559, 1025)
 
-def match_meg_(meg_data_source, ieeg_subj_list, coord, meg_subj_list, subj_list, return_mask=False) :
-    matched_meg=[]
-    mask = {}
-    # random idx meg
-    id_meg_subj=np.arange(0, len(ieeg_subj_list), 1)
-    random.shuffle(id_meg_subj)
-
-    for i, subj in enumerate(ieeg_subj_list):
-        id_subj = np.where(np.array(subj_list) == subj)
-        coord_subj = np.array(coord)[id_subj]
-
-        pos = pd.read_csv(f'MEG/dataMEG/{meg_subj_list[id_meg_subj[i]]}_pos.csv').drop(columns='Unnamed: 0')
-        tree = cKDTree(pos)
-        _, nearest_idx = tree.query(coord_subj, k=1)
-        to_keep = meg_data_source[i,:,nearest_idx,:]
-        matched_meg.append(to_keep)
-        mask[meg_subj_list[id_meg_subj[i]]] = nearest_idx
-
-    matched_meg = np.concat(matched_meg, axis=0).transpose(1, 0, 2)
-    if return_mask : 
-        return mask
-    
-    return matched_meg
-
 def match_meg(meg_data_source,ieeg_subj_list,coord,meg_subj_list,subj_list,return_mask=False,average_subject=False):
     matched_meg = []
     mask = {}
@@ -129,7 +105,7 @@ def match_meg(meg_data_source,ieeg_subj_list,coord,meg_subj_list,subj_list,retur
             pos = pd.read_csv(f'MEG/dataMEG/{meg_subj}_pos.csv').drop(columns='Unnamed: 0')
             tree = cKDTree(pos)
             _, nearest_idx = tree.query(coord_subj, k=1)
-            to_keep = meg_data_source[i, :, nearest_idx, :]
+            to_keep = meg_data_source[id_meg_subj[i], :, nearest_idx, :]
             mask[meg_subj] = nearest_idx
 
         matched_meg.append(to_keep)

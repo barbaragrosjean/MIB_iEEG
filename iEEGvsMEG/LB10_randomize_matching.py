@@ -3,10 +3,9 @@ import numpy as np
 import sys
 import json
 import pickle
+sys.path.append("../LB")
 
 from utils import match_meg, get_meg_data
-
-sys.path.append("..")
 from sklearn.decomposition import PCA
 from src.setting import GetInfo
 from src.setting import PROJECT_PATH
@@ -45,7 +44,7 @@ for r in range(runs) :
 trans = np.stack(trans) # run, time, compo
 compo = np.stack(compo) #run, compo, channels 
 
-out_path =  'out'
+out_path =  'out/data'
 if not os.path.exists(out_path) : 
     os.makedirs(out_path)
 
