@@ -557,10 +557,73 @@ def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval'):
     result={'summary':pd.DataFrame(summaries),'components':pd.DataFrame(components),'selection':pd.DataFrame(selections),
             'split_audit':pd.DataFrame(split_rows),'participants':pd.DataFrame(participants),'null_tests':null_summary,
             'null_distributions':null_values,'primary_scores':primary_scores,'times':trials.times,'conditions':trials.conditions}
+    np.savez_compressed(out/'trial_axes.npz',times=trials.times,conditions=trials.conditions)
     for name in ('summary','components','selection','split_audit','participants'):result[name].to_csv(out/f'{name}.csv',index=False)
     (out/'validation_options.json').write_text(json.dumps(dict(**options.__dict__,meg_kind=meg_kind,
         ieeg_preprocessing='fixed multiplier 1000',meg_preprocessing='zscore of training condition averages',
         scope='new trials from selected training participants; not held-out participants'),indent=2))
+    return result
+
+
+
+def load_plssvd_results(output_dir, cache_dir=None):
+    """Reload a completed plssvd_eval.py run without reading raw trials.
+
+    Only result tables, axes, primary scores and null distributions are loaded.
+    Large model weights/prediction maps remain on disk; ``artifacts`` provides
+    paths for optional np.load/pd.read_csv access. For older output directories
+    lacking trial_axes.npz, cache_dir may supply axes from manifest.json only.
+    The returned dictionary works directly with plot_plssvd_validation.
+    """
+    root=Path(output_dir).expanduser().resolve()
+    table_names=('summary','components','selection','split_audit','participants')
+    required=[root/f'{name}.csv' for name in table_names]
+    required += [root/'validation_options.json',root/'model_000.npz']
+    missing=[str(path) for path in required if not path.is_file()]
+    if missing:
+        raise FileNotFoundError('Incomplete PLSSVD output folder. Copy the completed run outputs: '
+                                + ', '.join(missing))
+    options=json.loads((root/'validation_options.json').read_text())
+    result={name:pd.read_csv(root/f'{name}.csv') for name in table_names}
+    if sorted(result['summary']['repeat'].unique().tolist())!=list(range(options['repeats'])):
+        raise ValueError('Saved summary does not contain every configured repetition.')
+    axes=root/'trial_axes.npz'
+    if axes.is_file():
+        with np.load(axes,allow_pickle=False) as saved:
+            times=saved['times'];conditions=tuple(saved['conditions'].tolist())
+    elif cache_dir is not None:
+        manifest=json.loads((Path(cache_dir)/'manifest.json').read_text())
+        times=np.asarray(manifest['times']);conditions=tuple(manifest['config']['conditions'])
+    else:
+        raise FileNotFoundError(f'Missing {axes}. Copy trial_axes.npz from the cluster run, '
+                                'or provide cache_dir for an older run.')
+    if times.ndim!=1 or not len(times) or len(conditions)!=2:
+        raise ValueError('Invalid saved time/condition axes.')
+    k=int(result['summary'].loc[result['summary']['repeat']==0,'selected_k'].iloc[0])
+    primary={}
+    with np.load(root/'model_000.npz',allow_pickle=False) as saved:
+        for part in ('train','tune','test_a','test_b','test'):
+            primary[part]={}
+            for modality in ('ieeg','meg'):
+                scores=saved[f'{part}_{modality}']
+                if scores.shape!=(len(times)*len(conditions),k):
+                    raise ValueError(f'Saved {part}/{modality} scores disagree with axes or selected_k.')
+                primary[part][modality]=scores
+    null_tests=pd.DataFrame();null_distributions={}
+    if options.get('n_null',0):
+        null_tests=pd.read_csv(root/'primary_null_tests.csv')
+        with np.load(root/'primary_null_distributions.npz',allow_pickle=False) as saved:
+            null_distributions={name:saved[name].tolist() for name in saved.files}
+        if not set(null_tests['test'])<=set(null_distributions):
+            raise ValueError('Missing saved distributions for one or more null tests.')
+    result.update(times=times,conditions=conditions,primary_scores=primary,
+                  null_tests=null_tests,null_distributions=null_distributions,
+                  validation_options=options,output_dir=root,
+                  artifacts={path.name:path for path in sorted(root.iterdir()) if path.is_file()})
+    for name in ('trial_counts','electrode_metadata'):
+        path=root/f'{name}.csv'
+        result[name]=pd.read_csv(path) if path.is_file() else pd.DataFrame()
+    result['run_config']=json.loads((root/'run_config.json').read_text()) if (root/'run_config.json').is_file() else {}
     return result
 
 
