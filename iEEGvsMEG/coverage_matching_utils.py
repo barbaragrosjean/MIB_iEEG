@@ -535,38 +535,206 @@ def plot_pca_timecourses(result):
     plt.close(variance)
     return temporal, variance
 
-def plot_pca_weights(result, n_components=3):
-    # TODO add option to the plot to plot the glass brain, or the one with variable siwe of point
-    """Signed PCA extraction weights on glass brains (MNI mm).
+def _brain_weights(values, coordinates, absolute):
+    """Validate one weight per MNI-mm coordinate without modifying inputs."""
+    xyz = coordinates_mm(coordinates, 'mm')
+    values = np.asarray(values, dtype=float)
+    if values.ndim != 1 or len(values) != len(xyz) or not len(values):
+        raise ValueError('Provide one weight per coordinate and at least one point.')
+    if not np.isfinite(values).all():
+        raise ValueError('Weights must be finite.')
+    return (np.abs(values) if absolute else values), xyz
 
-    Co-located weights are averaged ONLY for plotting, especially participant
-    blocks in full_concatenated. Underlying PCA weights stay unchanged. Each
-    component uses its own symmetric colour range, without magnitude threshold.
+
+def plot_voxel_weights(values, coordinates, *, voxel_size=20., size_base=2.,
+                       size_scale=5., absolute=False, cmap=None, title=None,
+                       figure=None, axes=None, show=True):
+    """Mean weights in MNI-mm voxels, with marker area reflecting point count.
+
+    Voxels are half-open cubes on a grid anchored at MNI (0, 0, 0), including
+    points exactly on grid boundaries. Nodes sit at the mean coordinate of
+    their contributing points. Marker size = size_base + size_scale * count.
+    With absolute=True, magnitudes are taken BEFORE averaging, as in the old
+    notebook. Each input row counts once (features for concatenated MEG).
+    Returns (figure, table) with voxel indices, mean coordinates/weight, count,
+    and marker size. No thresholding or changes to original weights are made.
+    """
+    values, xyz = _brain_weights(values, coordinates, absolute)
+    if not np.isfinite(voxel_size) or voxel_size <= 0:
+        raise ValueError('voxel_size must be positive millimetres.')
+    if not np.isfinite([size_base, size_scale]).all() or min(size_base, size_scale) < 0:
+        raise ValueError('Marker size parameters must be finite and nonnegative.')
+    table = pd.DataFrame(xyz, columns=['x', 'y', 'z'])
+    table[['voxel_x', 'voxel_y', 'voxel_z']] = np.floor(xyz / voxel_size).astype(np.int64)
+    table['weight'] = values
+    grouped = table.groupby(['voxel_x', 'voxel_y', 'voxel_z'], sort=True).agg(
+        x=('x', 'mean'), y=('y', 'mean'), z=('z', 'mean'),
+        weight=('weight', 'mean'), count=('weight', 'size')).reset_index()
+    grouped['node_size'] = size_base + size_scale * grouped['count']
+    limit = float(np.max(np.abs(grouped.weight))) or 1.
+    fig = figure if figure is not None else (axes.figure if axes is not None else plt.figure(figsize=(12, 3.5)))
+    plotting.plot_markers(
+        grouped.weight.to_numpy(), grouped[['x', 'y', 'z']].to_numpy(),
+        node_size=grouped.node_size.to_numpy(), node_cmap=cmap or ('Reds' if absolute else 'RdBu_r'),
+        node_vmin=0 if absolute else -limit, node_vmax=limit, node_threshold=None,
+        figure=fig, axes=axes, colorbar=True, title=title or f'Mean weights in {voxel_size:g} mm voxels',
+    )
+    if show:
+        plt.show()
+    return fig, grouped
+
+
+def plot_glasser_weights(values, coordinates, *, sigma=4., radius_sigma=3.,
+                         min_support=.05, absolute=False, template=None, meshes=None,
+                         view='lateral', threshold=None, cmap=None, title=None,
+                         figure=None, axes=None, show=True):
+    """Gaussian-weighted electrode maps on the HCP inflated cortical surfaces.
+
+    Reproduces OLD/LB_Summary.ipynb's 'Glasser' surface visualization: this is
+    continuous interpolation on HCP meshes, NOT a Glasser parcel average.
+    Coordinates and sigma are MNI mm. Kernels are truncated at radius_sigma
+    standard deviations for bounded work/memory; unsupported voxels are masked
+    using min_support. Both hemispheres share one colour scale.
+
+    Optional meshes has pial_left/right, inflated_left/right and sulc_left/right
+    attributes (defaults to hcp_utils.mesh); template defaults to MNI152 2 mm.
+    Supply local meshes/template to avoid any external data requirements.
+    Returns (figure, dict) containing image, support mask and hemisphere textures.
+    """
+    import nibabel as nib
+    from nilearn import datasets, surface
+
+    values, xyz = _brain_weights(values, coordinates, absolute)
+    if not np.isfinite([sigma, radius_sigma, min_support]).all() or min(sigma, radius_sigma, min_support) <= 0:
+        raise ValueError('sigma, radius_sigma and min_support must be positive finite values.')
+    if threshold is not None and (not np.isfinite(threshold) or threshold < 0):
+        raise ValueError('threshold must be nonnegative or None.')
+    if meshes is None:
+        try:
+            import hcp_utils as hcp
+        except ImportError as exc:
+            raise ImportError('The Glasser/HCP plot requires hcp-utils; install it or pass meshes= explicitly.') from exc
+        meshes = hcp.mesh
+    if template is None:
+        template = datasets.load_mni152_template(resolution=2)
+    elif isinstance(template, (str, Path)):
+        template = nib.load(str(template))
+    shape = template.shape
+    if len(shape) != 3:
+        raise ValueError('template must be a 3D MNI image.')
+    inverse = np.linalg.inv(template.affine)
+    radius = sigma * radius_sigma
+    extent = np.linalg.norm(inverse[:3, :3], axis=1) * radius
+    numerator = np.zeros(shape, dtype=float)
+    denominator = np.zeros(shape, dtype=float)
+    # Visit only voxels near each electrode, avoiding a whole-brain distance
+    # array per electrode and any electrodes-by-voxels dense matrix.
+    for coordinate, value in zip(xyz, values):
+        center = nib.affines.apply_affine(inverse, coordinate)
+        lower = np.maximum(np.floor(center-extent).astype(int), 0)
+        upper = np.minimum(np.ceil(center+extent).astype(int)+1, shape)
+        if np.any(lower >= upper):
+            continue
+        indices = np.stack(np.meshgrid(*[np.arange(lo, hi) for lo, hi in zip(lower, upper)], indexing='ij'), axis=-1)
+        world = nib.affines.apply_affine(template.affine, indices)
+        distance2 = np.sum((world-coordinate)**2, axis=-1)
+        kernel = np.exp(-distance2/(2*sigma*sigma))
+        kernel[distance2 > radius*radius] = 0
+        section = tuple(slice(lo, hi) for lo, hi in zip(lower, upper))
+        numerator[section] += kernel * value
+        denominator[section] += kernel
+    supported = denominator >= min_support
+    if not supported.any():
+        raise ValueError('No supported template voxels; check MNI coordinates, template and min_support.')
+    volume = np.divide(numerator, denominator, out=np.zeros(shape), where=supported)
+    image = nib.Nifti1Image(volume, template.affine)
+    mask = nib.Nifti1Image(supported.astype(np.uint8), template.affine)
+    textures = {hemi: surface.vol_to_surf(image, getattr(meshes, f'pial_{hemi}'), mask_img=mask)
+                for hemi in ('left', 'right')}
+    limit = float(np.max(np.abs(values))) or 1.
+    if axes is None:
+        fig = figure if figure is not None else plt.figure(figsize=(12, 5))
+        axes = [fig.add_subplot(1, 2, i+1, projection='3d') for i in range(2)]
+    else:
+        axes = np.asarray(axes, dtype=object).ravel()
+        if len(axes) != 2:
+            raise ValueError('Provide two 3D axes, one per hemisphere.')
+        fig = figure if figure is not None else axes[0].figure
+    for ax, hemi in zip(axes, ('left', 'right')):
+        texture = textures[hemi]
+        if not np.isfinite(texture).any():
+            ax.set_axis_off()
+            ax.set_title(f'{hemi}: no supported cortical surface')
+            continue
+        plotting.plot_surf_stat_map(
+            getattr(meshes, f'inflated_{hemi}'), texture, hemi=hemi, view=view,
+            bg_map=getattr(meshes, f'sulc_{hemi}'), axes=ax, figure=fig,
+            cmap=cmap or ('Reds' if absolute else 'RdBu_r'),
+            vmin=0 if absolute else -limit, vmax=limit,
+            symmetric_cbar=not absolute, threshold=threshold, colorbar=True,
+            title=f'{title or "Electrode weights"}: {hemi}',
+        )
+    if show:
+        plt.show()
+    return fig, dict(image=image, support_mask=mask, textures=textures)
+
+
+def plot_pca_weights(result, n_components=3, *, plot_type='glass', absolute=False,
+                     show=True, **plot_kwargs):
+    """Plot PCA weights using 'glass' (default), 'voxel', or 'glasser'.
+
+    Examples::
+
+        plot_pca_weights(result, plot_type='voxel', voxel_size=20)
+        plot_pca_weights(result, plot_type='glasser', sigma=4, absolute=True)
+
+    Extra options are forwarded to the selected helper. Signed values are the
+    default; absolute=True uses magnitudes before spatial averaging. Coordinates
+    are MNI mm. Voxel counts include every feature row, including co-located
+    participant features. The PCA weights themselves are never modified.
+    Returns a Matplotlib figure, preserving the original return type.
     """
     if result.dataset is None:
         raise ValueError('Use compute_pca to attach source locations.')
-    if n_components < 1:
-        raise ValueError('n_components must be positive.')
+    if not isinstance(n_components, (int, np.integer)) or n_components < 1:
+        raise ValueError('n_components must be a positive integer.')
+    if plot_type not in ('glass', 'voxel', 'glasser'):
+        raise ValueError("plot_type must be 'glass', 'voxel', or 'glasser'.")
+    if plot_type == 'glass' and plot_kwargs:
+        raise TypeError('Extra plot options apply to voxel or glasser plots.')
     k = min(n_components, result.weights.shape[1])
-    table = result.dataset.metadata[['x', 'y', 'z']].copy()
-    if len(table) != len(result.weights):
-        raise ValueError('Weight rows do not match feature coordinates.')
-    columns = [f'PC{i+1}' for i in range(k)]
-    table[columns] = result.weights[:, :k]
-    grouped = table.groupby(['x', 'y', 'z'], sort=False)[columns].mean().reset_index()
-    note = ' (mean at co-located features)' if len(grouped) < len(table) else ''
-    fig, axes = plt.subplots(k, 1, figsize=(12, 3.3 * k), squeeze=False)
-    for pc, ax in enumerate(axes[:, 0]):
-        values = grouped[columns[pc]].to_numpy()
-        limit = float(np.max(np.abs(values))) or 1.
-        plotting.plot_markers(
-            values, grouped[['x', 'y', 'z']].to_numpy(),
-            node_size=7, node_cmap='RdBu_r', node_vmin=-limit, node_vmax=limit,
-            node_threshold=None, colorbar=True, figure=fig, axes=ax,
-            title=f'{result.dataset.name}: PC{pc+1}{note}',
-        )
-    plt.show()
-    plt.close(fig)
+    if k < 1:
+        raise ValueError('No PCA components to plot.')
+    xyz = result.dataset.metadata[['x', 'y', 'z']].to_numpy()
+    if plot_type == 'glasser':
+        fig, axes = plt.subplots(k, 2, figsize=(12, 4.5*k), squeeze=False, subplot_kw={'projection': '3d'})
+    else:
+        fig, axes = plt.subplots(k, 1, figsize=(12, 3.3*k), squeeze=False)
+    for pc in range(k):
+        title = f'{result.dataset.name}: PC{pc+1}'
+        values = result.weights[:, pc]
+        if plot_type == 'voxel':
+            plot_voxel_weights(values, xyz, absolute=absolute, figure=fig, axes=axes[pc, 0],
+                               title=title, show=False, **plot_kwargs)
+        elif plot_type == 'glasser':
+            plot_glasser_weights(values, xyz, absolute=absolute, figure=fig, axes=axes[pc],
+                                 title=title, show=False, **plot_kwargs)
+        else:
+            values, coordinates = _brain_weights(values, xyz, absolute)
+            table = pd.DataFrame(coordinates, columns=['x', 'y', 'z'])
+            table['weight'] = values
+            grouped = table.groupby(['x', 'y', 'z'], sort=False).weight.mean().reset_index()
+            limit = float(np.max(np.abs(grouped.weight))) or 1.
+            note = ' (mean at co-located features)' if len(grouped) < len(table) else ''
+            plotting.plot_markers(
+                grouped.weight.to_numpy(), grouped[['x', 'y', 'z']].to_numpy(),
+                node_size=7, node_cmap='Reds' if absolute else 'RdBu_r',
+                node_vmin=0 if absolute else -limit, node_vmax=limit,
+                node_threshold=None, colorbar=True, figure=fig, axes=axes[pc, 0], title=title+note,
+            )
+    if show:
+        plt.show()
+        plt.close(fig)
     return fig
 
 def _correlation_plot(matrix, name, title, plot):
