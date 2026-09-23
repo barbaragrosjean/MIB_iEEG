@@ -286,7 +286,7 @@ def compare_cov_models(models, n_components=(1,2,3,5,10), plot=True):
     table = table.merge(ev[['model','k','ieeg_variance_explained','meg_variance_explained','shared_crosscov_fraction']],on=['model','k'])
     if plot:
         fig, axes = plt.subplots(1, len(models), figsize=(5*len(models),4), squeeze=False, constrained_layout=True)
-        display_k = min(3, min(m.ieeg_scores.shape[1] for m in models.values()))
+        display_k = min(5, min(m.ieeg_scores.shape[1] for m in models.values()))
         for ax,(name,m) in zip(axes.flat,models.items()):
             r = _pearson(m.ieeg_scores[:,:display_k],m.meg_scores[:,:display_k])
             im=ax.imshow(r,vmin=-1,vmax=1,cmap='RdBu_r')
