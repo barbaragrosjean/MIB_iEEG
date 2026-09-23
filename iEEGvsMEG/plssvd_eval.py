@@ -24,6 +24,8 @@ def parse_args():
     parser.add_argument('--meg-raw-dir', type=Path, default=Path(
         '/projects/MINDLAB2025_MEG-Auditory_Cognitive_Maps/scratch/APR2020_Block3_SingleTrial_BarbaraNikita'))
     parser.add_argument('--cache-dir', type=Path, help='Default: ROOT/out/trial_cache.')
+    parser.add_argument('--scratch-dir', type=Path,
+                        help='Temporary fold storage; default: system temporary directory (honors TMPDIR).')
     parser.add_argument('--output-dir', type=Path, help='Default: ROOT/out/plssvd_eval; use a different directory for each configuration.')
     parser.add_argument('--trial-metadata-csv', type=Path)
     parser.add_argument('--meg-kind', default='paired_coverage', choices=[
@@ -102,7 +104,7 @@ def main():
 
     # Saves tables, partition/matching audits, model weights, scores, prediction
     # maps, preprocessing parameters and primary null distributions.
-    result = validate_plssvd(trials, args.meg_kind, options, output_dir=output_dir)
+    result = validate_plssvd(trials, args.meg_kind, options, output_dir=output_dir, scratch_dir=args.scratch_dir)
     for name in ('summary', 'selection', 'components', 'null_tests'):
         print(f'\n{name}\n{result[name].round(3).to_string(index=False)}', flush=True)
     plot_plssvd_validation(result, output_dir=output_dir, show=False)

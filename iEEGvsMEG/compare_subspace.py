@@ -10,7 +10,6 @@ mapping within each repetition. All repetitions use all cached participants.
 Spatial tests concern new trials at the same locations, NOT new participants.
 """
 from pathlib import Path
-from tempfile import TemporaryDirectory
 import argparse
 import json
 import warnings
@@ -238,9 +237,9 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
                    dimensions=(1, 2, 3, 5, 10), repeats=5, seed=2026,
                    block_scaling='equal_variance', split_unit='trial',
                    cluster_counts=(2, 3, 4, 5, 6), ridge_grid=(1e-4, 1e-2, 1., 100.),
-                   max_gram_gib=2.):
+                   max_gram_gib=2., scratch_dir=None):
     """Run/export comparison; reuse an already complete PLSSVD trial cache."""
-    from plssvd_eval_utils import load_trial_cache, _split_subject, _build_fold, _project, _r
+    from plssvd_eval_utils import load_trial_cache, _split_subject, _temporary_fold, _project, _r
     dimensions = sorted(set(dimensions))
     if not dimensions or min(dimensions) < 1 or repeats < 1:
         raise ValueError('Positive dimensions and repeats are required.')
@@ -279,8 +278,8 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
                     for condition, ix in zip(trials.conditions, conditions):
                         tables['splits'].extend(dict(repeat=repeat, modality=m, subject=subject,
                                                      partition=part, condition=condition, trial_index=int(i)) for i in ix)
-        with TemporaryDirectory(prefix='subspace_fold_', dir=out) as scratch:
-            fold, scalers, audit, pairing = _build_fold(trials, meg_kind, indices, scratch, matching_seed)
+        with _temporary_fold(trials, meg_kind, indices, matching_seed, scratch_dir) as prepared_fold:
+            fold, scalers, audit, pairing = prepared_fold
             audit.to_csv(out/f'matching_{repeat:03d}.csv', index=False)
             (out/f'pairing_{repeat:03d}.json').write_text(json.dumps(pairing, indent=2))
             np.savez_compressed(out/f'preprocessing_{repeat:03d}.npz', **{
@@ -424,6 +423,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parent)
     parser.add_argument('--cache-dir', type=Path)
+    parser.add_argument('--scratch-dir', type=Path, help='Temporary fold storage (default: TMPDIR/system temp).')
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--meg-kind', choices=MEG_KINDS, default='paired_coverage')
     parser.add_argument('--models', nargs='+', choices=MODELS, default=list(MODELS))
@@ -445,7 +445,7 @@ def main():
                        meg_kind=args.meg_kind, models=args.models, dimensions=args.dimensions,
                        repeats=args.repeats, seed=args.seed, block_scaling=args.block_scaling,
                        split_unit=args.split_unit, cluster_counts=args.cluster_counts,
-                       ridge_grid=args.ridge_grid, max_gram_gib=args.max_gram_gib)
+                       ridge_grid=args.ridge_grid, max_gram_gib=args.max_gram_gib, scratch_dir=args.scratch_dir)
     plot_results(out, show=False)
     print(f'Outputs saved to: {out.resolve()}', flush=True)
 

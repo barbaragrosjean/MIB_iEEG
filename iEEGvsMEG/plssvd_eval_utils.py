@@ -6,7 +6,9 @@ are reserved for test performance and conditional split-half reliability.
 """
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import mkdtemp
+from contextlib import contextmanager
+import shutil
 import hashlib
 import json
 import pickle
@@ -257,7 +259,7 @@ def _trial_mean(array,indices):
     return mean/len(indices)
 
 
-def _build_fold(trials,meg_kind,split_indices,root,seed):
+def _build_fold(trials,meg_kind,split_indices,root,seed,mmap_handles=None):
     prepared={m:{} for m in ('ieeg','meg')};scalers={m:{} for m in ('ieeg','meg')}
     for modality,subjects in [('ieeg',trials.ieeg),('meg',trials.meg)]:
         for s in subjects:
@@ -273,6 +275,8 @@ def _build_fold(trials,meg_kind,split_indices,root,seed):
             for name,parts in ix.items():
                 path=Path(root)/f'{modality}_{s.subject}_{name}.npy'
                 out=np.lib.format.open_memmap(path,mode='w+',dtype=np.float32,shape=train.shape)
+                if mmap_handles is not None:
+                    mmap_handles.append(out)
                 for c,(a,indices) in enumerate(zip(s.data,parts)):
                     mean=train[c] if name=='train' else _trial_mean(a,indices)
                     out[c]=((mean-mu[0])/sd[0])*multiplier
@@ -291,6 +295,43 @@ def _build_fold(trials,meg_kind,split_indices,root,seed):
         meg=selected[meg_kind];meg.source_data=context
         datasets[part]={'ieeg':ieeg,'meg':meg}
     return datasets,scalers,audit,pairing
+
+
+
+@contextmanager
+def _temporary_fold(trials, meg_kind, split_indices, seed, scratch_dir=None):
+    """Own scratch mappings until computation finishes; close BEFORE unlinking.
+
+    Only mappings created by _build_fold are closed, never the input trial cache.
+    This also closes partially constructed folds if exporting or fitting fails.
+    TMPDIR is honored by default; scratch_dir can select cluster-local storage.
+    Cleanup failures warn without replacing an analysis exception or aborting
+    completed computations (e.g. transient network-filesystem .nfs files).
+    """
+    if scratch_dir is not None:
+        scratch_dir=Path(scratch_dir).expanduser()
+        scratch_dir.mkdir(parents=True,exist_ok=True)
+    scratch=Path(mkdtemp(prefix='fold_means_',dir=scratch_dir))
+    handles=[]
+    try:
+        yield _build_fold(trials,meg_kind,split_indices,scratch,seed,mmap_handles=handles)
+    finally:
+        # Views may still reference these arrays, but no fold operations are
+        # allowed after this context exits. Own each underlying mapping once.
+        for array in handles:
+            mapping=array._mmap
+            if mapping is not None and not mapping.closed:
+                try:
+                    mapping.close()
+                except (OSError,BufferError) as exc:
+                    warnings.warn(f'Could not close scratch mapping in {scratch}: {exc}',RuntimeWarning)
+        handles.clear()
+        try:
+            shutil.rmtree(scratch)
+        except OSError as exc:
+            warnings.warn(f'Could not remove temporary fold directory {scratch}: {exc}. '
+                          'Only temporary files remain; analysis results are retained. '
+                          'Use a local scratch directory via --scratch-dir if this persists.',RuntimeWarning)
 
 
 def _means(dataset):return np.concatenate([x.mean(0) for x in dataset.blocks()])
@@ -461,7 +502,7 @@ def _null_tests(trials,fold,model,scalers,audit,kind,indices,scores,patterns,k,o
     return pd.DataFrame(rows),values
 
 
-def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval'):
+def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval',scratch_dir=None):
     """Run nested repeated trial holdouts, test-half reliability and primary nulls.
 
     Primary repetition 0 uses all participants. Later repetitions use participant
@@ -496,8 +537,8 @@ def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval'):
                                 trial_index=int(trial),partition=part,
                                 split_group=s.split_groups[ci][trial] if s.split_groups[ci] is not None else ''))
         matching_seed=int(rng.integers(0,2**31-1))
-        with TemporaryDirectory(prefix='fold_means_',dir=out) as scratch:
-            fold,scalers,audit,pairing=_build_fold(active,meg_kind,indices,scratch,matching_seed)
+        with _temporary_fold(active,meg_kind,indices,matching_seed,scratch_dir) as prepared_fold:
+            fold,scalers,audit,pairing=prepared_fold
             model=_fit(fold['train'],max(candidates),options)
             allowed=[k for k in candidates if k<=model['k_max']]
             if not allowed:raise ValueError('No candidate component count supported by training data.')
