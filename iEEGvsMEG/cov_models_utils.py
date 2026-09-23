@@ -8,7 +8,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.linalg import eigh, svd
 from scipy.optimize import linear_sum_assignment
-from pca_comparison import compare_pca_to_ieeg
+from coverage_matching_utils import compare_pca_to_ieeg
 
 
 @dataclass

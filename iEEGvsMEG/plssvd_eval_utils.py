@@ -17,8 +17,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.linalg import svd
-from iEEGvsMEG.coverage_matching_utils import Dataset, coordinates_mm, construct_five_datasets
+from coverage_matching_utils import Dataset, coordinates_mm, construct_five_datasets
 from cov_models_utils import _gram, _spectrum, _weights
+
 
 
 @dataclass
