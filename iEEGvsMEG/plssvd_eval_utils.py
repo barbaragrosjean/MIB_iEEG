@@ -73,6 +73,8 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
     inferred to mean memory or recognition. Existing caches are checked against
     source file signatures and configuration; stale caches fail explicitly.
     Completed subjects are checkpointed and skipped when resuming this directory.
+    Without a manifest, source data rebuilds the metadata and validates existing
+    trial files; matching files are preserved and missing/partial files written.
     """
     root=Path(cache_dir); root.mkdir(parents=True,exist_ok=True)
     meta=electrode_metadata.copy(); meta['subject']=meta.subject.astype(str)
@@ -168,7 +170,24 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
                 if len(a)<8:
                     raise ValueError(f'{subject}, condition {c}: need >=8 trials for train/tune/two test halves.')
                 fname=f'{modality}_{subject}_condition{c}.npy'
-                np.save(root/fname,np.asarray(a,dtype=np.float32));files.append(fname)
+                target=root/fname
+                reuse=False
+                if target.is_file():
+                    try:
+                        cached=np.load(target,mmap_mode='r',allow_pickle=False)
+                        # Check one trial at a time to avoid copying a whole subject.
+                        reuse=(cached.shape==a.shape and cached.dtype==np.float32
+                               and all(np.array_equal(cached[i],np.asarray(a[i],dtype=np.float32))
+                                       for i in range(len(a))))
+                        del cached
+                    except (ValueError,OSError,EOFError):
+                        reuse=False
+                if not reuse:
+                    pending=target.with_suffix('.npy.tmp')
+                    with pending.open('wb') as f:
+                        np.save(f,np.asarray(a,dtype=np.float32))
+                    pending.replace(target)
+                files.append(fname)
                 if extra is None:
                     groups.append(None);blocks.append(['all']*len(a))
                 else:
