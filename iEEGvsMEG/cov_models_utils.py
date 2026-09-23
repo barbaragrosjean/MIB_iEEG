@@ -1,8 +1,5 @@
-"""Separate PCA, joint PCA and exact PLSSVD for aligned MEG/iEEG datasets.
-
-Matrices have observations (time or condition x time) in rows. Computation uses
-observation Gram matrices, avoiding full channel covariance/cross-covariance
-matrices and a dense concatenation of all MEG participants.
+"""
+Separate PCA, joint PCA and exact PLSSVD for aligned MEG/iEEG datasets.
 """
 from dataclasses import dataclass
 from types import SimpleNamespace

@@ -47,7 +47,7 @@ def main():
         sys.path.insert(0, str(directory))
 
     import matplotlib
-    matplotlib.use('Agg')  # No GUI/display required on cluster compute nodes.
+    matplotlib.use('Agg') 
     import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd

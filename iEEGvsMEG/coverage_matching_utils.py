@@ -1,9 +1,3 @@
-"""Coverage ablation and memory-bounded PCA for the iEEGvsMEG project.
-
-Input arrays: condition x channel x time, one array per MEG participant.
-All coordinates passed to the analysis API are MNI millimetres. No implicit
-coordinate repair, absolute-value weights, or extra post-aggregation scaling.
-"""
 from dataclasses import dataclass
 from pathlib import Path
 import json
@@ -228,10 +222,9 @@ def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_position
                             kinds=None):
     """Build five setups, preserving electrode row identity in all matches.
 
-    Full concatenation is a list of participant blocks, never a giant matrix.
+    Full concatenation is a list of participant blocks.
     Group coverage is one nearest-source feature per pooled iEEG electrode,
     selected separately in EVERY MEG participant, then participant-averaged.
-    This matches legacy average_subject=True (not a radius-mask definition).
     Pairing uses all available MEG subjects as the sampling pool, without
     replacement. The control keeps that pairing and randomises source locations.
     By default it also preserves matched-source duplication multiplicities.
@@ -340,7 +333,6 @@ def make_ieeg_dataset(ieeg, metadata, condition_mode='average'):
 
 
 def variance_summary(datasets):
-    """Total variance = trace of sample covariance (ddof=1), before PCA."""
     rows = []
     for name, ds in datasets.items():
         total = 0.
@@ -499,7 +491,6 @@ def load_dataset(kind, *, reference=None, condition_mode=None, seed=2026,
     return dataset
 
 def compute_variance(dataset):
-    """Total/mean feature variance, feature count and observation count."""
     return variance_summary({dataset.name: dataset}).loc[dataset.name, [
         'n_observations', 'n_features', 'total_variance', 'mean_feature_variance',
     ]]
@@ -545,13 +536,13 @@ def plot_pca_timecourses(result):
     return temporal, variance
 
 def plot_pca_weights(result, n_components=3):
+    # TODO add option to the plot to plot the glass brain, or the one with variable siwe of point
     """Signed PCA extraction weights on glass brains (MNI mm).
 
     Co-located weights are averaged ONLY for plotting, especially participant
     blocks in full_concatenated. Underlying PCA weights stay unchanged. Each
     component uses its own symmetric colour range, without magnitude threshold.
     """
-    from nilearn import plotting
     if result.dataset is None:
         raise ValueError('Use compute_pca to attach source locations.')
     if n_components < 1:
@@ -590,7 +581,7 @@ def _correlation_plot(matrix, name, title, plot):
                     cmap='RdBu_r',
                     annot=True, 
                     ax=ax, 
-                    cbar_kws={'label': 'Signed Pearson r'},
+                    cbar_kws={'label': 'Signed Spearman r'},
                     fmt='.2f')
         ax.set(title=f'{name}: {title}', xlabel='iEEG PC', ylabel='MEG PC',
                xticks=range(matrix.shape[1]), xticklabels=range(1, matrix.shape[1]+1),
@@ -618,7 +609,7 @@ def _check_comparison(meg, ieeg):
         raise ValueError('iEEG electrode reference/order differs.')
 
 def correlate_timecourses(meg, ieeg, plot=True):
-    """All MEG-PC x iEEG-PC score correlations; return a DataFrame and plot."""
+    """All MEG-PC x iEEG-PC score spearman correlations; return a DataFrame and plot."""
     _check_comparison(meg, ieeg)
     matrix = cross_correlations(meg.scores, ieeg.scores)
     matrix
