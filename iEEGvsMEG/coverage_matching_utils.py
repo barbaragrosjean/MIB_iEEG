@@ -247,6 +247,12 @@ def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_position
     if condition_mode not in ('average', 'stack'):
         raise ValueError("condition_mode must be 'average' or 'stack'.")
     shape = meg[0].shape
+    if 'full_average' in requested:
+        first = np.asarray(meg_positions[0])
+        if any(a.shape != shape for a in meg) or any(
+                np.asarray(p).shape != first.shape or not np.allclose(p, first, rtol=0, atol=1e-6)
+                for p in meg_positions[1:]):
+            raise ValueError('full_average requires identical registered source grids and ordering.')
     if len(subjects) > len(meg_subjects):
         raise ValueError('Not enough MEG participants for one-to-one pairing; supply a justified alternative upstream.')
     pair_rng, control_rng = [np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(2)]

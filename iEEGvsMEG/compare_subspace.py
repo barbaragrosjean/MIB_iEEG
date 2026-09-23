@@ -261,11 +261,14 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
                   max_gram_gib=max_gram_gib, scope='new trials at fixed participant locations',
                   spatial_representation='forward patterns on the electrode grid',
                   normalization='training column means and one RMS per modality',
+                  within_model_comparison='all model pairs within each modality; all native features',
+                  within_model_matching='Pearson Hungarian assignment/signs on training temporal scores, frozen across spaces and partitions',
                   repetitions='overlapping sensitivity analyses; not independent confidence intervals')
     (out/'config.json').write_text(json.dumps(config, indent=2))
     (out/'cache_config.json').write_text(json.dumps(manifest['config'], indent=2))
     np.savez_compressed(out/'axes.npz', times=trials.times, conditions=trials.conditions)
-    tables = {name: [] for name in ('overlap', 'alignment', 'reliability', 'clusters', 'cluster_selection', 'splits')}
+    tables = {name: [] for name in ('overlap', 'alignment', 'reliability', 'clusters', 'cluster_selection', 'splits',
+                                  'within_model_metrics', 'within_model_pairs', 'within_model_correlations')}
     for repeat, seq in enumerate(np.random.SeedSequence(seed).spawn(repeats)):
         rng = np.random.default_rng(seq)
         matching_seed = int(rng.integers(2**31-1))
@@ -321,12 +324,18 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
                     tables['cluster_selection'].extend(dict(**base, **row) for row in tuning)
                     np.savez_compressed(out/f'{name}_{repeat:03d}_k{k}_clusters.npz', **artifacts)
                 del scores
+            if len(fitted) > 1:
+                from compare_models import compare_fitted_models
+                within = compare_fitted_models(fold, fitted, dimensions, repeat=repeat)
+                for key, table in within.items():
+                    tables[key].extend(table.to_dict('records'))
         for table, rows in tables.items():
             frame = pd.DataFrame(rows)
             if table == 'cluster_selection' and frame.empty:
                 frame = pd.DataFrame(columns=['model', 'repeat', 'k', 'n_clusters',
                                               'ieeg_silhouette', 'meg_silhouette', 'selection_score'])
-            frame.to_csv(out/f'{table}.csv', index=False)
+            if not (table.startswith('within_model_') and frame.empty):
+                frame.to_csv(out/f'{table}.csv', index=False)
     (out/'COMPLETE.json').write_text(json.dumps(dict(repeats=repeats, models=list(models))))
     return {name: pd.DataFrame(rows) for name, rows in tables.items()}
 
@@ -336,12 +345,14 @@ def load_results(output_dir):
     config = json.loads((root/'config.json').read_text())
     if not (root/'COMPLETE.json').exists():
         warnings.warn('Run has not completed; tables may describe only finished repetitions.')
-    return config, {name: pd.read_csv(root/f'{name}.csv') for name in
-                    ('overlap', 'alignment', 'reliability', 'clusters', 'cluster_selection')}
+    names = ['overlap', 'alignment', 'reliability', 'clusters', 'cluster_selection']
+    names += [name for name in ('within_model_metrics', 'within_model_pairs', 'within_model_correlations')
+              if (root/f'{name}.csv').exists()]
+    return config, {name: pd.read_csv(root/f'{name}.csv') for name in names}
 
 
 def plot_results(output_dir, k=None, show=True):
-    """Save the four report figures; ranges describe repetitions, not CIs."""
+    """Save cross-modal and available within-modal model comparison figures."""
     import matplotlib.pyplot as plt
     config, tables = load_results(output_dir)
     k = k or max(config['dimensions'])
@@ -416,6 +427,10 @@ def plot_results(output_dir, k=None, show=True):
             ax.text(.5, .5, 'No valid cluster solution', ha='center', transform=ax.transAxes)
     fig.suptitle('Spatial clusters — common cluster count selected on tuning trials')
     finish(fig, 'cluster_stability_agreement')
+    if 'within_model_metrics' in tables:
+        from compare_models import plot_within_models
+        for index, fig in enumerate(plot_within_models(tables, k=k, partition='test')):
+            finish(fig, f'within_models_k{k}_{index:02d}')
     return figures
 
 

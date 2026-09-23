@@ -1,6 +1,6 @@
 # iEEG–MEG latent-space comparison: methods and implementation review
 
-Reviewed against the current source and notebook cells on 23 September 2026. This is a methods and implementation audit, not a rerun or confirmation of the saved results. Raw data, trial caches and batch result directories are absent from this checkout.
+Reviewed against the current source and notebook cells on 23 September 2026. This is a methods and implementation audit, not a rerun or confirmation of the saved results. Raw data, trial caches and batch result directories are absent from this checkout. The coverage-sampling and within-modality model-comparison extensions described below have subsequently been implemented and checked with synthetic data; project recordings have not been rerun.
 
 ## Scientific aim and unit of comparison
 
@@ -34,7 +34,11 @@ Nearest-source mapping uses Euclidean coordinate distance. MEG sources are z-sco
 
 The first two are invariant to a change of basis within the retained subspace; the third handles sign/order ambiguity but not arbitrary rotations. Cumulative PCA variance explained is an additional, distinct output.
 
-**Missing.** The notebook uses a single pairing/random-source realization. It does not isolate a group-size effect or estimate a distribution over subsamples. Add repeated, coordinated pairing/source draws and controlled participant-count and feature-count sweeps. Keep paired coverage and its random control paired within each draw. The five compositions change multiple properties together, so differences cannot all be attributed to coverage alone. Report matching-distance distributions, unique-source counts and duplicate multiplicities; add a prespecified distance policy and participant-balanced sensitivity analyses. Pooled features otherwise give more influence to participants with more electrodes/sources.
+**Implemented extension.** `coverage_sampling.py` and the final section of `coverage_matching.ipynb` repeat coordinated participant/source draws and cross MEG participant-pool counts with common feature budgets. The complete iEEG reference stays fixed. Participant pools and feature-budget subsets are nested within repetition; matched/random controls share electrode slots and preserve source duplication. Full-source feature budgets uniformly sample native features. Pair-based setups keep one MEG participant per iEEG participant before feature sampling, so a larger pool is not a larger averaged group. Actual contributor counts are exported. Unsupported k values are explicitly marked `skipped_rank`.
+
+Outputs include all three temporal metrics, cumulative PCA variance fractions, component pairs, exact selections (compact ranges for complete full-source blocks), anatomical mapping distances, unique-source/duplicate summaries and within-draw paired-minus-random differences. Plots show median/range against participant pool and feature count; these ranges are not confidence intervals. Saved complete runs can be loaded without recordings using `load_coverage_sampling`.
+
+**Remaining scope.** Participant-pool counts must be at least the number of iEEG participants to support one-to-one pairing. No participant-balanced feature weighting or distance-rejection threshold is imposed. The five compositions still differ in aggregation and coverage; common feature counts control size, not all confounds. This is descriptive resampling of condition averages, not trial-held-out validation.
 
 ## 2. Alternative objectives and PLSSVD validation
 
@@ -58,13 +62,13 @@ The current validation selects k for PLSSVD only. A fair predictive model compar
 
 **Question.** Within iEEG, and separately within MEG, are the dominant PCA patterns the same as the patterns selected by PLSSVD or joint PCA?
 
-**Current status: NOT IMPLEMENTED as a complete analysis.** There are no `compare_model` modules in this checkout. `cov_models.ipynb` contains an explicit TODO for this question. `compare_cov_models()` compares modalities within each model and compares each model's MEG scores to a fixed iEEG-PCA reference. Neither comparison substitutes for PCA-versus-PLS within each modality. Likewise, `compare_subspace.py` loops over models but computes iEEG-versus-MEG metrics within each model.
+**Implemented.** `compare_models.py` supplies descriptive comparisons in `cov_models.ipynb` and held-out comparisons within the existing `compare_subspace.py` batch pipeline. All model pairs are compared separately within iEEG and MEG at common dimensions. Temporal scores, two-condition contrasts (when stacked), and forward patterns on **all native features** are compared. Pattern regression is recomputed for each retained k.
 
-**Method to add.** On identical trial splits, fit each model on training data. For each modality and common k, compare all model pairs using (a) temporal scores and (b) forward patterns on the same ordered features. Quantify principal angles/subspace overlap, full component correlation matrices and optimal one-to-one matching. Use training-derived component assignments and signs for a held-out component correspondence score; test-optimized matching may be shown separately as a descriptive upper comparison. Compare both full condition/time scores and condition contrasts.
+A one-to-one Hungarian assignment and sign orientation are learned from **training temporal scores**, then reused for every representation and partition. Thus spatial and temporal metrics concern the same component pairs. There is no test rematching or test-based sign orientation. Signed and absolute matched correlations, valid-pair counts, full signed Pearson matrices, principal angles, ranks and rank-aware subspace overlap are exported. Undefined training pairs are excluded from matched summaries; valid-pair counts expose this limitation.
 
-Evaluate temporal and spatial correspondence separately, but use a common training-derived component assignment when claiming that the *same component pair* agrees in both. Separate time-optimized and space-optimized assignments can select different pairs. Preserve complete subspaces when near-degenerate components rotate across fits.
+**Outputs.** `within_model_metrics.csv`, `within_model_pairs.csv`, `within_model_correlations.csv`; summary plots and primary-repetition correlation heatmaps. Batch results identify modality, model pair, repetition, k, representation and partition. The descriptive notebook labels its rows `in_sample`; batch comparisons use the existing independent trial partitions. Old result folders remain readable but require a new run to acquire these tables.
 
-**Outputs to add.** A table indexed by modality, model pair, repetition, k, representation and partition; temporal/spatial correlation heatmaps; explicit matched-pair/sign tables; principal angles and overlap; paired time-course and anatomical-pattern plots; and variance/cross-covariance capture alongside correspondence. Report train-to-test changes and independent-refit stability before interpreting a component as reproducible.
+**Remaining scope.** Independently refitted component stability, participant-level inference, anatomical pattern displays and explicit component-acceptance criteria remain separate work. Test-half correspondence is conditional on the fitted axes. Near-degenerate components can rotate, making subspace metrics more stable than componentwise matching.
 
 **Already available context.** `evaluate_cov_models()` reports reconstruction variance explained and retained cross-covariance energy. These are descriptive in-sample quantities with different objectives. Joint PCA reconstructs with the joint score, which uses both modalities; this is not an own-modality-only prediction benchmark. Cross-covariance energy is not a fraction of uniquely identified shared biological variance.
 
@@ -87,26 +91,29 @@ Fit identity, orthogonal rotation/reflection, regularized affine and regularized
 | Priority | Location | Finding and required action |
 |---|---|---|
 | High | Coverage/covariance notebook coordinate cells; `plssvd_eval.py: main` | Magnitude-based repeated coordinate division can alter individual axes before the explicit unit checker sees them. Establish the native `GetInfo` unit and apply one documented conversion; verify against known anatomical locations. Do not infer correctness from plausible ranges alone. |
-| High | `construct_five_datasets` | `full_average` averages source indices without verifying identical source ordering/coordinates across participants. Require a common registered grid or align sources explicitly before averaging. |
+| Resolved | `construct_five_datasets` | Full-source averaging now requires equal array shapes and matching registered source coordinates/order. Nonmatching grids must be aligned upstream. |
 | High | Coverage/covariance loader calls | MEG epoch origin is set from the iEEG epoch origin. Supply independently verified MEG time metadata; matching constructed vectors alone does not verify acquisition alignment. |
 | High | Across stages | Coverage/covariance default to condition averaging; validation/comparison stack conditions. Choose a primary representation and rerun comparable stages consistently. Condition averaging cannot address condition differences. |
 | High | Across entry points | PLSSVD batch excludes `SUBJ_0038`; coverage/covariance discovery does not. Record one participant manifest and exclusion rationale. Comparison uses the cache cohort. |
-| High | Model comparison | Implement the missing within-modality, between-model analysis described above before claiming PCA and PLSSVD recover the same/different patterns. |
+| Implemented | Model comparison | Descriptive and trial-held-out within-modality comparisons now exist; run the updated pipeline before interpreting project results. |
 | Medium | Scaling defaults | Covariance/validation use `none`; subspace comparison defaults to `equal_variance`. Record and harmonize this choice, especially for joint PCA. Scalar modality scaling alone does not change ideal PLSSVD directions, but changes joint PCA's balance. MEG channel z-scoring versus unstandardized iEEG also changes what “dominant variance” means. |
 | Medium | Correlation reporting | Coverage matrices are Spearman; matching summaries and validation use Pearson. Label both explicitly. A notebook TODO requests Spearman native matching, but it is not implemented; do not describe it as completed. |
-| Medium | Coverage design | Add repeated sampling and controlled group-size comparisons; a single seed does not establish robustness to sampling. |
+| Implemented | Coverage design | Repeated coordinated draws and crossed participant-pool/feature-budget sweeps are available; run them on the project recordings. |
 | Medium | Validation/results | Test-half reliability fixes trained axes; independently refit models and compare subspaces if the claim is stability of learned patterns. Do not average PC1 across repetitions as if component identity were guaranteed. |
 | Medium | Result lifecycle | PLSSVD output directories can be reused without a run-completion guard; comparison writes a completion marker but rejects any existing configuration, including interrupted runs. Add run identity, completion checks and a deliberate resume policy. |
-| Medium | Reproducibility | No dependency manifest or automated test suite is present. `src.setting/GetInfo`, data and cluster paths are external. Add environment versions, input provenance and focused numerical/leakage tests before final analysis. |
+| Medium | Reproducibility | A synthetic unittest suite now covers the extensions; a dependency manifest is still absent. `src.setting/GetInfo`, data and cluster paths are external. Add environment versions, input provenance and focused numerical/leakage tests before final analysis. |
 | Text | Methods/results | Supply task/condition meanings, participant/trial/electrode counts, exclusions, filtering, baseline/reference, MEG source reconstruction, coordinate frame, epoch/window choice, source polarity handling, acquisition differences and trial dependence. These cannot be inferred reliably from numeric condition codes. |
 
-Small maintenance fixes made during this review: replaced the obsolete `utils_updated` notebook import/path checks with `coverage_matching_utils`; corrected the PLSSVD notebook's stale claim that a `RUN_ANALYSIS` switch exists; annotated the missing within-modality analysis and the covariance interpretation placeholder. Scientific defaults and computations were otherwise preserved.
+Small maintenance fixes made during this review: replaced the obsolete `utils_updated` notebook import/path checks with `coverage_matching_utils`; corrected the PLSSVD notebook's stale claim that a `RUN_ANALYSIS` switch exists; annotated the missing within-modality analysis and the covariance interpretation placeholder. The subsequent implementation adds the two requested analyses and a common-grid guard; existing scientific preprocessing defaults remain unchanged.
 
 ## Project map and recommended sequence
 
 | Files | Role |
 |---|---|
 | `coverage_matching.ipynb`, `coverage_matching_utils.py` | Data loading, anatomical sampling, five MEG compositions and descriptive PCA comparisons |
+| `coverage_sampling.py` | Repeated MEG participant-pool/feature-budget sensitivity, audits, reload and plots |
+| `compare_models.py` | Within-modality model-pair comparisons with training-frozen component matching |
+| `tests/test_comparison_extensions.py` | Synthetic numerical, sampling and batch integration checks |
 | `cov_models.ipynb`, `cov_models_utils.py` | Descriptive separate/joint PCA and PLSSVD objectives, reconstruction and cross-covariance metrics |
 | `plssvd_eval.py`, `plssvd_eval_utils.py`, `plssvd_eval.ipynb` | Trial export/cache, PLSSVD selection/validation, persisted outputs and result reader |
 | `compare_subspace.py`, `compare_subspace.ipynb` | Held-out cross-modality geometry, alignment and spatial clustering for all three models |
@@ -116,3 +123,19 @@ Small maintenance fixes made during this review: replaced the obsolete `utils_up
 The active modules and all current notebook source cells were inspected. Legacy files were inventoried and entry points inspected; their analyses were not revalidated.
 
 Recommended order: establish task/data provenance and alignment → assess coverage/composition sensitivity → fit competing objectives → validate on independent trials → compare models within modality → compare modalities within model → optionally interpret stable spatial clusters. Freeze scientific choices before inspecting final test outcomes. If exploratory coverage/model results already used the eventual test trials, a later split does not retrospectively make the entire study confirmatory; describe it as conditional validation or obtain independent confirmation.
+
+
+## Running the extensions
+
+Run the added final section of `coverage_matching.ipynb` after loading `ieeg`. It defaults to 20 sampling repetitions and three participant-pool sizes with two common feature budgets plus native counts. Review these settings for runtime and the intended study design. A completed output directory is loaded with its saved configuration; choose a new directory to change settings. Interrupted runs are not resumed automatically.
+
+Run the final section of `cov_models.ipynb` for descriptive within-modality comparisons. For held-out results, use the existing batch command with at least two models and a new output directory:
+
+```bash
+python -u compare_subspace.py --cache-dir /path/to/trial_cache \
+  --output-dir /path/to/new_comparison \
+  --models separate_pca plssvd joint_pca --meg-kind paired_coverage \
+  --dimensions 1 2 3 5 10 --repeats 5 --block-scaling equal_variance
+```
+
+Inspect the new within-modality section of `compare_subspace.ipynb`. The batch plotter also exports within-modality summaries and heatmaps. The synthetic suite runs with `MPLBACKEND=Agg python -m unittest discover -s tests -v` in an environment containing the project's scientific Python dependencies.
