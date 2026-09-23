@@ -72,6 +72,7 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
     All trials require metadata rows when CSV is supplied. No trial labels are
     inferred to mean memory or recognition. Existing caches are checked against
     source file signatures and configuration; stale caches fail explicitly.
+    Completed subjects are checkpointed and skipped when resuming this directory.
     """
     root=Path(cache_dir); root.mkdir(parents=True,exist_ok=True)
     meta=electrode_metadata.copy(); meta['subject']=meta.subject.astype(str)
@@ -85,25 +86,47 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
         metadata_hash=hashlib.sha256(meta.to_csv(index=False).encode()).hexdigest(),
         trial_metadata=_signature(trial_metadata_csv) if trial_metadata_csv else None)
     manifest=root/'manifest.json'
+    times=None; records=[]; sources=[]
     if manifest.exists():
         saved=json.loads(manifest.read_text())
-        if saved['config']!=config:
+        saved_config={k:v for k,v in saved['config'].items() if k not in ('meg_subjects','ieeg_subjects')}
+        current_config={k:v for k,v in config.items() if k not in ('meg_subjects','ieeg_subjects')}
+        if saved_config!=current_config:
             raise ValueError('Cache configuration changed. Choose a new cache directory.')
         for signature in saved['source_files']:
             if Path(signature['path']).exists() and _signature(signature['path'])!=signature:
                 raise ValueError('A source file changed. Choose a new cache directory to re-export trials.')
+        times=np.asarray(saved['times'],float)
+        sources=saved['source_files']
+        requested={(modality,str(subject)) for modality,subjects in
+                   [('ieeg',ieeg_subjects),('meg',meg_subjects)] for subject in subjects}
+        records=[row for row in saved['records']
+                 if (row['modality'],row['subject']) in requested
+                 and len(row['files'])==len(conditions)
+                 and all((root/f).is_file() for f in row['files'])]
+    completed={(row['modality'],row['subject']) for row in records}
+
+    def save_progress():
+        pending=root/'manifest.json.tmp'
+        pending.write_text(json.dumps(dict(config=config,times=times.tolist(),records=records,
+                                          source_files=sources),indent=2))
+        pending.replace(manifest)
+
+    if all((modality,str(subject)) in completed for modality,subjects in
+           [('ieeg',ieeg_subjects),('meg',meg_subjects)] for subject in subjects) and times is not None:
+        save_progress()
+        print('cache computed')
         return load_trial_cache(root)
-    if any(root.iterdir()):
-        raise ValueError('Incomplete/nonempty trial cache: choose a new directory.')
     extra=None
     if trial_metadata_csv:
         extra=pd.read_csv(trial_metadata_csv,dtype={'subject':str,'modality':str})
         keys=['modality','subject','condition','trial_index']
         if not set(keys)<=set(extra) or extra.duplicated(keys).any():
             raise ValueError('Trial metadata needs unique modality/subject/condition/trial_index keys.')
-    times=None; records=[]; sources=[]
     for modality, subjects in [('ieeg',ieeg_subjects),('meg',meg_subjects)]:
         for subject in subjects:
+            if (modality,str(subject)) in completed:
+                continue
             if modality=='ieeg':
                 info_path=Path(ieeg_dir)/f'{subject}_info.json'
                 data_path=Path(ieeg_dir)/f'{subject}_epochs.p'
@@ -158,11 +181,12 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
                     blocks.append(rows.permutation_block.astype(str).tolist() if 'permutation_block' in rows else ['all']*len(a))
             records.append(dict(modality=modality,subject=str(subject),files=files,positions=pos.tolist(),
                 metadata=sm.to_dict(orient='list'),split_groups=groups,permutation_blocks=blocks))
+            save_progress()
             print(f'Cached {modality} {subject}: {[len(a) for a in arrays]} trials',flush=True)
             del arrays, a
             if modality=='meg':del out
             else:del epochs
-    manifest.write_text(json.dumps(dict(config=config,times=times.tolist(),records=records,source_files=sources),indent=2))
+    save_progress()
     return load_trial_cache(root)
 
 
