@@ -564,8 +564,18 @@ def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval'):
     return result
 
 
-def plot_plssvd_validation(result):
-    """Primary train/test curves, condition contrasts, reliability and nulls."""
+def plot_plssvd_validation(result, output_dir=None, show=True):
+    """Plot validation; optionally save PNG/PDF figures and disable display."""
+    def finish_figure(fig, name):
+        if output_dir is not None:
+            destination=Path(output_dir)
+            destination.mkdir(parents=True,exist_ok=True)
+            for extension in ('png','pdf'):
+                fig.savefig(destination/f'{name}.{extension}',dpi=200)
+        if show:
+            plt.show()
+        plt.close(fig)
+
     s=result['summary'];fig,axes=plt.subplots(1,3,figsize=(16,4),constrained_layout=True)
     for col,label in [('train_mean_r','Training'),('test_mean_r','Held-out')]:axes[0].plot(s.repeat,s[col],'o-',label=label)
     axes[0].set(title='Cross-modal correspondence',ylabel='Mean paired Pearson r',xlabel='Repetition',ylim=(-1,1));axes[0].legend()
@@ -573,7 +583,7 @@ def plot_plssvd_validation(result):
     axes[1].axhline(0,color='grey',ls=':');axes[1].set(title='Held-out prediction',ylabel='Q² vs training-mean baseline',xlabel='Repetition');axes[1].legend()
     for col,label in [('ieeg_split_half_r','iEEG'),('meg_split_half_r','MEG')]:axes[2].plot(s.repeat,s[col],'o-',label=label)
     axes[2].set(title='Test-half temporal reliability',ylabel='Pearson r',xlabel='Repetition',ylim=(-1,1));axes[2].legend()
-    plt.show();plt.close(fig)
+    finish_figure(fig,'validation_summary')
     primary=result['primary_scores'];k=min(3,primary['test']['ieeg'].shape[1]);times=result['times']
     fig,axes=plt.subplots(k,2,figsize=(14,3*k),squeeze=False,constrained_layout=True)
     for pc in range(k):
@@ -587,7 +597,8 @@ def plot_plssvd_validation(result):
                 axes[pc,1].plot(times,(values[1,:,pc]-values[0,:,pc])/sd,color=color,ls=style,label=f'{modality} {part}')
         axes[pc,0].set(title=f'Component {pc+1}: condition mean',xlabel='Time (s)',ylabel='Score / training SD')
         axes[pc,1].set(title=f'Component {pc+1}: condition 2 − condition 1',xlabel='Time (s)',ylabel='Contrast / training SD')
-    axes[0,0].legend(fontsize=8);plt.show();plt.close(fig)
+    axes[0,0].legend(fontsize=8)
+    finish_figure(fig,'primary_time_courses')
     if not result['null_tests'].empty:
         fig,axes=plt.subplots(1,3,figsize=(15,4),constrained_layout=True)
         for ax,row in zip(axes,result['null_tests'].itertuples()):
@@ -595,4 +606,4 @@ def plot_plssvd_validation(result):
             if values:ax.hist(values,bins=min(25,len(values)),color='grey',alpha=.6)
             ax.axvline(row.observed,color='crimson',label='Observed')
             ax.set(title=row.test,xlabel='Predeclared test statistic',ylabel='Null draws');ax.legend()
-        plt.show();plt.close(fig)
+        finish_figure(fig,'primary_null_tests')
