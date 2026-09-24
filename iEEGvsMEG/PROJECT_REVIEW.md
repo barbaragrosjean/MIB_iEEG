@@ -4,7 +4,7 @@
 
 | Analysis | Implementation | Evaluation scope | Output |  Results | 
 |---|---|---|---|---| 
-| Coverage matching and composition sensitivity | Implemented in `coverage_sampling.py` and `coverage_matching.ipynb` | Compute different MEG dataset organisation and test how much the information is shared with iEEG using PCA on both dataset individually |  
+| Coverage matching and composition sensitivity | Implemented in `coverage_stability.py` and `coverage_matching.ipynb` | Compute different MEG dataset organisation and test how much the information is shared with iEEG using PCA on both dataset individually |  
 | PLSSVD selection and validation | Implemented in `plssvd_eval` modules | Training-only fitting, tuning-selected **k components**, **independent test trials from the same participants** |
 | PCA versus PLSSVD/joint PCA within each modality | Implemented in `compare_models.py`, `cov_models.ipynb` and the `compare_subspace` batch pipeline | Descriptive notebook comparisons and held-out comparisons with training-frozen component assignments/signs |
 | Cross-modality geometry and spatial clustering | Implemented in `compare_subspace` | Held-out trial representations at recurring times and locations; exploratory clustering |
@@ -46,25 +46,19 @@ F=0.60(0.90)+0.30(0.50)+0.10(0.20)=0.71.
 
 The first two are invariant to a change of basis within the retained subspace; the third handles sign/order ambiguity but not arbitrary rotations. 
 
-**Validation across participants pool: sampling sensitivity analysis** `coverage_sampling.py` and the final section of `coverage_matching.ipynb`. 
-1. keep the complete iEEG reference fixed.
-2. Randomly order MEG participants and form nested pools of n_subj 
-3. build all five compositions from each pool
-4. apply the requested feature bidgets and refit MEG PCA
-5. Compute the three metrics and components assignements
-6. repeat with another sampling
+**Two separate sensitivity analyses.** The final notebook sections now use `coverage_stability.py`. They replace the mixed participant-pool/feature-budget sweep. Both use only the mean absolute Pearson correlation after one-to-one matching of the first k PCA time courses. Matching handles component order; absolute values handle sign flips. Per-component signed/absolute correlations are retained in `component_pairs.csv`.
 
-Composition | How the pool affects it
-|---|---|
-full_average	| Average all participants in the selected pool.
-full_concatenated	| Concatenate their source features; optionally subsample to a fixed feature count.
-coverage_average	| Match electrode locations in every pool participant, then average across the pool.
-paired_coverage	| Assign n_ieeg_subj distinct MEG participants from the pool to the n_ieeg_subj iEEG participants.
-random_control	| Use those same assigned participants, but randomize source locations. 
+**A. Actual subject-count stability (5, 10, 20, 30).** Independently sample MEG and iEEG participants without replacement. Within a repetition, smaller subsets are nested in larger ones. Counts exceeding the available cohort are explicitly marked as unavailable, not replaced by nearby counts. MEG uses `full_average`, `full_concatenated` and `coverage_average`; no participant assignment is needed, so five MEG participants are allowed even with thirty iEEG participants. iEEG retains all electrodes of each sampled subject in original order. Full averaging uses MEG row indices without grid alignment. Native feature counts are kept, so subject-count effects in concatenated MEG/iEEG also include increased feature coverage.
 
-it test Group composition and averaging affect the first three and participant random pariing for the 2 others. For each repetition and pool, paired coverage and its random control share participants, selected electrode slots, feature counts and repeated-source structure. Their difference therefore assesses the effect of anatomical source selection more directly.
+For each modality/composition/count, compare each fitted PCA to the corresponding full-cohort PCA, and compare every pair of resampled PCAs at that count. For cross-modal correspondence, compare each MEG subset to fixed full-cohort iEEG PCA, and each iEEG subset to each fixed full-cohort MEG composition. This separates PCA stability from cross-modal agreement. Plots show median/range versus actual selected subject count. Full-cohort subset stability is one by construction when all participants are selected; this is not independent validation.
 
-Exports are `metrics.csv`, `component_pairs.csv`, `selections.csv`, `matching.csv`, `coverage_mapping.csv`, `matching_summary.csv` and `paired_control_deltas.csv`. They contain all three temporal metrics, cumulative PCA variance fractions, component pairs, exact selections (compact ranges for complete full-source blocks), anatomical mapping distances, unique-source/duplicate summaries and within-draw paired-minus-random differences. Configuration, reference electrode metadata, time axes and a completion marker are also saved. Plots show median/range against participant pool and feature count; these ranges are not confidence intervals. Saved complete runs can be loaded without recordings using `load_coverage_sampling`.
+**B. Fixed-cohort pairing sensitivity.** Keep participant identities, subject counts and iEEG electrode slots fixed. Reuse the notebook's existing `paired_coverage` assignment as the baseline when available. Otherwise select a fixed roster once and use its initial assignment as the baseline. Randomly permute MEG-to-iEEG assignments across repetitions, computing only `paired_coverage` and `random_control`. The same selected iEEG PCA is the reference throughout.
+
+Random-control source randomization is fixed separately for each MEG subject: draw one permutation of that subject's source indices once, and apply it to the anatomical source indices in every assignment. This preserves repeated-source multiplicities while avoiding fresh source draws as an additional varying factor. It deliberately changes the control-randomization design from the old mixed sweep.
+
+Compare each randomized PCA with the baseline-assignment PCA, compare all pairs of randomized PCAs, and correlate every result with the fixed iEEG PCA. Plots show the correlation distributions and mark baseline cross-modal correspondence. Export paired-minus-control correlation differences for the same assignment. High stability supports robustness to arbitrary pairing; it does not validate biological identity or true correspondence between different participants. Neither analysis produces inferential p-values or population confidence intervals. Component matching is descriptive and reoptimized separately for every comparison.
+
+**Outputs.** Both runs save `config.json`, `metrics.csv`, `component_pairs.csv`, `participants.csv`, `scores.npz` and `COMPLETE.json`. The subject-count run also saves `availability.csv`. The pairing run adds `assignments.csv`, `source_mapping.csv`, `ieeg_features.csv`, `control_source_permutations.npz` and `paired_control_differences.csv`. The notebook saves separate PNG figures in `out/subject_count_stability` and `out/pairing_stability`. Use `load_stability_results` to reload either completed run; existing results retain their saved settings, and changing settings requires a new output directory.
 
 ### Results and interpretations
 TODO
@@ -128,7 +122,7 @@ Fit identity, orthogonal rotation/reflection, regularized affine and regularized
 | Implemented | Model comparison | Descriptive and trial-held-out within-modality comparisons now exist; run the updated pipeline before interpreting project results. |
 | Medium | Scaling defaults | Covariance/validation use `none`; subspace comparison defaults to `equal_variance`. Record and harmonize this choice, especially for joint PCA. Scalar modality scaling alone does not change ideal PLSSVD directions, but changes joint PCA's balance. MEG channel z-scoring versus unstandardized iEEG also changes what “dominant variance” means. |
 | Medium | Correlation reporting | Coverage matrices are Spearman; matching summaries and validation use Pearson. Label both explicitly. A notebook TODO requests Spearman native matching, but it is not implemented; do not describe it as completed. |
-| Implemented | Coverage design | Repeated coordinated draws and crossed participant-pool/feature-budget sweeps are available; run them on the project recordings. |
+| Implemented | Coverage design | Separate actual subject-count (MEG and iEEG) and fixed-cohort pairing analyses are available; run them on the project recordings. |
 | Medium | Validation/results | Test-half reliability fixes trained axes; independently refit models and compare subspaces if the claim is stability of learned patterns. Do not average PC1 across repetitions as if component identity were guaranteed. |
 | Medium | Result lifecycle | PLSSVD output directories can be reused without a run-completion guard; comparison writes a completion marker but rejects any existing configuration, including interrupted runs. Add run identity, completion checks and a deliberate resume policy. |
 | High | Reproducibility | The six-test synthetic suite passed on 23 September, but `tests/test_comparison_extensions.py` is absent on 24 September; only its compiled cache remains. Restore the test source before rerunning validation. A dependency manifest is also absent; `src.setting/GetInfo`, data and cluster paths remain external. |
@@ -141,7 +135,9 @@ Completed maintenance includes the obsolete notebook-import fix, corrected PLSSV
 | Files | Role |
 |---|---|
 | `coverage_matching.ipynb`, `coverage_matching_utils.py` | Data loading, anatomical sampling, five MEG compositions and descriptive PCA comparisons |
-| `coverage_sampling.py` | Repeated MEG participant-pool/feature-budget sensitivity, audits, reload and plots |
+| `coverage_stability.py` | Separate actual subject-count and fixed-cohort pairing sensitivity, matched correlations, saved results and plots |
+| `coverage_sampling.py` | Legacy mixed pool/feature-budget sweep; no longer called by the coverage notebook |
+| `tests/test_coverage_stability.py` | Five synthetic tests for sign/order invariance, both-modality count sweeps, fixed pairing rosters/control maps, persistence and plotting |
 | `compare_models.py` | Within-modality model-pair comparisons with training-frozen component matching |
 | `tests/` | `test_meg_grids.py` checks index-based averaging with differing coordinates and incompatible array shapes; restore the missing `test_comparison_extensions.py` to rerun the original six-test suite |
 | `cov_models.ipynb`, `cov_models_utils.py` | Descriptive separate/joint PCA and PLSSVD objectives, reconstruction and cross-covariance metrics |
@@ -157,7 +153,7 @@ Recommended order: establish task/data provenance and alignment → assess cover
 
 ## Running the extensions
 
-Run the added final section of `coverage_matching.ipynb` after loading `ieeg`. It defaults to 20 sampling repetitions, up to three distinct participant-pool sizes, and up to two distinct common feature budgets plus native counts; duplicate settings are removed for small cohorts. Review these settings for runtime and the intended study design. A completed output directory is loaded with its saved configuration; choose a new directory to change settings. Interrupted runs are not resumed automatically.
+Run the final two sections of `coverage_matching.ipynb` after loading `ieeg` and the initial datasets. Defaults are 20 repetitions, 3 retained components, and actual subject counts `(5, 10, 20, 30)` for both modalities. Pairing sensitivity fixes the existing paired-coverage roster/assignment when available and then permutes assignments without changing subject membership. The two analyses have separate output directories. Completed runs reload their saved configuration; choose new directories for changed settings. Interrupted runs are not automatically resumed.
 
 Run the final section of `cov_models.ipynb` for descriptive within-modality comparisons. For held-out results, use the existing batch command with at least two models and a new output directory:
 
@@ -197,3 +193,6 @@ Verify that six tests are actually discovered; a zero-test run is not validation
 At the user's request, `full_average` averages MEG sources by their existing row index. Participants must have the same source count and compatible condition/time dimensions. Coordinate equality is not required, and no source-grid alignment, reordering or interpolation is performed. The first participant's coordinates remain the coordinate metadata for the averaged dataset. iEEG signals and electrode order are not aligned or reordered. The existing nearest-source sampling used by coverage-specific MEG compositions remains part of those analyses.
 
 The coordinate diagnostics/reordering helpers and their notebook cells have been removed. Both the dataset builder and repeated coverage sampler use shape compatibility checks only for full averaging.
+
+
+Verification of the separated analyses: all seven currently available tests passed (five new stability tests and two index-based averaging tests). The new tests exercise the exact 5/10/20/30 grid for MEG and iEEG, small MEG subsets with a larger iEEG cohort, unavailable-count reporting, sign/order invariance, fixed participant membership and control-source mappings across assignments, reproducibility, result reload and plot exports. Project recordings remain unavailable in this checkout, so these are synthetic checks rather than real-data results.

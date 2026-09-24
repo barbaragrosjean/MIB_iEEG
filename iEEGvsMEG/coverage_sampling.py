@@ -1,4 +1,7 @@
-"""Repeated, coordinated MEG coverage and composition sensitivity analysis.
+"""Legacy mixed MEG coverage and composition sensitivity analysis.
+
+The coverage notebook now uses coverage_stability.py to separate actual
+subject-count effects from fixed-cohort assignment effects.
 
 The iEEG reference is fixed. This operates on condition averages and is
 descriptive, not a trial-held-out test or a population confidence interval.
