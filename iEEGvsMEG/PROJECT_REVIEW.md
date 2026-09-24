@@ -46,7 +46,7 @@ F=0.60(0.90)+0.30(0.50)+0.10(0.20)=0.71.
 
 The first two are invariant to a change of basis within the retained subspace; the third handles sign/order ambiguity but not arbitrary rotations. 
 
-**Two separate sensitivity analyses.** The final notebook sections now use `coverage_stability.py`. They replace the mixed participant-pool/feature-budget sweep. Both use only the mean absolute Pearson correlation after one-to-one matching of the first k PCA time courses. Matching handles component order; absolute values handle sign flips. Per-component signed/absolute correlations are retained in `component_pairs.csv`.
+**Two separate sensitivity analyses.** The final notebook sections now use `coverage_stability.py`. Both use only the mean absolute Pearson correlation after one-to-one matching of the first k PCA time courses. Matching handles component order; absolute values handle sign flips. Per-component signed/absolute correlations are retained in `component_pairs.csv`.
 
 **A. Actual subject-count stability (5, 10, 20, 30).** Independently sample MEG and iEEG participants without replacement. Within a repetition, smaller subsets are nested in larger ones. Counts exceeding the available cohort are explicitly marked as unavailable, not replaced by nearby counts. MEG uses `full_average`, `full_concatenated` and `coverage_average`; no participant assignment is needed, so five MEG participants are allowed even with thirty iEEG participants. iEEG retains all electrodes of each sampled subject in original order. Full averaging uses MEG row indices without grid alignment. Native feature counts are kept, so subject-count effects in concatenated MEG/iEEG also include increased feature coverage.
 
