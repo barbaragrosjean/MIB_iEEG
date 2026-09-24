@@ -1,8 +1,8 @@
 """Trial-held-out PLSSVD validation. No time-sample train/test splitting.
 
 All trainable normalisation, PLS weights and prediction maps are training-only.
-Component count is selected on an independent tuning partition. Test halves
-are reserved for test performance and conditional split-half reliability.
+Component count is fixed in advance. The same cohort and anatomical assignment
+are evaluated on repeated random train/test trial splits, without tuning.
 """
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,10 +25,10 @@ from cov_models_utils import _gram, _spectrum, _weights
 @dataclass
 class ValidationOptions:
     repeats: int = 5
-    candidates: tuple = (1, 2, 3, 5, 10)
+    n_components: int = 5
+    train_fraction: float = .7
     n_null: int = 199
     seed: int = 2026
-    subject_fraction: float = .8  # repeats after the primary full-cohort run
     split_unit: str = 'trial'    # 'group' uses split_group from trial metadata
     block_scaling: str = 'none'
     ridge: float = 1e-3         # fixed, relative to training score covariance
@@ -170,8 +170,8 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
             for c,a in zip(conditions,arrays):
                 if a.ndim!=3 or a.shape[1:]!=(len(pos),len(times)) or not np.isfinite(a).all():
                     raise ValueError(f'{subject}, condition {c}: invalid trial array.')
-                if len(a)<8:
-                    raise ValueError(f'{subject}, condition {c}: need >=8 trials for train/tune/two test halves.')
+                if len(a)<6:
+                    raise ValueError(f'{subject}, condition {c}: need >=6 trials for training and two test halves.')
                 fname=f'{modality}_{subject}_condition{c}.npy'
                 target=root/fname
                 reuse=False
@@ -223,7 +223,7 @@ def load_trial_cache(cache_dir):
 
 
 def _split_subject(subject,rng,unit):
-    """Return independent train/tune/test_a/test_b indices per condition."""
+    """Legacy split used by compare_subspace; fixed-k PLSSVD uses _split_train_test."""
     names=('train','tune','test_a','test_b')
     out={name:[] for name in names}
     if unit=='trial':
@@ -250,6 +250,42 @@ def _split_subject(subject,rng,unit):
         else:raise ValueError('Cannot split groups with >=2 trials per condition in every partition.')
     else:raise ValueError("split_unit must be 'trial' or 'group'.")
     out['test']=[np.concatenate([a,b]) for a,b in zip(out['test_a'],out['test_b'])]
+    return out
+
+
+def _split_train_test(subject, rng, unit, train_fraction):
+    """Repeated holdout, not disjoint K-fold CV. Test A/B partition the test set."""
+    names = ('train', 'test_a', 'test_b')
+    out = {name: [] for name in names}
+    if unit == 'trial':
+        for array in subject.data:
+            n = len(array)
+            if n < 6:
+                raise ValueError('Need >=6 trials per condition: >=2 train and >=2 in each test half.')
+            ntrain = min(max(2, int(np.floor(n*train_fraction))), n-4)
+            nt = n-ntrain
+            parts = np.split(rng.permutation(n), [ntrain, ntrain+nt//2])
+            for name, part in zip(names, parts): out[name].append(part)
+    elif unit == 'group':
+        if any(g is None for g in subject.split_groups):
+            raise ValueError('Group splitting requires split_group for every trial.')
+        groups = np.unique(np.concatenate(subject.split_groups))
+        if len(groups) < 3:
+            raise ValueError('Need >=3 groups for training and two independent test halves.')
+        ntrain = min(max(1, int(np.floor(len(groups)*train_fraction))), len(groups)-2)
+        for _ in range(500):
+            rest = len(groups)-ntrain
+            parts = np.split(rng.permutation(groups), [ntrain, ntrain+rest//2])
+            proposed = {name: [np.flatnonzero(np.isin(g, part)) for g in subject.split_groups]
+                        for name, part in zip(names, parts)}
+            if all(len(ix) >= 2 for conditions in proposed.values() for ix in conditions):
+                out = proposed
+                break
+        else:
+            raise ValueError('Cannot split groups with >=2 trials per condition in train and each test half.')
+    else:
+        raise ValueError("split_unit must be 'trial' or 'group'.")
+    out['test'] = [np.concatenate([a, b]) for a, b in zip(out['test_a'], out['test_b'])]
     return out
 
 
@@ -286,7 +322,8 @@ def _build_fold(trials,meg_kind,split_indices,root,seed,mmap_handles=None):
     coords=np.concatenate([s.positions for s in trials.ieeg]);owners=np.concatenate([np.repeat(s.subject,len(s.positions)) for s in trials.ieeg])
     context={'times':trials.times,'load_config':{'conditions':list(trials.conditions)}}
     datasets={};audit=None;pairing=None
-    for part in ('train','tune','test_a','test_b','test'):
+    # Shared with compare_subspace, which still has a tuning partition.
+    for part in next(iter(split_indices['ieeg'].values())):
         ieeg_arrays=[prepared['ieeg'][s.subject][part] for s in trials.ieeg]
         ieeg=Dataset('iEEG',ieeg_arrays,metadata,np.arange(len(coords)),'stack',source_data=context)
         selected,audit,pairing=construct_five_datasets(
@@ -358,11 +395,15 @@ def _fit(train,max_components,options):
 
 
 def _project(dataset,model,modality):
+    # Float64 centering in bounded chunks keeps projections consistent with
+    # the Gram-based covariance calculation, including float32 cached averages.
     out=np.zeros((dataset.n_observations,model['k_max']));offset=0
-    for x in dataset.blocks():
-        width=x.shape[1];section=slice(offset,offset+width)
-        out+=(x-model[modality+'_mean'][section])@model[modality+'_weights'][section]*model[modality+'_scale']
-        offset+=width
+    for block in dataset.blocks():
+        for start in range(0, block.shape[1], 1024):
+            stop=min(start+1024,block.shape[1]);section=slice(offset+start,offset+stop)
+            x=np.asarray(block[:,start:stop],dtype=float)-model[modality+'_mean'][section]
+            out+=x@model[modality+'_weights'][section]*model[modality+'_scale']
+        offset+=block.shape[1]
     return out
 
 
@@ -503,109 +544,193 @@ def _null_tests(trials,fold,model,scalers,audit,kind,indices,scores,patterns,k,o
     return pd.DataFrame(rows),values
 
 
-def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval',scratch_dir=None):
-    """Run nested repeated trial holdouts, test-half reliability and primary nulls.
+def _reconstruction_fraction(dataset, scores, model, modality):
+    """Own-modality orthogonal reconstruction, relative to TRAIN feature means."""
+    error = baseline = 0.
+    offset = 0
+    for block in dataset.blocks():
+        for start in range(0, block.shape[1], 1024):
+            stop = min(start+1024, block.shape[1])
+            section = slice(offset+start, offset+stop)
+            centered = np.asarray(block[:, start:stop], dtype=float)-model[modality+'_mean'][section]
+            predicted = (scores/model[modality+'_scale']) @ model[modality+'_weights'][section].T
+            error += np.sum((centered-predicted)**2)
+            baseline += np.sum(centered**2)
+        offset += block.shape[1]
+    return float(1-error/baseline) if baseline > 0 else np.nan
 
-    Primary repetition 0 uses all participants. Later repetitions use participant
-    subsamples and new pairings. Participants are NEVER held out from training:
-    all tests use new trials from the same selected participants. Resampling
-    spread is not a population confidence interval. Nulls are performed only on
-    the predeclared primary repetition, not combined across overlapping repeats.
+
+def _evaluate_fixed_model(datasets, scores, model, predictors):
+    """Test covariance uses partition-centered scores, without refitting axes.
+
+    Crosscov energy denominator covers ALL feature pairs, calculated with Gram
+    matrices. Covariance is descriptive over condition/time rows, not trial-paired.
     """
-    options=options or ValidationOptions();out=Path(output_dir);out.mkdir(parents=True,exist_ok=True)
-    if options.repeats<1 or options.n_null<0 or not 0<options.subject_fraction<=1 or options.ridge<=0:
-        raise ValueError('Invalid repeat/null counts, participant fraction or ridge penalty.')
-    candidates=sorted(set(options.candidates))
-    if not candidates or any(int(k)!=k or k<1 for k in candidates):raise ValueError('Candidates must be positive integers.')
-    summaries=[];components=[];selections=[];split_rows=[];participants=[]
-    null_summary=pd.DataFrame();null_values={};primary_scores={}
-    master=np.random.SeedSequence(options.seed)
-    for repeat,seed_sequence in enumerate(master.spawn(options.repeats)):
-        rng=np.random.default_rng(seed_sequence)
-        def subset(subjects,n):return [subjects[i] for i in sorted(rng.choice(len(subjects),n,replace=False))]
-        ni=len(trials.ieeg) if repeat==0 else max(1,int(np.ceil(len(trials.ieeg)*options.subject_fraction)))
-        nm=len(trials.meg) if repeat==0 else max(ni,int(np.ceil(len(trials.meg)*options.subject_fraction)))
-        if nm>len(trials.meg):raise ValueError('Need >= as many MEG as iEEG participants for one-to-one matching.')
-        active=TrialData(subset(trials.ieeg,ni),subset(trials.meg,nm),trials.times,trials.conditions)
-        indices={modality:{s.subject:_split_subject(s,rng,options.split_unit) for s in getattr(active,modality)} for modality in ('ieeg','meg')}
-        for modality in ('ieeg','meg'):
-            for s in getattr(active,modality):
-                participants.append(dict(repeat=repeat,modality=modality,subject=s.subject))
-                for part in ('train','tune','test_a','test_b'):
-                    for ci,ix in enumerate(indices[modality][s.subject][part]):
-                        for trial in ix:
-                            split_rows.append(dict(repeat=repeat,modality=modality,subject=s.subject,condition=active.conditions[ci],
-                                trial_index=int(trial),partition=part,
-                                split_group=s.split_groups[ci][trial] if s.split_groups[ci] is not None else ''))
-        matching_seed=int(rng.integers(0,2**31-1))
-        with _temporary_fold(active,meg_kind,indices,matching_seed,scratch_dir) as prepared_fold:
-            fold,scalers,audit,pairing=prepared_fold
-            model=_fit(fold['train'],max(candidates),options)
-            allowed=[k for k in candidates if k<=model['k_max']]
-            if not allowed:raise ValueError('No candidate component count supported by training data.')
-            if len(allowed)<len(candidates):warnings.warn('Some component candidates exceed training rank and were excluded.')
-            scores={part:{modality:_project(data,model,modality) for modality,data in datasets.items()} for part,datasets in fold.items()}
-            best=None;best_value=-np.inf;predictors={}
-            for k in allowed:
-                bx=_predictor(scores['train']['meg'][:,:k],fold['train']['ieeg'],model['ieeg_mean'],options.ridge)
-                by=_predictor(scores['train']['ieeg'][:,:k],fold['train']['meg'],model['meg_mean'],options.ridge)
-                qx=_q2(scores['tune']['meg'][:,:k],fold['tune']['ieeg'],model['ieeg_mean'],bx)
-                qy=_q2(scores['tune']['ieeg'][:,:k],fold['tune']['meg'],model['meg_mean'],by)
-                value=(qx+qy)/2
-                selections.append(dict(repeat=repeat,k=k,tune_predict_ieeg_q2=qx,tune_predict_meg_q2=qy,selection_score=value))
-                if value>best_value+1e-12:
-                    best,best_value=k,value;predictors={'ieeg':bx,'meg':by}
-            if best is None:raise ValueError('No finite tuning prediction score.')
-            k=best
-            patterns={part:{modality:_patterns(data,scores[part][modality][:,:k]) for modality,data in fold[part].items()} for part in ('test_a','test_b','test')}
-            train_r=_r(scores['train']['ieeg'][:,:k],scores['train']['meg'][:,:k])
-            test_r=_r(scores['test']['ieeg'][:,:k],scores['test']['meg'][:,:k])
-            contrast={modality:_contrast(scores['test'][modality][:,:k],len(trials.times)) for modality in ('ieeg','meg')}
-            contrast_r=_r(contrast['ieeg'],contrast['meg'])
-            temporal_reliability={m:_r(scores['test_a'][m][:,:k],scores['test_b'][m][:,:k]) for m in ('ieeg','meg')}
-            contrast_reliability={m:_r(_contrast(scores['test_a'][m][:,:k],len(trials.times)),
-                                      _contrast(scores['test_b'][m][:,:k],len(trials.times))) for m in ('ieeg','meg')}
-            spatial_reliability={m:_r(patterns['test_a'][m],patterns['test_b'][m]) for m in ('ieeg','meg')}
-            qx=_q2(scores['test']['meg'][:,:k],fold['test']['ieeg'],model['ieeg_mean'],predictors['ieeg'])
-            qy=_q2(scores['test']['ieeg'][:,:k],fold['test']['meg'],model['meg_mean'],predictors['meg'])
-            summaries.append(dict(repeat=repeat,selected_k=k,n_ieeg=ni,n_meg=nm,train_mean_r=float(np.mean(train_r)),
-                test_mean_r=float(np.mean(test_r)),test_mean_abs_contrast_r=float(np.mean(np.abs(contrast_r))),
-                predict_ieeg_q2=qx,predict_meg_q2=qy,
-                ieeg_split_half_r=float(np.mean(temporal_reliability['ieeg'])),meg_split_half_r=float(np.mean(temporal_reliability['meg'])),
-                ieeg_pattern_split_half_r=float(np.mean(spatial_reliability['ieeg'])),meg_pattern_split_half_r=float(np.mean(spatial_reliability['meg']))))
-            for pc in range(k):
-                components.append(dict(repeat=repeat,component=pc+1,train_r=train_r[pc],test_r=test_r[pc],contrast_r=contrast_r[pc],
-                    ieeg_split_half_r=temporal_reliability['ieeg'][pc],meg_split_half_r=temporal_reliability['meg'][pc],
-                    ieeg_contrast_split_half_r=contrast_reliability['ieeg'][pc],meg_contrast_split_half_r=contrast_reliability['meg'][pc],
-                    ieeg_pattern_split_half_r=spatial_reliability['ieeg'][pc],meg_pattern_split_half_r=spatial_reliability['meg'][pc],
-                    ieeg_contrast_rms=float(np.sqrt(np.mean(contrast['ieeg'][:,pc]**2))),meg_contrast_rms=float(np.sqrt(np.mean(contrast['meg'][:,pc]**2)))))
-            if repeat==0:
-                primary_scores={part:{m:s[:,:k].copy() for m,s in v.items()} for part,v in scores.items()}
-                if options.n_null:
-                    null_summary,null_values=_null_tests(active,fold,model,scalers,audit,meg_kind,indices,scores,patterns,k,options,rng)
-                    null_summary.to_csv(out/'primary_null_tests.csv',index=False)
-                    np.savez_compressed(out/'primary_null_distributions.npz',**null_values)
-            audit.to_csv(out/f'matching_{repeat:03d}.csv',index=False)
-            fold['train']['ieeg'].metadata.to_csv(out/f'ieeg_features_{repeat:03d}.csv',index=False)
-            fold['train']['meg'].metadata.to_csv(out/f'meg_features_{repeat:03d}.csv',index=False)
-            np.savez_compressed(out/f'model_{repeat:03d}.npz',ieeg_weights=model['ieeg_weights'][:,:k],meg_weights=model['meg_weights'][:,:k],
-                ieeg_mean=model['ieeg_mean'],meg_mean=model['meg_mean'],ieeg_scale=model['ieeg_scale'],meg_scale=model['meg_scale'],
-                predict_ieeg=predictors['ieeg'],predict_meg=predictors['meg'],
-                **{f'{part}_{modality}':s[:,:k] for part,v in scores.items() for modality,s in v.items()})
-            np.savez_compressed(out/f'preprocessing_{repeat:03d}.npz',
-                **{f'{modality}_{subject}_{label}':value for modality,subjects in scalers.items() for subject,params in subjects.items()
-                   for label,value in zip(['mean','std','multiplier'],params)})
-        print(f'Repetition {repeat+1}/{options.repeats}: selected {k} components; held-out mean r={summaries[-1]["test_mean_r"]:.3f}',flush=True)
-    result={'summary':pd.DataFrame(summaries),'components':pd.DataFrame(components),'selection':pd.DataFrame(selections),
-            'split_audit':pd.DataFrame(split_rows),'participants':pd.DataFrame(participants),'null_tests':null_summary,
-            'null_distributions':null_values,'primary_scores':primary_scores,'times':trials.times,'conditions':trials.conditions}
-    np.savez_compressed(out/'trial_axes.npz',times=trials.times,conditions=trials.conditions)
-    for name in ('summary','components','selection','split_audit','participants'):result[name].to_csv(out/f'{name}.csv',index=False)
-    (out/'validation_options.json').write_text(json.dumps(dict(**options.__dict__,meg_kind=meg_kind,
-        ieeg_preprocessing='fixed multiplier 1000',meg_preprocessing='zscore of training condition averages',
-        scope='new trials from selected training participants; not held-out participants'),indent=2))
-    return result
+    from cov_models_utils import _chunks
+    n = datasets['ieeg'].n_observations
+    centered = {m: scores[m]-scores[m].mean(0) for m in ('ieeg', 'meg')}
+    covariance = centered['ieeg'].T@centered['meg']/(n-1)
+    grams = {}
+    metrics = {}
+    for m in ('ieeg', 'meg'):
+        gram = np.zeros((n, n))
+        for block in _chunks(datasets[m]): gram += block@block.T
+        grams[m] = gram*model[m+'_scale']**2
+        metrics[m+'_reconstruction_fraction'] = _reconstruction_fraction(datasets[m], scores[m], model, m)
+        other = 'meg' if m == 'ieeg' else 'ieeg'
+        metrics['predict_'+m+'_q2'] = float(_q2(scores[other], datasets[m], model[m+'_mean'], predictors[m]))
+    total_energy = float(np.sum(grams['ieeg']*grams['meg'])/(n-1)**2)
+    captured = float(np.sum(covariance**2))
+    metrics.update(crosscov_energy_fraction=float(np.clip(captured/total_energy, 0, 1)) if total_energy > 0 else np.nan,
+        paired_crosscov_energy_fraction=float(np.clip(np.sum(np.diag(covariance)**2)/total_energy, 0, 1)) if total_energy > 0 else np.nan,
+        mean_paired_covariance=float(np.mean(np.diag(covariance))),
+        total_crosscov_energy=total_energy, captured_crosscov_energy=captured,
+        mean_r=float(np.mean(_r(scores['ieeg'], scores['meg']))))
+    return metrics, covariance
 
+
+def _across_split_stability(all_scores, k):
+    """Descriptive component matching across fits; never changes test evaluation."""
+    from itertools import combinations
+    from coverage_stability import matched_correlation
+    rows, pairs = [], []
+    for a, b in combinations(range(len(all_scores)), 2):
+        for part in ('train', 'test'):
+            for modality in ('ieeg', 'meg'):
+                summary, assignment = matched_correlation(all_scores[a][part][modality], all_scores[b][part][modality], k)
+                base = dict(fold_a=a, fold_b=b, partition=part, modality=modality, n_components=k)
+                rows.append(dict(**base, matched_abs_r=summary['correlation'], status=summary['status']))
+                pairs.extend(dict(**base, **pair) for pair in assignment)
+    return (pd.DataFrame(rows, columns=['fold_a','fold_b','partition','modality','n_components','matched_abs_r','status']),
+            pd.DataFrame(pairs, columns=['fold_a','fold_b','partition','modality','n_components','component_a','component_b','signed_r','abs_r','sign_b']))
+
+
+def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval_fixed',scratch_dir=None):
+    """Fixed-k repeated train/test evaluation; cohort and matching never change.
+
+    All folds (including fold 0) split trials. No tuning, subject subsampling,
+    test-dependent component count, or test-dependent sign/component rematching.
+    Test halves provide supplementary fixed-model reliability. Repeated splits
+    overlap and do not form independent replicates or disjoint K-fold CV.
+    """
+    options = options or ValidationOptions()
+    for name, minimum in [('n_components',1), ('repeats',1), ('n_null',0)]:
+        value = getattr(options, name)
+        if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < minimum:
+            raise ValueError(f'{name} must be an integer >= {minimum}.')
+    if not 0 < options.train_fraction < 1 or not np.isfinite(options.ridge) or options.ridge <= 0:
+        raise ValueError('Require 0 < train_fraction < 1 and positive finite ridge.')
+    if not trials.ieeg or not trials.meg or len(trials.conditions) != 2:
+        raise ValueError('Evaluation requires both modalities and exactly two conditions.')
+    for subjects in (trials.ieeg, trials.meg):
+        if len({s.subject for s in subjects}) != len(subjects): raise ValueError('Participant IDs must be unique.')
+    out = Path(output_dir); out.mkdir(parents=True, exist_ok=True)
+    if (out/'validation_options.json').exists() or any(out.glob('model_*.npz')):
+        raise FileExistsError('Choose a new evaluation output directory; existing results are not overwritten.')
+    settings = dict(**options.__dict__, schema_version=2, meg_kind=meg_kind,
+        design='fixed-k repeated random train/test holdout; no tuning',
+        partitions=['train','test_a','test_b','test'],
+        ieeg_preprocessing='fixed multiplier 1000', meg_preprocessing='zscore of training condition averages',
+        cohort='all cached participants in every fold; fixed participant/source assignment',
+        scope='new trials from the same participants; not held-out subjects, times or locations')
+    (out/'validation_options.json').write_text(json.dumps(settings, indent=2))
+    k = options.n_components
+    matching_seq, split_seq, null_seq = np.random.SeedSequence(options.seed).spawn(3)
+    matching_seed = int(np.random.default_rng(matching_seq).integers(2**31-1))
+    summaries, components, split_rows, participants, fold_metrics, all_scores = [], [], [], [], [], []
+    null_summary = pd.DataFrame(columns=['test','observed','tail_fraction','n_null','interpretation','note'])
+    null_values = {}; primary_scores = {}
+    for repeat, seq in enumerate(split_seq.spawn(options.repeats)):
+        rng = np.random.default_rng(seq)
+        indices = {m: {s.subject: _split_train_test(s, rng, options.split_unit, options.train_fraction)
+                       for s in getattr(trials, m)} for m in ('ieeg','meg')}
+        for modality in ('ieeg','meg'):
+            for subject in getattr(trials, modality):
+                participants.append(dict(repeat=repeat, modality=modality, subject=subject.subject))
+                for part in ('train','test_a','test_b'):
+                    for ci, ix in enumerate(indices[modality][subject.subject][part]):
+                        for trial in ix:
+                            split_rows.append(dict(repeat=repeat, modality=modality, subject=subject.subject,
+                                condition=trials.conditions[ci], trial_index=int(trial), partition=part,
+                                split_group=subject.split_groups[ci][trial] if subject.split_groups[ci] is not None else ''))
+        with _temporary_fold(trials, meg_kind, indices, matching_seed, scratch_dir) as prepared:
+            fold, scalers, audit, pairing = prepared
+            model = _fit(fold['train'], k, options)
+            if model['k_max'] != k:
+                raise ValueError(f'Fold {repeat}: training rank supports only {model["k_max"]} components, '
+                                 f'but fixed n_components={k}. Choose a supported fixed count; no automatic selection.')
+            scores = {part: {m: _project(ds, model, m) for m, ds in datasets.items()} for part, datasets in fold.items()}
+            predictors = {m: _predictor(scores['train']['meg' if m == 'ieeg' else 'ieeg'],
+                          fold['train'][m], model[m+'_mean'], options.ridge) for m in ('ieeg','meg')}
+            evaluations, covariances = {}, {}
+            for part in ('train','test'):
+                evaluations[part], covariances[part] = _evaluate_fixed_model(fold[part], scores[part], model, predictors)
+                fold_metrics.append(dict(repeat=repeat, partition=part, n_components=k, **evaluations[part]))
+            patterns = {part: {m: _patterns(ds, scores[part][m]) for m, ds in fold[part].items()}
+                        for part in ('test_a','test_b','test')}
+            temporal = {m: _r(scores['test_a'][m], scores['test_b'][m]) for m in ('ieeg','meg')}
+            contrast = {m: _contrast(scores['test'][m], len(trials.times)) for m in ('ieeg','meg')}
+            contrast_reliability = {m: _r(_contrast(scores['test_a'][m], len(trials.times)),
+                                         _contrast(scores['test_b'][m], len(trials.times))) for m in ('ieeg','meg')}
+            spatial = {m: _r(patterns['test_a'][m], patterns['test_b'][m]) for m in ('ieeg','meg')}
+            contrast_r = _r(contrast['ieeg'], contrast['meg'])
+            train_r = _r(scores['train']['ieeg'], scores['train']['meg'])
+            test_r = _r(scores['test']['ieeg'], scores['test']['meg'])
+            row = dict(repeat=repeat, n_components=k, n_ieeg=len(trials.ieeg), n_meg=len(trials.meg),
+                n_meg_contributing=audit.meg_subject.nunique() if meg_kind in ('paired_coverage','random_control') else len(trials.meg),
+                train_mean_r=float(np.mean(train_r)), test_mean_r=float(np.mean(test_r)),
+                test_mean_abs_contrast_r=float(np.mean(np.abs(contrast_r))),
+                predict_ieeg_q2=evaluations['test']['predict_ieeg_q2'], predict_meg_q2=evaluations['test']['predict_meg_q2'],
+                **{part+'_'+key: value for part, vals in evaluations.items() for key, value in vals.items()
+                   if key != 'mean_r'},
+                **{m+'_split_half_r': float(np.mean(temporal[m])) for m in ('ieeg','meg')},
+                **{m+'_pattern_split_half_r': float(np.mean(spatial[m])) for m in ('ieeg','meg')})
+            train_cov = evaluations['train']['mean_paired_covariance']
+            row['paired_covariance_retention'] = evaluations['test']['mean_paired_covariance']/train_cov if train_cov > 0 else np.nan
+            summaries.append(row)
+            for pc in range(k):
+                components.append(dict(repeat=repeat, component=pc+1, train_r=train_r[pc], test_r=test_r[pc],
+                    train_covariance=covariances['train'][pc,pc], test_covariance=covariances['test'][pc,pc],
+                    contrast_r=contrast_r[pc],
+                    **{m+'_split_half_r': temporal[m][pc] for m in ('ieeg','meg')},
+                    **{m+'_contrast_split_half_r': contrast_reliability[m][pc] for m in ('ieeg','meg')},
+                    **{m+'_pattern_split_half_r': spatial[m][pc] for m in ('ieeg','meg')},
+                    **{m+'_contrast_rms': float(np.sqrt(np.mean(contrast[m][:,pc]**2))) for m in ('ieeg','meg')}))
+            all_scores.append({part: {m: scores[part][m].copy() for m in ('ieeg','meg')} for part in ('train','test')})
+            if repeat == 0:
+                primary_scores = {part: {m: v.copy() for m,v in values.items()} for part,values in scores.items()}
+                if options.n_null:
+                    null_summary, null_values = _null_tests(trials, fold, model, scalers, audit, meg_kind,
+                        indices, scores, patterns, k, options, np.random.default_rng(null_seq))
+            audit.to_csv(out/f'matching_{repeat:03d}.csv', index=False)
+            (out/f'pairing_{repeat:03d}.json').write_text(json.dumps(pairing, indent=2))
+            for m in ('ieeg','meg'): fold['train'][m].metadata.to_csv(out/f'{m}_features_{repeat:03d}.csv', index=False)
+            np.savez_compressed(out/f'model_{repeat:03d}.npz', **model,
+                predict_ieeg=predictors['ieeg'], predict_meg=predictors['meg'],
+                **{f'{part}_{m}': value for part, vals in scores.items() for m, value in vals.items()},
+                **{part+'_score_crosscovariance': value for part, value in covariances.items()})
+            np.savez_compressed(out/f'preprocessing_{repeat:03d}.npz', **{
+                f'{m}_{subject}_{label}': value for m, subjects in scalers.items() for subject, params in subjects.items()
+                for label, value in zip(['mean','std','multiplier'], params)})
+        print(f'Split {repeat+1}/{options.repeats}: fixed k={k}; test mean r={row["test_mean_r"]:.3f}; '
+              f'test crosscov energy fraction={row["test_crosscov_energy_fraction"]:.3f}', flush=True)
+    stability, stability_pairs = _across_split_stability(all_scores, k)
+    fold_metrics = pd.DataFrame(fold_metrics)
+    long = fold_metrics.melt(id_vars=['repeat','partition','n_components'], var_name='metric', value_name='value')
+    metric_summary = long.groupby(['partition','metric'], sort=False)['value'].agg(['count','mean','std','median','min','max']).reset_index()
+    result = dict(summary=pd.DataFrame(summaries), components=pd.DataFrame(components), fold_metrics=fold_metrics,
+        metric_summary=metric_summary, fold_stability=stability, fold_component_pairs=stability_pairs,
+        split_audit=pd.DataFrame(split_rows), participants=pd.DataFrame(participants), null_tests=null_summary,
+        null_distributions=null_values, primary_scores=primary_scores, times=trials.times, conditions=trials.conditions,
+        validation_options=settings)
+    for name in ('summary','components','fold_metrics','metric_summary','fold_stability','fold_component_pairs','split_audit','participants'):
+        result[name].to_csv(out/f'{name}.csv', index=False)
+    if options.n_null:
+        null_summary.to_csv(out/'primary_null_tests.csv', index=False)
+        np.savez_compressed(out/'primary_null_distributions.npz', **null_values)
+    np.savez_compressed(out/'trial_axes.npz', times=trials.times, conditions=trials.conditions)
+    (out/'COMPLETE.json').write_text(json.dumps(dict(schema_version=2, repeats=options.repeats, n_components=k)))
+    return result
 
 
 def load_plssvd_results(output_dir, cache_dir=None):
@@ -618,7 +743,13 @@ def load_plssvd_results(output_dir, cache_dir=None):
     The returned dictionary works directly with plot_plssvd_validation.
     """
     root=Path(output_dir).expanduser().resolve()
-    table_names=('summary','components','selection','split_audit','participants')
+    options=json.loads((root/'validation_options.json').read_text())
+    fixed = options.get('schema_version', 1) >= 2
+    if fixed and not (root/'COMPLETE.json').is_file():
+        raise FileNotFoundError('Fixed-k evaluation is incomplete: COMPLETE.json is absent.')
+    table_names=(('summary','components','fold_metrics','metric_summary','fold_stability',
+                  'fold_component_pairs','split_audit','participants') if fixed else
+                 ('summary','components','selection','split_audit','participants'))
     required=[root/f'{name}.csv' for name in table_names]
     required += [root/'validation_options.json',root/'model_000.npz']
     missing=[str(path) for path in required if not path.is_file()]
@@ -641,15 +772,16 @@ def load_plssvd_results(output_dir, cache_dir=None):
                                 'or provide cache_dir for an older run.')
     if times.ndim!=1 or not len(times) or len(conditions)!=2:
         raise ValueError('Invalid saved time/condition axes.')
-    k=int(result['summary'].loc[result['summary']['repeat']==0,'selected_k'].iloc[0])
+    k_column = 'n_components' if fixed else 'selected_k'
+    k=int(result['summary'].loc[result['summary']['repeat']==0,k_column].iloc[0])
     primary={}
     with np.load(root/'model_000.npz',allow_pickle=False) as saved:
-        for part in ('train','tune','test_a','test_b','test'):
+        for part in (('train','test_a','test_b','test') if fixed else ('train','tune','test_a','test_b','test')):
             primary[part]={}
             for modality in ('ieeg','meg'):
                 scores=saved[f'{part}_{modality}']
                 if scores.shape!=(len(times)*len(conditions),k):
-                    raise ValueError(f'Saved {part}/{modality} scores disagree with axes or selected_k.')
+                    raise ValueError(f'Saved {part}/{modality} scores disagree with axes or component count.')
                 primary[part][modality]=scores
     null_tests=pd.DataFrame();null_distributions={}
     if options.get('n_null',0):
@@ -681,14 +813,17 @@ def plot_plssvd_validation(result, output_dir=None, show=True):
             plt.show()
         plt.close(fig)
 
-    s=result['summary'];fig,axes=plt.subplots(1,3,figsize=(16,4),constrained_layout=True)
-    for col,label in [('train_mean_r','Training'),('test_mean_r','Held-out')]:axes[0].plot(s.repeat,s[col],'o-',label=label)
-    axes[0].set(title='Cross-modal correspondence',ylabel='Mean paired Pearson r',xlabel='Repetition',ylim=(-1,1));axes[0].legend()
-    for col,label in [('predict_ieeg_q2','Predict iEEG'),('predict_meg_q2','Predict MEG')]:axes[1].plot(s.repeat,s[col],'o-',label=label)
-    axes[1].axhline(0,color='grey',ls=':');axes[1].set(title='Held-out prediction',ylabel='Q² vs training-mean baseline',xlabel='Repetition');axes[1].legend()
-    for col,label in [('ieeg_split_half_r','iEEG'),('meg_split_half_r','MEG')]:axes[2].plot(s.repeat,s[col],'o-',label=label)
-    axes[2].set(title='Test-half temporal reliability',ylabel='Pearson r',xlabel='Repetition',ylim=(-1,1));axes[2].legend()
-    finish_figure(fig,'validation_summary')
+    if result.get('validation_options', {}).get('schema_version', 1) >= 2:
+        _plot_fixed_evaluation(result, finish_figure)
+    else:
+        s=result['summary'];fig,axes=plt.subplots(1,3,figsize=(16,4),constrained_layout=True)
+        for col,label in [('train_mean_r','Training'),('test_mean_r','Held-out')]:axes[0].plot(s.repeat,s[col],'o-',label=label)
+        axes[0].set(title='Cross-modal correspondence',ylabel='Mean paired Pearson r',xlabel='Repetition',ylim=(-1,1));axes[0].legend()
+        for col,label in [('predict_ieeg_q2','Predict iEEG'),('predict_meg_q2','Predict MEG')]:axes[1].plot(s.repeat,s[col],'o-',label=label)
+        axes[1].axhline(0,color='grey',ls=':');axes[1].set(title='Held-out prediction',ylabel='Q² vs training-mean baseline',xlabel='Repetition');axes[1].legend()
+        for col,label in [('ieeg_split_half_r','iEEG'),('meg_split_half_r','MEG')]:axes[2].plot(s.repeat,s[col],'o-',label=label)
+        axes[2].set(title='Test-half temporal reliability',ylabel='Pearson r',xlabel='Repetition',ylim=(-1,1));axes[2].legend()
+        finish_figure(fig,'validation_summary')
     primary=result['primary_scores'];k=min(3,primary['test']['ieeg'].shape[1]);times=result['times']
     fig,axes=plt.subplots(k,2,figsize=(14,3*k),squeeze=False,constrained_layout=True)
     for pc in range(k):
@@ -712,3 +847,80 @@ def plot_plssvd_validation(result, output_dir=None, show=True):
             ax.axvline(row.observed,color='crimson',label='Observed')
             ax.set(title=row.test,xlabel='Predeclared test statistic',ylabel='Null draws');ax.legend()
         finish_figure(fig,'primary_null_tests')
+
+
+def _plot_fixed_evaluation(result, finish):
+    """Train/test performance and descriptive consistency across random splits."""
+    table = result['fold_metrics']
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8), constrained_layout=True)
+    for column, modality in enumerate(('ieeg','meg')):
+        for row, metric, title in [(0, modality+'_reconstruction_fraction', 'Own-signal reconstruction'),
+                                   (1, 'predict_'+modality+'_q2', 'Cross-modal prediction')]:
+            ax = axes[row,column]
+            for part, style in [('train','--'),('test','-')]:
+                values = table[table.partition == part]
+                ax.plot(values.repeat+1, values[metric], 'o'+style, label=part)
+            ax.axhline(0, color='grey', ls=':')
+            ax.set(title=f'{modality.upper()}: {title}', xlabel='Random split',
+                   ylabel='Retained signal fraction' if row == 0 else 'Q² vs training-mean baseline')
+            ax.legend()
+    fig.suptitle(f'Fixed {result["validation_options"]["n_components"]} components: do both datasets generalize?')
+    finish(fig, 'heldout_model_goodness')
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4), constrained_layout=True)
+    for ax, metric, title in zip(axes,
+            ['crosscov_energy_fraction','mean_paired_covariance','mean_r'],
+            ['Full cross-covariance energy retained','Mean paired score covariance','Mean paired score Pearson r']):
+        for part, style in [('train','--'),('test','-')]:
+            values = table[table.partition == part]
+            ax.plot(values.repeat+1, values[metric], 'o'+style, label=part)
+        ax.set(title=title, xlabel='Random split', ylabel=metric)
+        ax.axhline(0, color='grey', ls=':'); ax.legend()
+    finish(fig, 'heldout_crosscovariance')
+
+    matrices = {}
+    for part in ('train','test'):
+        values = result['primary_scores'][part]
+        x = values['ieeg']-values['ieeg'].mean(0)
+        y = values['meg']-values['meg'].mean(0)
+        matrices[part] = x.T@y/(len(x)-1)
+    limit = max(float(np.max(np.abs(v))) for v in matrices.values()) or 1.
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
+    for ax, (part, matrix) in zip(axes, matrices.items()):
+        im = ax.imshow(matrix, cmap='RdBu_r', vmin=-limit, vmax=limit)
+        k = len(matrix)
+        ax.set(title=f'First split: {part}', xlabel='MEG component', ylabel='iEEG component',
+               xticks=range(k), xticklabels=range(1,k+1), yticks=range(k), yticklabels=range(1,k+1))
+        fig.colorbar(im, ax=ax, label='Native score cross-covariance')
+    finish(fig, 'primary_crosscovariance')
+
+    columns = ['ieeg_reconstruction_fraction','meg_reconstruction_fraction','predict_ieeg_q2',
+               'predict_meg_q2','crosscov_energy_fraction','mean_r']
+    labels = ['iEEG reconstruction','MEG reconstruction','Predict iEEG Q²','Predict MEG Q²','Crosscov energy','Paired score r']
+    test = table[table.partition == 'test']
+    fig, ax = plt.subplots(figsize=(12, 5), constrained_layout=True)
+    for index, (metric, label) in enumerate(zip(columns, labels)):
+        values = test[metric].dropna().to_numpy()
+        if len(values):
+            ax.scatter(index+np.linspace(-.12,.12,len(values)), values, alpha=.7)
+            ax.plot(index, np.median(values), 'k_', markersize=20)
+            ax.vlines(index, values.min(), values.max(), alpha=.4)
+    ax.axhline(0, color='grey', ls=':')
+    ax.set(xticks=range(len(labels)), xticklabels=labels, ylabel='Held-out metric value',
+           title='Performance across splits: dots = splits, black mark = median, line = range (not CI)')
+    ax.tick_params(axis='x', labelrotation=20)
+    finish(fig, 'fold_performance_consistency')
+
+    count = result['validation_options']['repeats']
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
+    for ax, modality in zip(axes, ('ieeg','meg')):
+        matrix = np.full((count,count), np.nan); np.fill_diagonal(matrix, 1.)
+        data = result['fold_stability']
+        for row in data[(data.modality == modality) & (data.partition == 'test')].itertuples():
+            matrix[row.fold_a,row.fold_b] = matrix[row.fold_b,row.fold_a] = row.matched_abs_r
+        im = ax.imshow(matrix, cmap='viridis', vmin=0, vmax=1)
+        ax.set(title=modality.upper(), xlabel='Random split', ylabel='Random split',
+               xticks=range(count), xticklabels=range(1,count+1), yticks=range(count), yticklabels=range(1,count+1))
+        fig.colorbar(im, ax=ax, label='Matched mean |r| of test score time courses')
+    fig.suptitle('Refitted temporal-pattern consistency; test sets can overlap across splits')
+    finish(fig, 'fold_temporal_stability')

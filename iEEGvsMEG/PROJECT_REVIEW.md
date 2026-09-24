@@ -5,7 +5,7 @@
 | Analysis | Implementation | Evaluation scope | Output |  Results | 
 |---|---|---|---|---| 
 | Coverage matching and composition sensitivity | Implemented in `coverage_stability.py` and `coverage_matching.ipynb` | Compute different MEG dataset organisation and test how much the information is shared with iEEG using PCA on both dataset individually |  
-| PLSSVD selection and validation | Implemented in `plssvd_eval` modules | Training-only fitting, tuning-selected **k components**, **independent test trials from the same participants** |
+| PLSSVD held-out evaluation | Implemented in `plssvd_eval` modules | Fixed **5 components by default**, repeated random train/test splits, all participants and matching fixed; no tuning |
 | PCA versus PLSSVD/joint PCA within each modality | Implemented in `compare_models.py`, `cov_models.ipynb` and the `compare_subspace` batch pipeline | Descriptive notebook comparisons and held-out comparisons with training-frozen component assignments/signs |
 | Cross-modality geometry and spatial clustering | Implemented in `compare_subspace` | Held-out trial representations at recurring times and locations; exploratory clustering |
 
@@ -72,15 +72,37 @@ TODO
 
 PLSSVD itself is a covariance decomposition. The validation adds ridge regression from one modality's latent scores to the other modality's original features. Thus model fitting, cross-modal association and prediction are related but distinct evaluations. PCA also needs held-out evaluation for a fair comparison.
 
-**Validation method.** `plssvd_eval` partitions trials separately within modality, participant and condition into approximately 50% training, 20% tuning and two 15% test halves, with minimum-count adjustments. Group splitting is available when run/stimulus metadata is supplied. Condition averages are calculated separately within each partition and stacked by condition/time. MEG normalization, PLS weights and ridge prediction maps are learned using training data only. Anatomical matching stays fixed across partitions.
+**Evaluation method (updated).** Fix the component count in advance with `n_components` / `--n-components` (default **5**). There is no tuning partition or component selection. `repeats` / `--repeats` / `--n-splits` controls the number of repeated random splits (default **5**). `train_fraction` / `--train-fraction` defaults to **0.7**. Every split, including split 0, uses the same complete cached participant cohort and fixed anatomical/participant assignment. Only trial partitions change. Models and train-derived normalization are refitted independently in each split.
 
-Select k by mean bidirectional tuning Q² in the original target feature spaces, with a fixed relative ridge penalty and smaller k winning ties. Freeze the model before evaluating test trials. The primary repetition uses all participants; subsequent repetitions change participant subsets, trial splits and pairing. These repetitions measure sensitivity, not population confidence intervals.
+Trials are partitioned separately within participant, modality and condition before condition averaging. Approximately 70% train the model; the remaining 30% form the test set. Two halves of that test set provide supplementary reliability estimates. Their union supplies the main test average; it is not an additional independent test set. At least six trials per condition are required, with small-count adjustments to keep two training trials and two per test half. Group splitting is available for dependent trials, requiring at least three valid groups with sufficient trials in each condition. Both conditions are stacked by condition/time. MEG and iEEG trials are not individually paired.
 
-**Outputs.** Selected k and tuning curves; signed held-out paired score correlations; bidirectional prediction Q² against the training-mean baseline; condition-difference correlations and amplitudes; test-half temporal, contrast and forward-pattern reliability; saved scores, weights, preprocessing and split/matching audits. Primary-fit null outputs include conditional condition-label permutations, temporal circular-shift diagnostics and spatial-correspondence diagnostics.
+No model parameter is fitted on test averages. The same requested k is used across splits; insufficient training rank raises an error rather than selecting a smaller k. Every split uses the same complete cohort, not an 80% subset. For paired/control compositions, MEG participants form a fixed available pool and only the assigned subset contributes; `n_meg_contributing` reports this count. These are repeated random holdouts, not disjoint K-fold cross-validation: test sets may overlap between splits, and the evaluation concerns new trials from the same participants. Split 0 is special only for optional null diagnostics and example time-course plots.
 
-**Missing.** Predeclare the primary endpoint and what constitutes a useful/reliable pattern; selecting k alone is not component-level validation. No component acceptance rule, independent-refit component/subspace stability analysis or multiplicity procedure is implemented. Group splits and exchangeability blocks need actual task metadata. Verify upstream preprocessing/source filters for dependence on held-out trials. Temporal shifts and spatial row shuffles are not automatically valid inferential p-values. A stable shared evoked response does not establish condition-specific or memory-related information.
+**Goodness of fit on each test set.** Three complementary questions are computed:
 
-The current validation selects k for PLSSVD only. A fair predictive model comparison needs identical partitions, targets, preprocessing and tuning opportunities for PCA and joint PCA as well. `compare_subspace.py` refits all models on common partitions but uses a prespecified dimension grid and a different prediction endpoint (latent representations).
+| Question | Metric | Interpretation |
+|---|---|---|
+| Do the learned spaces represent both modalities? | `ieeg_reconstruction_fraction`, `meg_reconstruction_fraction` | Own-modality test reconstruction using fixed training PLS weights, relative to training feature means |
+| Can each modality predict the other? | `predict_ieeg_q2`, `predict_meg_q2` | Ridge cross-modal prediction learned on training data; positive test Q² beats the training-mean baseline |
+| Is shared covariance retained? | `crosscov_energy_fraction`, `mean_paired_covariance`, paired score r | Test cross-covariance captured by training spaces, with signed covariance and correlation to show magnitude/direction |
+
+For one modality, with training mean \(\mu\), orthonormal training weights W and \(X_c=X_{test}-\mu\), reconstruction is \(\widehat X_c=X_cWW^\top\). The retained fraction is \(1-\|X_c-\widehat X_c\|_F^2/\|X_c\|_F^2\). Training whole-modality scaling is undone for this reconstruction. Test signals supply their own scores, so this measure is not cross-modal prediction. The latter uses the training ridge map and reports \(Q^2=1-\mathrm{SSE}_{prediction}/\mathrm{SSE}_{training\ mean}\), which can be negative.
+
+For cross-covariance, let \(C_{test}\) be the full feature cross-covariance after partition centering and fixed training preprocessing/scaling. The retained energy fraction is
+
+\[
+\frac{\|W_I^\top C_{test}W_M\|_F^2}{\|C_{test}\|_F^2}.
+\]
+
+The denominator is evaluated through observation Gram matrices. The test latent cross-covariance need not be diagonal, so its full matrix contributes to the primary energy fraction. `paired_crosscov_energy_fraction` separately measures the diagonal energy. Per-component train/test covariance and signed paired correlations are also saved. `paired_covariance_retention` in `summary.csv` compares the mean paired test covariance with training; it can exceed one or become negative. Covariance magnitude depends on preprocessing and units, and a high retained fraction alone does not demonstrate a strong biological shared signal. Main test metrics never rematch components or flip signs based on test outcomes.
+
+**Stability across splits.** `metric_summary.csv` gives count, mean, SD, median, minimum and maximum for each train/test metric. `fold_stability.csv` compares temporal scores from every pair of independently refitted splits, separately by modality and train/test partition, using one-to-one matched mean absolute Pearson r. `fold_component_pairs.csv` records those descriptive assignments. Matching handles sign/order variation only, not arbitrary rotations; it is not used to optimize the main test metrics. Test averages may share trials across splits, so stability and performance spread are descriptive, not independent replicates or confidence intervals. Test-half temporal/contrast/forward-pattern reliability remains available as a distinct conditional-on-model measure.
+
+**Outputs and plots.** `summary.csv`, `components.csv`, `fold_metrics.csv`, `metric_summary.csv`, `fold_stability.csv`, `fold_component_pairs.csv`, participant/trial/matching audits, preprocessing, trained models, score covariance matrices and projected scores. The reader requires a completion marker for new-format runs. New figures are `heldout_model_goodness`, `heldout_crosscovariance`, `primary_crosscovariance`, `fold_performance_consistency` and `fold_temporal_stability` (PNG and PDF). Training/test time courses and optional split-0 null diagnostics remain available. There is no new `selection.csv`; older tuning-based outputs are readable through the loader but must not be interpreted as the fixed-k experiment.
+
+**Remaining scope.** Define scientifically meaningful acceptance criteria and supply group/exchangeability metadata. Audit upstream preprocessing for leakage. A stable shared evoked response can reflect common stimulus timing rather than condition-specific information. Optional temporal-shift and spatial-row-shuffle results remain diagnostics unless their exchangeability assumptions are justified. Across-split score consistency does not establish independent spatial-weight stability, subject-level generalization or a calibrated noise ceiling.
+
+The separate `compare_subspace.py` workflow still uses train/tune/test partitions to select alignment penalties and cluster counts. That workflow was not changed by removing tuning from `plssvd_eval`; its scores are not a comparison on identical partitions unless a shared split design is implemented explicitly.
 
 ## 3. Within-modality comparison across models
 
@@ -123,12 +145,12 @@ Fit identity, orthogonal rotation/reflection, regularized affine and regularized
 | Medium | Scaling defaults | Covariance/validation use `none`; subspace comparison defaults to `equal_variance`. Record and harmonize this choice, especially for joint PCA. Scalar modality scaling alone does not change ideal PLSSVD directions, but changes joint PCA's balance. MEG channel z-scoring versus unstandardized iEEG also changes what “dominant variance” means. |
 | Medium | Correlation reporting | Coverage matrices are Spearman; matching summaries and validation use Pearson. Label both explicitly. A notebook TODO requests Spearman native matching, but it is not implemented; do not describe it as completed. |
 | Implemented | Coverage design | Separate actual subject-count (MEG and iEEG) and fixed-cohort pairing analyses are available; run them on the project recordings. |
-| Medium | Validation/results | Test-half reliability fixes trained axes; independently refit models and compare subspaces if the claim is stability of learned patterns. Do not average PC1 across repetitions as if component identity were guaranteed. |
-| Medium | Result lifecycle | PLSSVD output directories can be reused without a run-completion guard; comparison writes a completion marker but rejects any existing configuration, including interrupted runs. Add run identity, completion checks and a deliberate resume policy. |
+| Medium | Validation/results | Test-half reliability fixes trained axes; PLSSVD now also reports cross-split refitted temporal-score correlations. Independent spatial-weight/subspace stability remains separate. Do not average PC1 across repetitions as if component identity were guaranteed. |
+| Medium | Result lifecycle | Fixed-k PLSSVD runs now reject existing model/config outputs and write a completion marker. Interrupted runs require a new directory; automatic resume remains unimplemented. |
 | High | Reproducibility | The six-test synthetic suite passed on 23 September, but `tests/test_comparison_extensions.py` is absent on 24 September; only its compiled cache remains. Restore the test source before rerunning validation. A dependency manifest is also absent; `src.setting/GetInfo`, data and cluster paths remain external. |
 | Text | Methods/results | Supply task/condition meanings, participant/trial/electrode counts, exclusions, filtering, baseline/reference, MEG source reconstruction, coordinate frame, epoch/window choice, source polarity handling, acquisition differences and trial dependence. These cannot be inferred reliably from numeric condition codes. |
 
-Completed maintenance includes the obsolete notebook-import fix, corrected PLSSVD execution instructions, covariance interpretation text, implemented within-modality notebook cells and the requested index-based full-source averaging. Existing scientific preprocessing defaults remain unchanged. The remaining code gaps are independent-refit stability, inferential model/cluster comparisons, participant-balanced sampling options and robust run-resume handling. Task semantics, valid exchangeability groups and verified coordinate/time metadata require study-specific information.
+Completed maintenance includes the obsolete notebook-import fix, corrected PLSSVD execution instructions, covariance interpretation text, implemented within-modality notebook cells and the requested index-based full-source averaging. Existing scientific preprocessing defaults remain unchanged. The remaining code gaps include independent-refit spatial-weight stability, inferential model/cluster comparisons, participant-balanced sampling options and robust run-resume handling. Task semantics, valid exchangeability groups and verified coordinate/time metadata require study-specific information.
 
 ## Project map and recommended sequence
 
@@ -141,7 +163,7 @@ Completed maintenance includes the obsolete notebook-import fix, corrected PLSSV
 | `compare_models.py` | Within-modality model-pair comparisons with training-frozen component matching |
 | `tests/` | `test_meg_grids.py` checks index-based averaging with differing coordinates and incompatible array shapes; restore the missing `test_comparison_extensions.py` to rerun the original six-test suite |
 | `cov_models.ipynb`, `cov_models_utils.py` | Descriptive separate/joint PCA and PLSSVD objectives, reconstruction and cross-covariance metrics |
-| `plssvd_eval.py`, `plssvd_eval_utils.py`, `plssvd_eval.ipynb` | Trial export/cache, PLSSVD selection/validation, persisted outputs and result reader |
+| `plssvd_eval.py`, `plssvd_eval_utils.py`, `plssvd_eval.ipynb` | Trial export/cache, fixed-k repeated train/test evaluation, goodness/stability metrics, persisted outputs and reader |
 | `compare_subspace.py`, `compare_subspace.ipynb` | Held-out cross-modality geometry, alignment and spatial clustering for all three models |
 | `OLD/LB10*` | Earlier extraction, concatenation and randomized matching work |
 | `OLD/LB11*`, `OLD/LB12*`, `OLD/LB13*`, `OLD/LB14*`, `OLD/LB_Summary.ipynb`, `OLD/utils.py` | Earlier embedding, decomposition, interpretation, manifold and frequency explorations; historical context, not the current validation pipeline |
@@ -154,6 +176,16 @@ Recommended order: establish task/data provenance and alignment → assess cover
 ## Running the extensions
 
 Run the final two sections of `coverage_matching.ipynb` after loading `ieeg` and the initial datasets. Defaults are 20 repetitions, 3 retained components, and actual subject counts `(5, 10, 20, 30)` for both modalities. Pairing sensitivity fixes the existing paired-coverage roster/assignment when available and then permutes assignments without changing subject membership. The two analyses have separate output directories. Completed runs reload their saved configuration; choose new directories for changed settings. Interrupted runs are not automatically resumed.
+
+For fixed-k PLSSVD generalization, run into a new output directory:
+
+```bash
+python -u plssvd_eval.py --root /path/to/iEEGvsMEG \
+  --meg-kind full_concatenated --n-components 5 --repeats 5 \
+  --train-fraction 0.7 --output-dir /path/to/new_plssvd_eval_fixed
+```
+
+Then open `plssvd_eval.ipynb` with that output directory. Its displayed defaults do not launch a computation; the notebook reads completed batch results. The default output location is `out/plssvd_eval_fixed`, keeping older tuning-based runs separate.
 
 Run the final section of `cov_models.ipynb` for descriptive within-modality comparisons. For held-out results, use the existing batch command with at least two models and a new output directory:
 
@@ -196,3 +228,6 @@ The coordinate diagnostics/reordering helpers and their notebook cells have been
 
 
 Verification of the separated analyses: all seven currently available tests passed (five new stability tests and two index-based averaging tests). The new tests exercise the exact 5/10/20/30 grid for MEG and iEEG, small MEG subsets with a larger iEEG cohort, unavailable-count reporting, sign/order invariance, fixed participant membership and control-source mappings across assignments, reproducibility, result reload and plot exports. Project recordings remain unavailable in this checkout, so these are synthetic checks rather than real-data results.
+
+
+Verification of fixed-k PLSSVD evaluation: all **13 currently available tests passed**, including six new evaluation tests. Checks cover train/test disjointness and complete trial assignment, group integrity, the unchanged tuning split used by `compare_subspace`, fixed cohort/pairing across repetitions, strict enforcement of k, dense-reference covariance/reconstruction algebra, result reload, figure exports, and a test-only data perturbation that leaves all trained weights/means/predictors unchanged. The cache exporter now accepts the six-trial minimum of the new design. Command-line help and all active Python/notebook code cells were also checked. No project recordings were evaluated locally.
