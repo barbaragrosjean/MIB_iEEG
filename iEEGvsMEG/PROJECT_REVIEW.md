@@ -143,7 +143,7 @@ Completed maintenance includes the obsolete notebook-import fix, corrected PLSSV
 | `coverage_matching.ipynb`, `coverage_matching_utils.py` | Data loading, anatomical sampling, five MEG compositions and descriptive PCA comparisons |
 | `coverage_sampling.py` | Repeated MEG participant-pool/feature-budget sensitivity, audits, reload and plots |
 | `compare_models.py` | Within-modality model-pair comparisons with training-frozen component matching |
-| `tests/` | Only a compiled test cache is currently present; restore `test_comparison_extensions.py` to rerun the synthetic suite |
+| `tests/` | `test_meg_grids.py` checks grid diagnosis and safe source-row reordering; restore the missing `test_comparison_extensions.py` to rerun the original six-test suite |
 | `cov_models.ipynb`, `cov_models_utils.py` | Descriptive separate/joint PCA and PLSSVD objectives, reconstruction and cross-covariance metrics |
 | `plssvd_eval.py`, `plssvd_eval_utils.py`, `plssvd_eval.ipynb` | Trial export/cache, PLSSVD selection/validation, persisted outputs and result reader |
 | `compare_subspace.py`, `compare_subspace.ipynb` | Held-out cross-modality geometry, alignment and spatial clustering for all three models |
@@ -190,3 +190,14 @@ MPLBACKEND=Agg python -m unittest discover -s tests -v
 ```
 
 Verify that six tests are actually discovered; a zero-test run is not validation. Real-data results, independent-refit stability and participant-level generalization remain unverified.
+
+
+## Troubleshooting full-average source grids
+
+`full_average` averages equally numbered source rows across participants. Its guard requires equal signal shapes and coordinate-wise agreement within 1e-6 mm after loading. An error can indicate different source masks/counts, permuted rows, coordinate rounding, incorrect units, or genuinely different grids. Equal source counts do not prove anatomical correspondence. This check cannot verify upstream registration itself; conversely, participant-specific coordinates can differ despite valid template-index correspondence, which must be documented upstream.
+
+The coverage notebook now displays `inspect_meg_grids(ieeg)` before building datasets. This reports participant IDs, source counts, signal shapes, same-row coordinate differences, nearest-source distances, and whether the nearest mapping is a complete coordinate-matching permutation. `reorder_meg_grids(ieeg)` returns a new reference that corrects only exact-grid row permutations, reordering signals and coordinates together. It refuses genuinely different grids; it does not interpolate or relax the tolerance. Rebuild datasets from the returned reference.
+
+For different grids, establish the common template/source identifiers or resample registered data to a justified common grid before averaging. Nearest-neighbour matching alone is not registration. As a temporary analysis choice, exclude `full_average` from `meg_types`; the repeated-sampling notebook call now respects that list. Existing completed outputs still use their saved configuration, so choose a new output folder for changed settings. Other spatial comparisons still require valid common-space coordinates.
+
+Three new synthetic grid tests passed: coordinated signal/coordinate reordering followed by correct averaging, rejection of a genuine spatial shift, and source-count/roundoff diagnostics. These tests do not determine the cause of the user's real-data mismatch.
