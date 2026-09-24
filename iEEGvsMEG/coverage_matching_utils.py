@@ -216,67 +216,6 @@ def _metadata(pos, subject, source_index=None):
     return out
 
 
-def inspect_meg_grids(reference, tolerance_mm=1e-6):
-    """Diagnose loaded MEG grids against the first participant, in millimetres.
-
-    Geometric agreement cannot establish that upstream registration or source
-    orientation conventions are correct. Nearest matches are diagnostic only.
-    """
-    if not np.isfinite(tolerance_mm) or tolerance_mm < 0:
-        raise ValueError('tolerance_mm must be finite and nonnegative.')
-    source = reference.source_data
-    if source is None:
-        raise ValueError('Use a reference returned by load_dataset.')
-    first = np.asarray(source['meg_positions'][0])
-    shape = source['meg'][0].shape
-    rows = []
-    for subject, a, pos in zip(source['meg_subjects'], source['meg'], source['meg_positions']):
-        pos = np.asarray(pos)
-        distance, index = cKDTree(pos).query(first)
-        same_shape = a.shape == shape and pos.shape == first.shape
-        same_order = same_shape and np.allclose(pos, first, rtol=0, atol=tolerance_mm)
-        # Match the constructor's coordinate-wise tolerance; nearest distances
-        # below are Euclidean, so their threshold interpretation differs slightly.
-        permutation = same_shape and len(np.unique(index)) == len(first)
-        reordered_match = permutation and np.allclose(pos[index], first, rtol=0, atol=tolerance_mm)
-        rows.append(dict(subject=subject, reference_subject=source['meg_subjects'][0],
-            signal_shape=str(a.shape), n_sources=len(pos), same_shape=same_shape,
-            max_same_row_coordinate_difference_mm=float(np.max(np.abs(pos-first))) if pos.shape == first.shape else np.nan,
-            median_nearest_distance_mm=float(np.median(distance)),
-            max_nearest_distance_mm=float(distance.max()), n_unique_nearest_sources=len(np.unique(index)),
-            status='aligned' if same_order else 'reordered_grid' if reordered_match else 'different_grid_or_shape'))
-    return pd.DataFrame(rows)
-
-
-def reorder_meg_grids(reference):
-    """Return a new reference with exact-grid permutations corrected.
-
-    Reorders both signals and coordinates into the first MEG participant's
-    source order. Uses the same 1e-6 mm tolerance as full_average. It never
-    interpolates, warps, drops sources, or relaxes the anatomical check. Source
-    grids must already be registered in a common coordinate frame. Rebuild
-    MEG datasets from the returned reference; existing datasets are unchanged.
-    """
-    from dataclasses import replace
-    report = inspect_meg_grids(reference)
-    if (report.status == 'different_grid_or_shape').any():
-        raise ValueError('Not an exact common grid with reordered rows. Inspect inspect_meg_grids(reference); '
-                         'different grids require verified upstream correspondence or resampling.')
-    source = reference.source_data.copy()
-    first = np.asarray(source['meg_positions'][0])
-    arrays, positions = [], []
-    for a, pos, status in zip(source['meg'], source['meg_positions'], report.status):
-        if status == 'aligned':
-            arrays.append(a); positions.append(pos)
-        else:
-            _, index = cKDTree(pos).query(first)
-            arrays.append(a[:, index, :]); positions.append(np.asarray(pos)[index])
-    source['meg'], source['meg_positions'] = arrays, positions
-    source['load_config'] = dict(source.get('load_config', {}),
-        meg_grid_order_reference=source['meg_subjects'][0], meg_grid_order_tolerance_mm=1e-6)
-    return replace(reference, source_data=source)
-
-
 def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_positions,
                             electrode_subjects, *, seed=2026, pairing=None,
                             condition_mode='average', random_preserve_duplicates=True,
@@ -308,16 +247,9 @@ def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_position
     if condition_mode not in ('average', 'stack'):
         raise ValueError("condition_mode must be 'average' or 'stack'.")
     shape = meg[0].shape
-    if 'full_average' in requested:
-        first = np.asarray(meg_positions[0])
-        if any(a.shape != shape for a in meg) or any(
-                np.asarray(p).shape != first.shape or not np.allclose(p, first, rtol=0, atol=1e-6)
-                for p in meg_positions[1:]):
-            raise ValueError('full_average requires identical registered source grids and ordering '
-                             '(coordinate-wise tolerance 1e-6 mm). Run inspect_meg_grids(ieeg) '
-                             'to identify differing participants. Exact row permutations can be fixed '
-                             'with ieeg = reorder_meg_grids(ieeg); genuinely different grids need '
-                             'verified upstream correspondence/resampling before full-source averaging.')
+    if 'full_average' in requested and any(a.shape != shape for a in meg):
+        raise ValueError('full_average requires the same MEG source count, condition count and time-sample count.')
+    # Average existing source rows directly; no coordinate alignment or reordering.
     if len(subjects) > len(meg_subjects):
         raise ValueError('Not enough MEG participants for one-to-one pairing; supply a justified alternative upstream.')
     pair_rng, control_rng = [np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(2)]

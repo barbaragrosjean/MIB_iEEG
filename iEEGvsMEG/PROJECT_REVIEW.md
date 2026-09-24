@@ -121,7 +121,7 @@ Fit identity, orthogonal rotation/reflection, regularized affine and regularized
 | Priority | Location | Finding and required action |
 |---|---|---|
 | High | Coverage/covariance notebook coordinate cells; `plssvd_eval.py: main` | Magnitude-based repeated coordinate division can alter individual axes before the explicit unit checker sees them. Establish the native `GetInfo` unit and apply one documented conversion; verify against known anatomical locations. Do not infer correctness from plausible ranges alone. |
-| Resolved | `construct_five_datasets` | Full-source averaging now requires equal array shapes and matching registered source coordinates/order. Nonmatching grids must be aligned upstream. |
+| Resolved | `construct_five_datasets` | Full-source averaging requires equal signal-array shapes and uses existing row order, without coordinate matching or reordering, as requested. |
 | High | Coverage/covariance loader calls | MEG epoch origin is set from the iEEG epoch origin. Supply independently verified MEG time metadata; matching constructed vectors alone does not verify acquisition alignment. |
 | High | Across stages | Coverage/covariance default to condition averaging; validation/comparison stack conditions. Choose a primary representation and rerun comparable stages consistently. Condition averaging cannot address condition differences. |
 | High | Across entry points | PLSSVD batch excludes `SUBJ_0038`; coverage/covariance discovery does not. Record one participant manifest and exclusion rationale. Comparison uses the cache cohort. |
@@ -134,7 +134,7 @@ Fit identity, orthogonal rotation/reflection, regularized affine and regularized
 | High | Reproducibility | The six-test synthetic suite passed on 23 September, but `tests/test_comparison_extensions.py` is absent on 24 September; only its compiled cache remains. Restore the test source before rerunning validation. A dependency manifest is also absent; `src.setting/GetInfo`, data and cluster paths remain external. |
 | Text | Methods/results | Supply task/condition meanings, participant/trial/electrode counts, exclusions, filtering, baseline/reference, MEG source reconstruction, coordinate frame, epoch/window choice, source polarity handling, acquisition differences and trial dependence. These cannot be inferred reliably from numeric condition codes. |
 
-Completed maintenance includes the obsolete notebook-import fix, corrected PLSSVD execution instructions, covariance interpretation text, implemented within-modality notebook cells and the common-source-grid guard. Existing scientific preprocessing defaults remain unchanged. The remaining code gaps are independent-refit stability, inferential model/cluster comparisons, participant-balanced sampling options and robust run-resume handling. Task semantics, valid exchangeability groups and verified coordinate/time metadata require study-specific information.
+Completed maintenance includes the obsolete notebook-import fix, corrected PLSSVD execution instructions, covariance interpretation text, implemented within-modality notebook cells and the requested index-based full-source averaging. Existing scientific preprocessing defaults remain unchanged. The remaining code gaps are independent-refit stability, inferential model/cluster comparisons, participant-balanced sampling options and robust run-resume handling. Task semantics, valid exchangeability groups and verified coordinate/time metadata require study-specific information.
 
 ## Project map and recommended sequence
 
@@ -143,7 +143,7 @@ Completed maintenance includes the obsolete notebook-import fix, corrected PLSSV
 | `coverage_matching.ipynb`, `coverage_matching_utils.py` | Data loading, anatomical sampling, five MEG compositions and descriptive PCA comparisons |
 | `coverage_sampling.py` | Repeated MEG participant-pool/feature-budget sensitivity, audits, reload and plots |
 | `compare_models.py` | Within-modality model-pair comparisons with training-frozen component matching |
-| `tests/` | `test_meg_grids.py` checks grid diagnosis and safe source-row reordering; restore the missing `test_comparison_extensions.py` to rerun the original six-test suite |
+| `tests/` | `test_meg_grids.py` checks index-based averaging with differing coordinates and incompatible array shapes; restore the missing `test_comparison_extensions.py` to rerun the original six-test suite |
 | `cov_models.ipynb`, `cov_models_utils.py` | Descriptive separate/joint PCA and PLSSVD objectives, reconstruction and cross-covariance metrics |
 | `plssvd_eval.py`, `plssvd_eval_utils.py`, `plssvd_eval.ipynb` | Trial export/cache, PLSSVD selection/validation, persisted outputs and result reader |
 | `compare_subspace.py`, `compare_subspace.ipynb` | Held-out cross-modality geometry, alignment and spatial clustering for all three models |
@@ -192,12 +192,8 @@ MPLBACKEND=Agg python -m unittest discover -s tests -v
 Verify that six tests are actually discovered; a zero-test run is not validation. Real-data results, independent-refit stability and participant-level generalization remain unverified.
 
 
-## Troubleshooting full-average source grids
+## Full-average dataset construction
 
-`full_average` averages equally numbered source rows across participants. Its guard requires equal signal shapes and coordinate-wise agreement within 1e-6 mm after loading. An error can indicate different source masks/counts, permuted rows, coordinate rounding, incorrect units, or genuinely different grids. Equal source counts do not prove anatomical correspondence. This check cannot verify upstream registration itself; conversely, participant-specific coordinates can differ despite valid template-index correspondence, which must be documented upstream.
+At the user's request, `full_average` averages MEG sources by their existing row index. Participants must have the same source count and compatible condition/time dimensions. Coordinate equality is not required, and no source-grid alignment, reordering or interpolation is performed. The first participant's coordinates remain the coordinate metadata for the averaged dataset. iEEG signals and electrode order are not aligned or reordered. The existing nearest-source sampling used by coverage-specific MEG compositions remains part of those analyses.
 
-The coverage notebook now displays `inspect_meg_grids(ieeg)` before building datasets. This reports participant IDs, source counts, signal shapes, same-row coordinate differences, nearest-source distances, and whether the nearest mapping is a complete coordinate-matching permutation. `reorder_meg_grids(ieeg)` returns a new reference that corrects only exact-grid row permutations, reordering signals and coordinates together. It refuses genuinely different grids; it does not interpolate or relax the tolerance. Rebuild datasets from the returned reference.
-
-For different grids, establish the common template/source identifiers or resample registered data to a justified common grid before averaging. Nearest-neighbour matching alone is not registration. As a temporary analysis choice, exclude `full_average` from `meg_types`; the repeated-sampling notebook call now respects that list. Existing completed outputs still use their saved configuration, so choose a new output folder for changed settings. Other spatial comparisons still require valid common-space coordinates.
-
-Three new synthetic grid tests passed: coordinated signal/coordinate reordering followed by correct averaging, rejection of a genuine spatial shift, and source-count/roundoff diagnostics. These tests do not determine the cause of the user's real-data mismatch.
+The coordinate diagnostics/reordering helpers and their notebook cells have been removed. Both the dataset builder and repeated coverage sampler use shape compatibility checks only for full averaging.

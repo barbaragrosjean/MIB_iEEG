@@ -79,11 +79,8 @@ def run_coverage_sampling(reference, *, participant_counts=None, feature_counts=
         limits.append(sum(sorted(a.shape[1] for a in source['meg'])[:min(counts)]))
     if numeric and max(numeric) > min(limits):
         raise ValueError(f'Common feature budgets cannot exceed {min(limits)} for these setups.')
-    if 'full_average' in kinds:
-        first = source['meg_positions'][0]
-        if any(p.shape != first.shape or not np.allclose(p, first, rtol=0, atol=1e-6)
-               for p in source['meg_positions'][1:]):
-            raise ValueError('full_average requires identical registered source grids and ordering.')
+    if 'full_average' in kinds and any(a.shape != source['meg'][0].shape for a in source['meg']):
+        raise ValueError('full_average requires the same MEG source count, condition count and time-sample count.')
     out = Path(output_dir) if output_dir is not None else None
     if out is not None:
         out.mkdir(parents=True, exist_ok=True)
