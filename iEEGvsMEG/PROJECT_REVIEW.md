@@ -67,7 +67,7 @@ it test Group composition and averaging affect the first three and participant r
 Exports are `metrics.csv`, `component_pairs.csv`, `selections.csv`, `matching.csv`, `coverage_mapping.csv`, `matching_summary.csv` and `paired_control_deltas.csv`. They contain all three temporal metrics, cumulative PCA variance fractions, component pairs, exact selections (compact ranges for complete full-source blocks), anatomical mapping distances, unique-source/duplicate summaries and within-draw paired-minus-random differences. Configuration, reference electrode metadata, time axes and a completion marker are also saved. Plots show median/range against participant pool and feature count; these ranges are not confidence intervals. Saved complete runs can be loaded without recordings using `load_coverage_sampling`.
 
 ### Results and interpretations
-
+TODO
 
 
 ## 2. Alternative objectives and PLSSVD validation
