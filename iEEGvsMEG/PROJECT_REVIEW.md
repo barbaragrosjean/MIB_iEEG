@@ -1,6 +1,17 @@
 # iEEG–MEG latent-space comparison: methods and implementation review
 
-Reviewed against the current source and notebook cells on 23 September 2026. This is a methods and implementation audit, not a rerun or confirmation of the saved results. Raw data, trial caches and batch result directories are absent from this checkout. The coverage-sampling and within-modality model-comparison extensions described below have subsequently been implemented and checked with synthetic data; project recordings have not been rerun.
+Updated against the current source and notebook cells on **24 September 2026**. Both requested extensions are implemented: repeated coverage/composition sampling and PCA-versus-PLSSVD comparisons within each modality, including the held-out batch path. This document separates implementation status from scientific validation. Project recordings have not been rerun; raw data, trial caches and batch result directories are absent from this checkout.
+
+## Current status
+
+| Analysis | Implementation | Evaluation scope |
+|---|---|---|
+| Coverage matching and composition sensitivity | Implemented in `coverage_sampling.py` and `coverage_matching.ipynb` | Repeated MEG participant-pool/feature-budget sampling against a fixed iEEG reference; descriptive condition-average analysis |
+| PLSSVD selection and validation | Implemented in `plssvd_eval` modules | Training-only fitting, tuning-selected k, independent test trials from the same participants |
+| PCA versus PLSSVD/joint PCA within each modality | Implemented in `compare_models.py`, `cov_models.ipynb` and the `compare_subspace` batch pipeline | Descriptive notebook comparisons and held-out comparisons with training-frozen component assignments/signs |
+| Cross-modality geometry and spatial clustering | Implemented in `compare_subspace` | Held-out trial representations at recurring times and locations; exploratory clustering |
+
+Implementation does not establish a winning model or biological equivalence. The next analysis step is to resolve the data-alignment/configuration gaps below and run the updated pipelines on the project data.
 
 ## Scientific aim and unit of comparison
 
@@ -36,7 +47,7 @@ The first two are invariant to a change of basis within the retained subspace; t
 
 **Implemented extension.** `coverage_sampling.py` and the final section of `coverage_matching.ipynb` repeat coordinated participant/source draws and cross MEG participant-pool counts with common feature budgets. The complete iEEG reference stays fixed. Participant pools and feature-budget subsets are nested within repetition; matched/random controls share electrode slots and preserve source duplication. Full-source feature budgets uniformly sample native features. Pair-based setups keep one MEG participant per iEEG participant before feature sampling, so a larger pool is not a larger averaged group. Actual contributor counts are exported. Unsupported k values are explicitly marked `skipped_rank`.
 
-Outputs include all three temporal metrics, cumulative PCA variance fractions, component pairs, exact selections (compact ranges for complete full-source blocks), anatomical mapping distances, unique-source/duplicate summaries and within-draw paired-minus-random differences. Plots show median/range against participant pool and feature count; these ranges are not confidence intervals. Saved complete runs can be loaded without recordings using `load_coverage_sampling`.
+Exports are `metrics.csv`, `component_pairs.csv`, `selections.csv`, `matching.csv`, `coverage_mapping.csv`, `matching_summary.csv` and `paired_control_deltas.csv`. They contain all three temporal metrics, cumulative PCA variance fractions, component pairs, exact selections (compact ranges for complete full-source blocks), anatomical mapping distances, unique-source/duplicate summaries and within-draw paired-minus-random differences. Configuration, reference electrode metadata, time axes and a completion marker are also saved. Plots show median/range against participant pool and feature count; these ranges are not confidence intervals. Saved complete runs can be loaded without recordings using `load_coverage_sampling`.
 
 **Remaining scope.** Participant-pool counts must be at least the number of iEEG participants to support one-to-one pairing. No participant-balanced feature weighting or distance-rejection threshold is imposed. The five compositions still differ in aggregation and coverage; common feature counts control size, not all confounds. This is descriptive resampling of condition averages, not trial-held-out validation.
 
@@ -64,7 +75,7 @@ The current validation selects k for PLSSVD only. A fair predictive model compar
 
 **Implemented.** `compare_models.py` supplies descriptive comparisons in `cov_models.ipynb` and held-out comparisons within the existing `compare_subspace.py` batch pipeline. All model pairs are compared separately within iEEG and MEG at common dimensions. Temporal scores, two-condition contrasts (when stacked), and forward patterns on **all native features** are compared. Pattern regression is recomputed for each retained k.
 
-A one-to-one Hungarian assignment and sign orientation are learned from **training temporal scores**, then reused for every representation and partition. Thus spatial and temporal metrics concern the same component pairs. There is no test rematching or test-based sign orientation. Signed and absolute matched correlations, valid-pair counts, full signed Pearson matrices, principal angles, ranks and rank-aware subspace overlap are exported. Undefined training pairs are excluded from matched summaries; valid-pair counts expose this limitation.
+In the held-out pipeline, a one-to-one Hungarian assignment and sign orientation are learned from **training temporal scores**, then reused for every representation and partition. The descriptive notebook learns its assignment on the same data it summarizes and labels the results `in_sample`. Thus spatial and temporal metrics concern the same component pairs. There is no test rematching or test-based sign orientation. `matched_signed_r` retains the training orientation, so a test-time sign reversal lowers it; `matched_abs_r` ignores the sign of the resulting correlations without changing assignments. Valid-pair counts, full signed Pearson matrices, principal angles, ranks and rank-aware subspace overlap are also exported. Undefined training pairs are excluded from matched summaries; valid-pair counts expose this limitation.
 
 **Outputs.** `within_model_metrics.csv`, `within_model_pairs.csv`, `within_model_correlations.csv`; summary plots and primary-repetition correlation heatmaps. Batch results identify modality, model pair, repetition, k, representation and partition. The descriptive notebook labels its rows `in_sample`; batch comparisons use the existing independent trial partitions. Old result folders remain readable but require a new run to acquire these tables.
 
@@ -101,10 +112,10 @@ Fit identity, orthogonal rotation/reflection, regularized affine and regularized
 | Implemented | Coverage design | Repeated coordinated draws and crossed participant-pool/feature-budget sweeps are available; run them on the project recordings. |
 | Medium | Validation/results | Test-half reliability fixes trained axes; independently refit models and compare subspaces if the claim is stability of learned patterns. Do not average PC1 across repetitions as if component identity were guaranteed. |
 | Medium | Result lifecycle | PLSSVD output directories can be reused without a run-completion guard; comparison writes a completion marker but rejects any existing configuration, including interrupted runs. Add run identity, completion checks and a deliberate resume policy. |
-| Medium | Reproducibility | A synthetic unittest suite now covers the extensions; a dependency manifest is still absent. `src.setting/GetInfo`, data and cluster paths are external. Add environment versions, input provenance and focused numerical/leakage tests before final analysis. |
+| High | Reproducibility | The six-test synthetic suite passed on 23 September, but `tests/test_comparison_extensions.py` is absent on 24 September; only its compiled cache remains. Restore the test source before rerunning validation. A dependency manifest is also absent; `src.setting/GetInfo`, data and cluster paths remain external. |
 | Text | Methods/results | Supply task/condition meanings, participant/trial/electrode counts, exclusions, filtering, baseline/reference, MEG source reconstruction, coordinate frame, epoch/window choice, source polarity handling, acquisition differences and trial dependence. These cannot be inferred reliably from numeric condition codes. |
 
-Small maintenance fixes made during this review: replaced the obsolete `utils_updated` notebook import/path checks with `coverage_matching_utils`; corrected the PLSSVD notebook's stale claim that a `RUN_ANALYSIS` switch exists; annotated the missing within-modality analysis and the covariance interpretation placeholder. The subsequent implementation adds the two requested analyses and a common-grid guard; existing scientific preprocessing defaults remain unchanged.
+Completed maintenance includes the obsolete notebook-import fix, corrected PLSSVD execution instructions, covariance interpretation text, implemented within-modality notebook cells and the common-source-grid guard. Existing scientific preprocessing defaults remain unchanged. The remaining code gaps are independent-refit stability, inferential model/cluster comparisons, participant-balanced sampling options and robust run-resume handling. Task semantics, valid exchangeability groups and verified coordinate/time metadata require study-specific information.
 
 ## Project map and recommended sequence
 
@@ -113,7 +124,7 @@ Small maintenance fixes made during this review: replaced the obsolete `utils_up
 | `coverage_matching.ipynb`, `coverage_matching_utils.py` | Data loading, anatomical sampling, five MEG compositions and descriptive PCA comparisons |
 | `coverage_sampling.py` | Repeated MEG participant-pool/feature-budget sensitivity, audits, reload and plots |
 | `compare_models.py` | Within-modality model-pair comparisons with training-frozen component matching |
-| `tests/test_comparison_extensions.py` | Synthetic numerical, sampling and batch integration checks |
+| `tests/` | Only a compiled test cache is currently present; restore `test_comparison_extensions.py` to rerun the synthetic suite |
 | `cov_models.ipynb`, `cov_models_utils.py` | Descriptive separate/joint PCA and PLSSVD objectives, reconstruction and cross-covariance metrics |
 | `plssvd_eval.py`, `plssvd_eval_utils.py`, `plssvd_eval.ipynb` | Trial export/cache, PLSSVD selection/validation, persisted outputs and result reader |
 | `compare_subspace.py`, `compare_subspace.ipynb` | Held-out cross-modality geometry, alignment and spatial clustering for all three models |
@@ -127,7 +138,7 @@ Recommended order: establish task/data provenance and alignment → assess cover
 
 ## Running the extensions
 
-Run the added final section of `coverage_matching.ipynb` after loading `ieeg`. It defaults to 20 sampling repetitions and three participant-pool sizes with two common feature budgets plus native counts. Review these settings for runtime and the intended study design. A completed output directory is loaded with its saved configuration; choose a new directory to change settings. Interrupted runs are not resumed automatically.
+Run the added final section of `coverage_matching.ipynb` after loading `ieeg`. It defaults to 20 sampling repetitions, up to three distinct participant-pool sizes, and up to two distinct common feature budgets plus native counts; duplicate settings are removed for small cohorts. Review these settings for runtime and the intended study design. A completed output directory is loaded with its saved configuration; choose a new directory to change settings. Interrupted runs are not resumed automatically.
 
 Run the final section of `cov_models.ipynb` for descriptive within-modality comparisons. For held-out results, use the existing batch command with at least two models and a new output directory:
 
@@ -138,4 +149,25 @@ python -u compare_subspace.py --cache-dir /path/to/trial_cache \
   --dimensions 1 2 3 5 10 --repeats 5 --block-scaling equal_variance
 ```
 
-Inspect the new within-modality section of `compare_subspace.ipynb`. The batch plotter also exports within-modality summaries and heatmaps. The synthetic suite runs with `MPLBACKEND=Agg python -m unittest discover -s tests -v` in an environment containing the project's scientific Python dependencies.
+Inspect the new within-modality section of `compare_subspace.ipynb`. The batch plotter also exports within-modality summaries and heatmaps. 
+
+## Verification record
+
+On **23 September 2026**, all six synthetic tests passed in the project's `ieeg` Python environment:
+
+1. End-to-end trial-cache batch execution, result reload and figure exports.
+2. Coverage rank skipping and rejection of mismatched full-average source grids.
+3. Reproducible/nested coverage sampling, coordinated paired/random controls and a fixed iEEG variance reference.
+4. Agreement between descriptive and held-out comparison paths when given identical partitions.
+5. Frozen component matching/signs, including an adversarial test-time sign reversal and changed test data.
+6. Rotation-invariant overlap, rank loss and undefined component correlations.
+
+All active Python modules and notebook code cells also passed syntax checks during that implementation. These checks used synthetic data and establish neither real-data performance nor the validity of upstream preprocessing.
+
+On **24 September 2026**, the implementation and notebook wiring were inspected for this documentation update. The test source `tests/test_comparison_extensions.py` is missing; only `tests/__pycache__/test_comparison_extensions.cpython-311.pyc` remains. Tests were **not rerun** for this update. Restore the source before using:
+
+```bash
+MPLBACKEND=Agg python -m unittest discover -s tests -v
+```
+
+Verify that six tests are actually discovered; a zero-test run is not validation. Real-data results, independent-refit stability and participant-level generalization remain unverified.
