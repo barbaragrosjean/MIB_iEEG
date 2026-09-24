@@ -1,31 +1,28 @@
 # iEEG–MEG latent-space comparison: methods and implementation review
 
-Updated against the current source and notebook cells on **24 September 2026**. Both requested extensions are implemented: repeated coverage/composition sampling and PCA-versus-PLSSVD comparisons within each modality, including the held-out batch path. This document separates implementation status from scientific validation. Project recordings have not been rerun; raw data, trial caches and batch result directories are absent from this checkout.
-
 ## Current status
 
-| Analysis | Implementation | Evaluation scope |
-|---|---|---|
-| Coverage matching and composition sensitivity | Implemented in `coverage_sampling.py` and `coverage_matching.ipynb` | Repeated MEG participant-pool/feature-budget sampling against a fixed iEEG reference; descriptive condition-average analysis |
-| PLSSVD selection and validation | Implemented in `plssvd_eval` modules | Training-only fitting, tuning-selected k, independent test trials from the same participants |
+| Analysis | Implementation | Evaluation scope | Output |  Results | 
+|---|---|---|---|---| 
+| Coverage matching and composition sensitivity | Implemented in `coverage_sampling.py` and `coverage_matching.ipynb` | Compute different MEG dataset organisation and test how much the information is shared with iEEG using PCA on both dataset individually |  
+| PLSSVD selection and validation | Implemented in `plssvd_eval` modules | Training-only fitting, tuning-selected **k components**, **independent test trials from the same participants** |
 | PCA versus PLSSVD/joint PCA within each modality | Implemented in `compare_models.py`, `cov_models.ipynb` and the `compare_subspace` batch pipeline | Descriptive notebook comparisons and held-out comparisons with training-frozen component assignments/signs |
 | Cross-modality geometry and spatial clustering | Implemented in `compare_subspace` | Held-out trial representations at recurring times and locations; exploratory clustering |
 
-Implementation does not establish a winning model or biological equivalence. The next analysis step is to resolve the data-alignment/configuration gaps below and run the updated pipelines on the project data.
-
 ## Scientific aim and unit of comparison
 
-The project asks which task-related temporal and spatial structures are reproducible within iEEG and MEG, and which structures correspond across modalities after accounting for sampling coverage and the objective of dimensionality reduction. Latent spaces provide a way to compare structure despite different measurement processes; they do not remove modality-specific sensitivity, source leakage, reference effects or anatomical sampling bias.
+The project asks which task-related temporal and spatial structures are reproducible within iEEG and MEG, and which structures correspond across modalities. We explore the different ways of arenging MEG datatset before applying dimension reduction and different model with 2 different opbjectives, the fisr PCA only focus on covariance within each modality and the second PLSSVD focus on covariance tha tis shared bevtween modality. Componants are then use to evaluate how much we can get from both modality. We first compare the models within the same modality (Q: Does the componant that are mainly share are comparable with the one that represent most of the variance ?) Then we compare within the same model how well each modeality can explain the other, what si it shared. We decidede to work with dimensionality components as Latent spaces provide a way to compare structure despite different measurement processes. Still the information on which the dimensionnality reduction operate are different so in a secodn part of the project we will investigate that despite finding the comparable latent structures the two recordings are modality specific.
 
-The current analyses align **condition × time averages**, not simultaneously recorded or individually paired trials. Participants are pooled within each modality. Random one-to-one participant pairing is a sampling construction, not a biological pairing. Held-out evaluation currently concerns new trials from the selected participants at the same time points and locations.
+The current analyses align **condition × time averages**, not simultaneously recorded or individually paired trials. 
 
+**Method and language:** \
 Distinguish three objects throughout the text: projection **weights** define the latent axes; **scores** are projected time courses; **forward patterns** describe how observed features covary with the scores. Spatial weights and forward patterns are not interchangeable, especially for PLS. The current forward-pattern estimator is the multivariate regression `A = X_centered.T @ T_centered @ pinv(T_centered.T @ T_centered)`.
 
 ## 1. Coverage matching and group composition
 
 **Question.** How do anatomical coverage, participant averaging and feature concatenation alter MEG PCA structure and its correspondence with iEEG PCA?
 
-**Method used.** Independently fit centered PCA to pooled iEEG and to five MEG compositions, using the same condition/time rows. PCA is computed through the observation Gram matrix, avoiding a large feature covariance matrix.
+**Method used.** Independently fit centered PCA to pooled iEEG and to five MEG compositions, using the same condition/time rows. PCA is computed through the observation Gram matrix (XX.T inseqd of X.TX), avoiding a large feature covariance matrix.
 
 | Composition | Construction | Main comparison it supports |
 |---|---|---|
@@ -35,21 +32,43 @@ Distinguish three objects throughout the text: projection **weights** define the
 | `paired_coverage` | Assign each iEEG participant a distinct sampled MEG participant and retain nearest sources for their electrodes | Coverage and participant composition resembling pooled iEEG |
 | `random_control` | Use the same pairing and feature counts, but random source locations; preserve duplicate-source multiplicities | Sensitivity to anatomical source selection |
 
-Nearest-source mapping uses Euclidean coordinate distance. MEG sources are z-scored across condition/time before aggregation; iEEG has a fixed ×1000 multiplier. Notebook defaults average conditions before PCA; `stack` preserves them as separate observation rows.
+For pair association: Nearest-source mapping uses Euclidean coordinate distance. 
 
 **Outputs.** Coverage plots, feature/variance summaries, PCA spectra, component maps and time courses; full component-by-component **Spearman** correlation matrices for time courses and anatomically mapped weights; and three temporal metrics at each prespecified common dimension k:
 
-1. **Retained iEEG variance captured:** `||Q_MEG.T @ T_iEEG,k||² / ||T_iEEG,k||²`, where Q is an orthonormal basis for the first k MEG score columns. This is the fraction of variance in the retained iEEG scores captured by the MEG temporal subspace. It is not the cumulative PCA variance explained in all original channels.
-2. **Temporal subspace overlap:** `||Q_MEG.T @ Q_iEEG||² / k`, the mean squared cosine of principal angles.
+1. **Retained iEEG variance captured:** `||Q_MEG.T @ T_iEEG,k||² / ||T_iEEG,k||²`, where Q is an orthonormal basis for the first k MEG score columns. This is the fraction of variance in the retained iEEG scores captured by the MEG temporal subspace. Given the k first iEEG componant we ask we the k MEG componant can recontruct and how well they can recontruct iEEG time courses using a linear combination of the time courses. Coefficient extracted are constent over time but different for each iEEg target: E_hat = MB amd wonder if E == E_hat. We can see this probelam as a a transformation from one basis to an other with Qm an orthogonal basis of M. E_hat = QmQm.TE this projects the iEEG time course (E) into the space of the MEG (M). The capture recontruct fraction is norm(E_hat) - norm(E) (Frobenius norm).
+It is variance weighted : Suppose the three iEEG components contain 60%, 30% and 10% of the retained variance, and MEG reconstructs 90%, 50% and 20% of their respective variances:
+\[
+F=0.60(0.90)+0.30(0.50)+0.10(0.20)=0.71.
+\]
+2. **Temporal subspace overlap:** `||Q_MEG.T @ Q_iEEG||² / k`, the mean squared cosine of principal angles. We remove the amplitude and keep only the direction (orthonormal). H=Qm.TQe and then compute the overlap if 1 --> overlap if 0 --> orthogonal. 
 3. **Matched component correlation:** mean absolute **Pearson** correlation under optimal one-to-one Hungarian matching of the first k components.
 
-The first two are invariant to a change of basis within the retained subspace; the third handles sign/order ambiguity but not arbitrary rotations. Cumulative PCA variance explained is an additional, distinct output.
+The first two are invariant to a change of basis within the retained subspace; the third handles sign/order ambiguity but not arbitrary rotations. 
 
-**Implemented extension.** `coverage_sampling.py` and the final section of `coverage_matching.ipynb` repeat coordinated participant/source draws and cross MEG participant-pool counts with common feature budgets. The complete iEEG reference stays fixed. Participant pools and feature-budget subsets are nested within repetition; matched/random controls share electrode slots and preserve source duplication. Full-source feature budgets uniformly sample native features. Pair-based setups keep one MEG participant per iEEG participant before feature sampling, so a larger pool is not a larger averaged group. Actual contributor counts are exported. Unsupported k values are explicitly marked `skipped_rank`.
+**Validation across participants pool: sampling sensitivity analysis** `coverage_sampling.py` and the final section of `coverage_matching.ipynb`. 
+1. keep the complete iEEG reference fixed.
+2. Randomly order MEG participants and form nested pools of n_subj 
+3. build all five compositions from each pool
+4. apply the requested feature bidgets and refit MEG PCA
+5. Compute the three metrics and components assignements
+6. repeat with another sampling
+
+Composition | How the pool affects it
+|---|---|
+full_average	| Average all participants in the selected pool.
+full_concatenated	| Concatenate their source features; optionally subsample to a fixed feature count.
+coverage_average	| Match electrode locations in every pool participant, then average across the pool.
+paired_coverage	| Assign n_ieeg_subj distinct MEG participants from the pool to the n_ieeg_subj iEEG participants.
+random_control	| Use those same assigned participants, but randomize source locations. 
+
+it test Group composition and averaging affect the first three and participant random pariing for the 2 others. For each repetition and pool, paired coverage and its random control share participants, selected electrode slots, feature counts and repeated-source structure. Their difference therefore assesses the effect of anatomical source selection more directly.
 
 Exports are `metrics.csv`, `component_pairs.csv`, `selections.csv`, `matching.csv`, `coverage_mapping.csv`, `matching_summary.csv` and `paired_control_deltas.csv`. They contain all three temporal metrics, cumulative PCA variance fractions, component pairs, exact selections (compact ranges for complete full-source blocks), anatomical mapping distances, unique-source/duplicate summaries and within-draw paired-minus-random differences. Configuration, reference electrode metadata, time axes and a completion marker are also saved. Plots show median/range against participant pool and feature count; these ranges are not confidence intervals. Saved complete runs can be loaded without recordings using `load_coverage_sampling`.
 
-**Remaining scope.** Participant-pool counts must be at least the number of iEEG participants to support one-to-one pairing. No participant-balanced feature weighting or distance-rejection threshold is imposed. The five compositions still differ in aggregation and coverage; common feature counts control size, not all confounds. This is descriptive resampling of condition averages, not trial-held-out validation.
+### Results and interpretations
+
+
 
 ## 2. Alternative objectives and PLSSVD validation
 

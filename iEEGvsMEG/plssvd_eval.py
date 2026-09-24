@@ -28,7 +28,7 @@ def parse_args():
                         help='Temporary fold storage; default: system temporary directory (honors TMPDIR).')
     parser.add_argument('--output-dir', type=Path, help='Default: ROOT/out/plssvd_eval; use a different directory for each configuration.')
     parser.add_argument('--trial-metadata-csv', type=Path)
-    parser.add_argument('--meg-kind', default='full_average', choices=[
+    parser.add_argument('--meg-kind', default='full_concatenated', choices=[
         'full_average', 'full_concatenated', 'coverage_average', 'paired_coverage', 'random_control'])
     parser.add_argument('--repeats', type=int, default=5)
     parser.add_argument('--n-null', type=int, default=199)

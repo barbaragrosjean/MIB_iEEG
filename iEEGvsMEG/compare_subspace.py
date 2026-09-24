@@ -440,7 +440,7 @@ def main():
     parser.add_argument('--cache-dir', type=Path)
     parser.add_argument('--scratch-dir', type=Path, help='Temporary fold storage (default: TMPDIR/system temp).')
     parser.add_argument('--output-dir', type=Path)
-    parser.add_argument('--meg-kind', choices=MEG_KINDS, default='full_average')
+    parser.add_argument('--meg-kind', choices=MEG_KINDS, default='full_concatenated')
     parser.add_argument('--models', nargs='+', choices=MODELS, default=list(MODELS))
     parser.add_argument('--dimensions', nargs='+', type=int, default=[1, 2, 3, 5, 10])
     parser.add_argument('--repeats', type=int, default=5)
