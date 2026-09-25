@@ -5,7 +5,7 @@
 | Analysis | Implementation | Evaluation scope | Output |  Results | 
 |---|---|---|---|---| 
 | Coverage matching and composition sensitivity | Implemented in `coverage_stability.py` and `coverage_matching.ipynb` | Compute different MEG dataset organisation and test how much the information is shared with iEEG using PCA on both dataset individually |  
-| PLSSVD held-out evaluation | Implemented in `plssvd_eval` modules | Fixed **5 components by default**, repeated random train/test splits, all participants and matching fixed; no tuning |
+| PLSSVD held-out evaluation | Implemented in `plssvd_eval` modules | Fixed **5 components by default**, shuffled folds with disjoint test trials and condition-averaged responses, all participants and matching fixed; no tuning |
 | PCA versus PLSSVD/joint PCA within each modality | Implemented in `compare_models.py`, `cov_models.ipynb` and the `compare_subspace` batch pipeline | Descriptive notebook comparisons and held-out comparisons with training-frozen component assignments/signs |
 | Cross-modality geometry and spatial clustering | Implemented in `compare_subspace` | Held-out trial representations at recurring times and locations; exploratory clustering |
 
@@ -69,15 +69,14 @@ TODO
 
 **Model :** PLSSVD selects paired unit-norm weight vectors that maximize cross-covariance. The implementation uses full nonzero sample-space factors. PLSSVD itself is a covariance decomposition. The validation adds ridge regression from one modality's latent scores to the other modality's original features..
 
-**PLSSVD Validation:** 
-- Trials are partitioned separately within participant, modality and condition before condition averaging. 
-- Approximately 70% train the model; the remaining 30% form the test set. 
-- At least six trials per condition are required, with small-count adjustments to keep two training trials and two per test half. 
-- Group splitting is available for dependent trials, requiring at least three valid groups with sufficient trials in each condition. 
-- Both conditions are average for the fit.
-- 5 fix components are always retained. insufficient training rank raises an error rather than selecting a smaller k. 
-- Every split uses the same complete cohort, not an 80% subset. The evaluation concerns new trials from the same participants. 
-- Split 0 is special only for optional null diagnostics and example time-course plots.
+**PLSSVD Validation:**
+- Shuffle once within subject and condition; divide trials into five nearly equal test folds. Each trial is held out exactly once; other folds provide training (approximately 80/20 per fold).
+- No test A/B subdivisions. At least n_splits trials per condition are required. Group splitting keeps whole groups together and requires at least n_splits groups with each condition represented in every fold.
+- Average trials within each condition separately for train and test, then average conditions equally. Models receive time × features matrices, not individual trials or condition-stacked observations.
+- Concatenate all iEEG electrodes across subjects. MEG full_concatenated concatenates sources; full_average averages source indices across subjects; coverage_average averages matched coverage; paired_coverage/random_control retain their paired sampled-feature construction.
+- The PCA/sample-space factors inside PLSSVD operate on these averaged matrices. Keep 5 configurable components; insufficient training rank raises an error.
+- All folds use the same cohort and participant/source assignment. No tuning. Fold 0 is special only for example plots and optional temporal/spatial null diagnostics.
+- Condition-label nulls and condition-contrast/test-half outputs are removed from this condition-averaged evaluation. Legacy compare_subspace remains separate and unchanged.
 
 **Goodness of fit on each test set.** Three complementary questions are computed:
 
@@ -97,7 +96,7 @@ For cross-covariance, let \(C_{test}\) be the full feature cross-covariance afte
 
 The denominator is evaluated through observation Gram matrices. The test latent cross-covariance need not be diagonal, so its full matrix contributes to the primary energy fraction. `paired_crosscov_energy_fraction` separately measures the diagonal energy. Per-component train/test covariance and signed paired correlations are also saved. `paired_covariance_retention` in `summary.csv` compares the mean paired test covariance with training; it can exceed one or become negative. Covariance magnitude depends on preprocessing and units, and a high retained fraction alone does not demonstrate a strong biological shared signal. Main test metrics never rematch components or flip signs based on test outcomes.
 
-**Stability across splits.** `metric_summary.csv` gives count, mean, SD, median, minimum and maximum for each train/test metric. `fold_stability.csv` compares temporal scores from every pair of independently refitted splits, separately by modality and train/test partition, using one-to-one matched mean absolute Pearson r. `fold_component_pairs.csv` records those descriptive assignments. Matching handles sign/order variation only, not arbitrary rotations; it is not used to optimize the main test metrics. Test averages may share trials across splits, so stability and performance spread are descriptive, not independent replicates or confidence intervals. Test-half temporal/contrast/forward-pattern reliability remains available as a distinct conditional-on-model measure.
+**Stability across splits.** `metric_summary.csv` gives count, mean, SD, median, minimum and maximum for each train/test metric. `fold_stability.csv` compares temporal scores from every pair of independently refitted splits, separately by modality and train/test partition, using one-to-one matched mean absolute Pearson r. `fold_component_pairs.csv` records those descriptive assignments. Matching handles sign/order variation only, not arbitrary rotations; it is not used to optimize the main test metrics. Test folds share no trials, but training folds overlap. Stability and performance spread remain descriptive, not independent replicates or confidence intervals. No test-half reliability is computed in this workflow.
 
 **Outputs and plots.** `summary.csv`, `components.csv`, `fold_metrics.csv`, `metric_summary.csv`, `fold_stability.csv`, `fold_component_pairs.csv`, participant/trial/matching audits, preprocessing, trained models, score covariance matrices and projected scores. The reader requires a completion marker for new-format runs. New figures are `heldout_model_goodness`, `heldout_crosscovariance`, `primary_crosscovariance`, `fold_performance_consistency` and `fold_temporal_stability` (PNG and PDF). Training/test time courses and optional split-0 null diagnostics remain available. There is no new `selection.csv`; older tuning-based outputs are readable through the loader but must not be interpreted as the fixed-k experiment.
 
@@ -147,7 +146,7 @@ Fit identity, orthogonal rotation/reflection, regularized affine and regularized
 | Medium | Scaling defaults | Covariance/validation use `none`; subspace comparison defaults to `equal_variance`. Record and harmonize this choice, especially for joint PCA. Scalar modality scaling alone does not change ideal PLSSVD directions, but changes joint PCA's balance. MEG channel z-scoring versus unstandardized iEEG also changes what “dominant variance” means. |
 | Medium | Correlation reporting | Coverage matrices are Spearman; matching summaries and validation use Pearson. Label both explicitly. A notebook TODO requests Spearman native matching, but it is not implemented; do not describe it as completed. |
 | Implemented | Coverage design | Separate actual subject-count (MEG and iEEG) and fixed-cohort pairing analyses are available; run them on the project recordings. |
-| Medium | Validation/results | Test-half reliability fixes trained axes; PLSSVD now also reports cross-split refitted temporal-score correlations. Independent spatial-weight/subspace stability remains separate. Do not average PC1 across repetitions as if component identity were guaranteed. |
+| Medium | Validation/results | Legacy compare_subspace test-half reliability fixes trained axes; PLSSVD evaluation reports cross-fold refitted temporal-score correlations without test halves. Independent spatial-weight/subspace stability remains separate. Do not average PC1 across repetitions as if component identity were guaranteed. |
 | Medium | Result lifecycle | Fixed-k PLSSVD runs now reject existing model/config outputs and write a completion marker. Interrupted runs require a new directory; automatic resume remains unimplemented. |
 | High | Reproducibility | The six-test synthetic suite passed on 23 September, but `tests/test_comparison_extensions.py` is absent on 24 September; only its compiled cache remains. Restore the test source before rerunning validation. A dependency manifest is also absent; `src.setting/GetInfo`, data and cluster paths remain external. |
 | Text | Methods/results | Supply task/condition meanings, participant/trial/electrode counts, exclusions, filtering, baseline/reference, MEG source reconstruction, coordinate frame, epoch/window choice, source polarity handling, acquisition differences and trial dependence. These cannot be inferred reliably from numeric condition codes. |
@@ -165,7 +164,7 @@ Completed maintenance includes the obsolete notebook-import fix, corrected PLSSV
 | `compare_models.py` | Within-modality model-pair comparisons with training-frozen component matching |
 | `tests/` | `test_meg_grids.py` checks index-based averaging with differing coordinates and incompatible array shapes; restore the missing `test_comparison_extensions.py` to rerun the original six-test suite |
 | `cov_models.ipynb`, `cov_models_utils.py` | Descriptive separate/joint PCA and PLSSVD objectives, reconstruction and cross-covariance metrics |
-| `plssvd_eval.py`, `plssvd_eval_utils.py`, `plssvd_eval.ipynb` | Trial export/cache, fixed-k repeated train/test evaluation, goodness/stability metrics, persisted outputs and reader |
+| `plssvd_eval.py`, `plssvd_eval_utils.py`, `plssvd_eval.ipynb` | Trial export/cache, fixed-k shuffled K-fold evaluation, goodness/stability metrics, persisted outputs and reader |
 | `compare_subspace.py`, `compare_subspace.ipynb` | Held-out cross-modality geometry, alignment and spatial clustering for all three models |
 | `OLD/LB10*` | Earlier extraction, concatenation and randomized matching work |
 | `OLD/LB11*`, `OLD/LB12*`, `OLD/LB13*`, `OLD/LB14*`, `OLD/LB_Summary.ipynb`, `OLD/utils.py` | Earlier embedding, decomposition, interpretation, manifold and frequency explorations; historical context, not the current validation pipeline |
@@ -184,7 +183,7 @@ For fixed-k PLSSVD generalization, run into a new output directory:
 ```bash
 python -u plssvd_eval.py --root /path/to/iEEGvsMEG \
   --meg-kind full_concatenated --n-components 5 --repeats 5 \
-  --train-fraction 0.7 --output-dir /path/to/new_plssvd_eval_fixed
+  --output-dir /path/to/new_plssvd_eval_kfold
 ```
 
 Then open `plssvd_eval.ipynb` with that output directory. Its displayed defaults do not launch a computation; the notebook reads completed batch results. The default output location is `out/plssvd_eval_fixed`, keeping older tuning-based runs separate.
@@ -233,3 +232,7 @@ Verification of the separated analyses: all seven currently available tests pass
 
 
 Verification of fixed-k PLSSVD evaluation: all **13 currently available tests passed**, including six new evaluation tests. Checks cover train/test disjointness and complete trial assignment, group integrity, the unchanged tuning split used by `compare_subspace`, fixed cohort/pairing across repetitions, strict enforcement of k, dense-reference covariance/reconstruction algebra, result reload, figure exports, and a test-only data perturbation that leaves all trained weights/means/predictors unchanged. The cache exporter now accepts the six-trial minimum of the new design. Command-line help and all active Python/notebook code cells were also checked. No project recordings were evaluated locally.
+
+Current evaluation update: schema 3 uses disjoint test folds and condition-averaged train/test matrices. Historical verification notes above describe earlier versions. Existing preprocessing defaults remain unchanged; MEG normalization is still fitted on training condition averages, and the upstream iEEG preprocessing leakage question remains separate.
+
+Verification for schema 3: all 14 tests pass, including exhaustive/disjoint test assignment, group integrity, exact averaged inputs for all five MEG constructions and iEEG feature concatenation with unequal condition counts, dense-reference model metrics, held-out perturbation invariance of the corresponding trained fold, saved-result reload and plot export. CLI help and notebook syntax pass. No real recordings were evaluated.

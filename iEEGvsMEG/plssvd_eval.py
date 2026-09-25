@@ -5,7 +5,7 @@ Run from a cluster checkout containing the project helpers and src.setting:
     python -u plssvd_eval.py --root /path/to/iEEGvsMEG
 
 Defaults preserve the notebook analysis and exclude MEG SUBJ_0038. Outputs
-are saved under ROOT/out/plssvd_eval_fixed; trials use ROOT/out/trial_cache.
+are saved under ROOT/out/plssvd_eval_kfold; trials use ROOT/out/trial_cache.
 Requires the notebook's Python dependencies, including mat73 for raw MEG.
 Tests concern new trials from the same participants, not new participants.
 """
@@ -26,16 +26,15 @@ def parse_args():
     parser.add_argument('--cache-dir', type=Path, help='Default: ROOT/out/trial_cache.')
     parser.add_argument('--scratch-dir', type=Path,
                         help='Temporary fold storage; default: system temporary directory (honors TMPDIR).')
-    parser.add_argument('--output-dir', type=Path, help='Default: ROOT/out/plssvd_eval_full_concatenated')
+    parser.add_argument('--output-dir', type=Path, help='Default: ROOT/out/plssvd_eval_kfold')
     parser.add_argument('--trial-metadata-csv', type=Path)
     parser.add_argument('--meg-kind', default='full_concatenated', choices=[
         'full_average', 'full_concatenated', 'coverage_average', 'paired_coverage', 'random_control'])
     parser.add_argument('--repeats', '--n-splits', dest='repeats', type=int, default=5,
-                        help='Number of random train/test splits (not disjoint K-fold CV).')
+                        help='Number of shuffled folds with disjoint test trials (default: 5).')
     parser.add_argument('--n-null', type=int, default=199)
     parser.add_argument('--seed', type=int, default=2026)
     parser.add_argument('--n-components', type=int, default=5, help='Fixed PLSSVD dimension; no tuning.')
-    parser.add_argument('--train-fraction', type=float, default=0.7)
     parser.add_argument('--split-unit', choices=['trial', 'group'], default='trial')
     parser.add_argument('--max-gram-gib', type=float, default=2.0)
     return parser.parse_args()
@@ -58,14 +57,14 @@ def main():
     meg_dir = args.meg_dir or root / 'MEG' / 'dataMEG'
     ieeg_dir = args.ieeg_dir or root / 'ieeg_shortWOBS_fs250'
     cache_dir = args.cache_dir or root / 'out' / 'trial_cache'
-    output_dir = args.output_dir or root / 'out' / 'plssvd_eval'
+    output_dir = args.output_dir or root / 'out' / 'plssvd_eval_kfold'
     output_dir.mkdir(parents=True, exist_ok=True)
     if (output_dir / 'validation_options.json').exists() or any(output_dir.glob('model_*.npz')):
         raise FileExistsError('Choose a new --output-dir; existing evaluations are not overwritten.')
     plt.rcParams.update({'figure.dpi': 110, 'axes.spines.top': False, 'axes.spines.right': False})
     options = ValidationOptions(repeats=args.repeats, n_components=args.n_components,
                                 n_null=args.n_null, seed=args.seed,
-                                train_fraction=args.train_fraction, split_unit=args.split_unit,
+                                split_unit=args.split_unit,
                                 block_scaling='none', max_gram_gib=args.max_gram_gib)
 
     meg_subjects = sorted(p.name.removesuffix('_source.p') for p in meg_dir.glob('*_source.p')
@@ -112,17 +111,6 @@ def main():
         print(f'\n{name}\n{result[name].round(3).to_string(index=False)}', flush=True)
     plot_plssvd_validation(result, output_dir=output_dir, show=False)
 
-    primary = result['components'].query('repeat == 0')
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
-    for modality in ('ieeg', 'meg'):
-        axes[0].plot(primary.component, primary[f'{modality}_pattern_split_half_r'], 'o-', label=modality)
-        axes[1].plot(primary.component, primary[f'{modality}_contrast_split_half_r'], 'o-', label=modality)
-    for ax, title in zip(axes, ('Forward-pattern reliability', 'Condition-contrast reliability')):
-        ax.set(title=title, xlabel='Component', ylabel='Test-half Pearson r', ylim=(-1, 1))
-        ax.legend()
-    for extension in ('png', 'pdf'):
-        fig.savefig(output_dir / f'primary_reliability.{extension}', dpi=200)
-    plt.close(fig)
     print(f'Outputs saved to: {output_dir.resolve()}', flush=True)
 
 
