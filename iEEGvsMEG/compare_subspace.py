@@ -452,6 +452,110 @@ def _plot_kfold_results(output_dir, config, tables, k, show):
     return paths
 
 
+def plot_full_data_clusters(output_dir, show=True):
+    """Plot saved k=3 full-data spatial patterns without fitting or changing CV.
+
+    Two figures per model: independent silhouette-selected counts, and a common
+    count selected by full-data ARI. ARI compares separate K-means partitions;
+    it does not define a jointly fitted clustering. Ties favor fewer clusters.
+    Returns image paths and the descriptive selection table.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap
+    from matplotlib.ticker import MaxNLocator
+    from scipy.optimize import linear_sum_assignment
+
+    root = Path(output_dir)
+    config, tables = load_results(root)
+    if config.get('schema_version', 1) < 2 or 3 not in config['dimensions']:
+        raise ValueError('3D plots require saved full-data k=3 results. Include 3 in --dimensions.')
+    full = tables['clusters'].query("partition == 'in_sample' and k == 3")
+    destination = root / 'full_data_clusters_3d'
+    destination.mkdir(exist_ok=True)
+    paths, records = [], []
+    names = {'separate_pca': 'Separate PCA', 'joint_pca': 'Joint PCA', 'plssvd': 'PLSSVD'}
+
+    def best(rows):
+        rows = rows[np.isfinite(rows.value)]
+        if rows.empty:
+            return None
+        return int(rows.sort_values(['value', 'n_clusters'], ascending=[False, True]).iloc[0].n_clusters)
+
+    for model in config['models']:
+        data = full[full.model == model]
+        individual = {m: best(data[(data.metric == 'silhouette') & (data.modality == m)]) for m in MODALITIES}
+        shared = best(data[data.metric == 'cross_modal_ari'])
+        if any(v is None for v in individual.values()) or shared is None:
+            warnings.warn(f'{model}: no valid silhouette/ARI solution for both modalities; skipping 3D plots.')
+            continue
+        with np.load(root / f'{model}_-01_k3_spatial_patterns.npz') as patterns, np.load(root / f'{model}_-01_k3_clusters.npz') as clusters:
+            xyz = {m: (patterns[m + '_train'] - clusters[m + '_normalization_center']) /
+                      float(clusters[m + '_normalization_rms']) for m in MODALITIES}
+            if any(x.ndim != 2 or x.shape[1] != 3 or not np.isfinite(x).all() for x in xyz.values()):
+                raise ValueError(f'{model}: expected finite location × 3 forward patterns.')
+            if xyz['ieeg'].shape != xyz['meg'].shape:
+                raise ValueError('Cross-modal ARI needs the same ordered feature correspondences.')
+            # Keep identical limits between modalities and both selection views.
+            combined = np.vstack(list(xyz.values()))
+            middle = (combined.max(0) + combined.min(0)) / 2
+            radius = max(float(np.ptp(combined, axis=0).max()) * .55, 1e-6)
+            for criterion, counts in [('silhouette', individual), ('ari', dict.fromkeys(MODALITIES, shared))]:
+                labels = {m: clusters[f'c{counts[m]}_{m}_train'].astype(int).copy() for m in MODALITIES}
+                centers = {m: clusters[f'c{counts[m]}_{m}_centers'] for m in MODALITIES}
+                center_ids = {m: np.arange(counts[m]) for m in MODALITIES}
+                for m in MODALITIES:
+                    if len(labels[m]) != len(xyz[m]): raise ValueError('Saved labels and patterns have different row counts.')
+                observed_ari = float(adjusted_rand_score(labels['ieeg'], labels['meg']))
+                if criterion == 'ari':
+                    contingency = np.zeros((shared, shared), dtype=int)
+                    np.add.at(contingency, (labels['ieeg'], labels['meg']), 1)
+                    a, b = linear_sum_assignment(-contingency)
+                    mapping = np.empty(shared, dtype=int); mapping[b] = a
+                    labels['meg'] = mapping[labels['meg']]
+                    center_ids['meg'] = mapping[center_ids['meg']]
+                fig = plt.figure(figsize=(13, 6.8))
+                fig.subplots_adjust(left=.03, right=.97, top=.78, bottom=.18, wspace=.12)
+                palette = list(plt.get_cmap('tab20').colors)
+                cmap = ListedColormap(palette[::2] + palette[1::2])
+                for i, m in enumerate(MODALITIES):
+                    count = counts[m]
+                    ax = fig.add_subplot(1, 2, i + 1, projection='3d')
+                    score = float(data[(data.metric == 'silhouette') & (data.modality == m) & (data.n_clusters == count)].value.iloc[0])
+                    for label in range(count):
+                        points = xyz[m][labels[m] == label]
+                        ax.scatter(*points.T, color=cmap(label % 20), s=20, alpha=.7, depthshade=False,
+                                   label=f'{label + 1} (n={len(points)})', rasterized=True)
+                    ax.scatter(*centers[m].T, c=[cmap(int(v) % 20) for v in center_ids[m]], marker='X',
+                               s=150, edgecolor='black', linewidth=1.2, depthshade=False)
+                    for location, label in zip(centers[m], center_ids[m]):
+                        ax.text(*location, f' {label+1}', fontsize=9, weight='bold')
+                    ax.set(title=f'{"iEEG" if m == "ieeg" else "MEG"}: {count} clusters | silhouette {score:.3f}',
+                           xlabel='Component 1 pattern', ylabel='Component 2 pattern', zlabel='Component 3 pattern')
+                    for setter, c in zip((ax.set_xlim, ax.set_ylim, ax.set_zlim), middle): setter(c-radius, c+radius)
+                    for axis in (ax.xaxis, ax.yaxis, ax.zaxis): axis.set_major_locator(MaxNLocator(4))
+                    ax.set_box_aspect((1, 1, 1), zoom=.82)
+                    ax.view_init(elev=22, azim=40)
+                    ax.legend(title='Cluster (point count)', loc='upper left', fontsize=7, title_fontsize=8)
+                    records.append(dict(model=model, criterion=criterion, modality=m, n_components=3,
+                                        n_clusters=count, silhouette=score, cross_modal_ari=observed_ari,
+                                        n_points=len(labels[m]), partition='in_sample'))
+                title = 'Highest silhouette per modality' if criterion == 'silhouette' else 'Common count with highest cross-modal ARI'
+                fig.suptitle(f'{names.get(model, model)} — {title}\nFull dataset, 3 components | cross-modal ARI = {observed_ari:.3f}', fontsize=14, y=.97)
+                colors = ('Colours are independent between modalities.' if criterion == 'silhouette' else
+                          'Colours matched by membership agreement; same colour does not imply identical membership.')
+                fig.text(.5, .065, 'Points: electrodes / mapped sources in component-pattern space. X: centroid.\n' + colors +
+                         '\nSeparate K-means fits; full-data selection is descriptive, not held-out validation.', ha='center', fontsize=9)
+                stem = destination / f'{model}_{criterion}'
+                for ext in ('png', 'pdf'): fig.savefig(stem.with_suffix('.' + ext), dpi=180, bbox_inches='tight')
+                if show: plt.show()
+                plt.close(fig)
+                paths.append(str(stem.with_suffix('.png')))
+    selection = pd.DataFrame(records, columns=['model','criterion','modality','n_components','n_clusters',
+                                               'silhouette','cross_modal_ari','n_points','partition'])
+    selection.to_csv(destination / 'display_selections.csv', index=False)
+    return paths, selection
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parent)
