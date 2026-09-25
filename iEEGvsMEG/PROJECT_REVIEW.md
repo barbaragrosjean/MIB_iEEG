@@ -163,8 +163,8 @@ Allignement and matching: one-to-one Hungarian assignment and sign orientation a
 | Medium | Correlation reporting | Coverage matrices are Spearman; matching summaries and validation use Pearson. Label both explicitly. A notebook TODO requests Spearman native matching, but it is not implemented; do not describe it as completed. |
 | Implemented | Coverage design | Separate actual subject-count (MEG and iEEG) and fixed-cohort pairing analyses are available; run them on the project recordings. |
 | Medium | Validation/results | Legacy compare_subspace test-half reliability fixes trained axes; PLSSVD evaluation reports cross-fold refitted temporal-score correlations without test halves. Independent spatial-weight/subspace stability remains separate. Do not average PC1 across repetitions as if component identity were guaranteed. |
-| Medium | Result lifecycle | Fixed-k PLSSVD runs now reject existing model/config outputs and write a completion marker. Interrupted runs require a new directory; automatic resume remains unimplemented. |
-| High | Reproducibility | The six-test synthetic suite passed on 23 September, but `tests/test_comparison_extensions.py` is absent on 24 September; only its compiled cache remains. Restore the test source before rerunning validation. A dependency manifest is also absent; `src.setting/GetInfo`, data and cluster paths remain external. |
+
+
 
 
 
