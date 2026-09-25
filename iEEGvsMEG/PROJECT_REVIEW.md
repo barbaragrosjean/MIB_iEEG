@@ -115,44 +115,40 @@ notebook cov_model.ipynb
 ### 3.2 Compare within modality
 **Question.** Within iEEG, and separately within MEG, are the dominant PCA patterns the same as the patterns selected by PLSSVD or joint PCA?
 
-We compare temporal scores and spatial forward patterns over all native features. Forward patterns describe how component activity is expressed across electrodes or sources; they are not simply the projection weights. 
+Use fitted models from the previous section.
 
-TOREMOVE:
-- Condition contrasts are also compared when conditions are stacked.
+We compare temporal scores and spatial forward patterns over all native features.
+- **Subspace overlap** compares all retained patterns together and permits rotations/mixing of their axes. 
+- **Mean matched |r|** compares individual component pairs and averages their absolute Pearson correlations. 
 
-**Implemented.** `compare_models.py` supplies descriptive comparisons in `cov_models.ipynb` and held-out comparisons within the existing `compare_subspace.py` batch pipeline. All model pairs are compared separately within iEEG and MEG at common dimensions. Temporal scores, two-condition contrasts (when stacked), and forward patterns on **all native features** are compared. Pattern regression is recomputed for each retained k.
+High overlap with lower matched correlation means similar collective patterns represented by different mixtures.
 
-In the held-out pipeline, a one-to-one Hungarian assignment and sign orientation are learned from **training temporal scores**, then reused for every representation and partition. The descriptive notebook learns its assignment on the same data it summarizes and labels the results `in_sample`. Thus spatial and temporal metrics concern the same component pairs. There is no test rematching or test-based sign orientation. `matched_signed_r` retains the training orientation, so a test-time sign reversal lowers it; `matched_abs_r` ignores the sign of the resulting correlations without changing assignments. Valid-pair counts, full signed Pearson matrices, principal angles, ranks and rank-aware subspace overlap are also exported. Undefined training pairs are excluded from matched summaries; valid-pair counts expose this limitation.
-
-**Outputs.** `within_model_metrics.csv`, `within_model_pairs.csv`, `within_model_correlations.csv`; summary plots and primary-repetition correlation heatmaps. Batch results identify modality, model pair, repetition, k, representation and partition. The descriptive notebook labels its rows `in_sample`; batch comparisons use the existing independent trial partitions. Old result folders remain readable but require a new run to acquire these tables.
+Allignement and matching: one-to-one Hungarian assignment and sign orientation are learned from **training temporal scores**, then reused for every representation and partition.
 
 **Remaining scope.** Independently refitted component stability, participant-level inference, anatomical pattern displays and explicit component-acceptance criteria remain separate work. Test-half correspondence is conditional on the fitted axes. Near-degenerate components can rotate, making subspace metrics more stable than componentwise matching.
-
-**Already available context.** `evaluate_cov_models()` reports reconstruction variance explained and retained cross-covariance energy. These are descriptive in-sample quantities with different objectives. Joint PCA reconstructs with the joint score, which uses both modalities; this is not an own-modality-only prediction benchmark. Cross-covariance energy is not a fraction of uniquely identified shared biological variance.
 
 ## 4. Cross-modal geometry
 
 **Question.** For a fixed method and number of components, how similar are iEEG and MEG latent structures, and what transformation relates them?
 
-**Data and models.** `compare_subspace.py` reuses the trial cache and fits separate PCA, PLSSVD and joint PCA. Within each subject, average trials separately by condition, then average conditions equally. Model inputs are time × features, never stacked conditions. iEEG concatenates electrodes across subjects. MEG preserves the selected concatenation, averaging or coverage construction. Participants and source/participant assignments stay fixed for the entire run. Default dimensions are 1, 2, 3, 5 and 10; none is selected using test performance. Default whole-modality scaling remains `equal_variance` (configurable), unlike PLSSVD evaluation's `none`.
+**Data and models.** `compare_subspace.py` reuses the trial cache and fits separate PCA, PLSSVD and joint PCA. Within each subject, average trials separately by condition, then average conditions equally. Model inputs are time × features. 
 
-**First: all-data description.** Fit preprocessing, model weights, transformations and cluster centroids using every trial. Score on the same data. These rows are explicitly labelled `analysis=in_sample`, `partition=in_sample`, `repeat=-1`; they are not test results. This gives the requested full-data reference but is neither an upper bound nor evidence of generalization. It does not initialize or select anything for the later folds.
+/!\ : Default whole-modality scaling remains `equal_variance` (configurable), unlike PLSSVD evaluation's `none`.
 
-**Then: five disjoint test folds.** Shuffle trials once within each subject and condition and divide into five nearly equal groups. Each trial is tested exactly once; the other four groups train the model (approximately 80/20). Each condition needs at least five trials. Optional group splitting keeps whole groups together and requires every condition in each fold. Refit preprocessing, dimensionality reduction, transformations and centroids from scratch for every fold. There is one test partition, no test A/B and no tuning partition. Training folds overlap, so fold ranges are descriptive rather than confidence intervals.
+**All-data description.** Fit preprocessing, model weights, transformations and cluster centroids using every trial. Score on the same data. These rows are explicitly labelled `analysis=in_sample`, `partition=in_sample`, `repeat=-1`; they are not test results.
 
-**Representations.** Temporal scores have time rows and component columns. Spatial forward patterns describe how component activity is expressed across features; they are estimated by regression separately in each partition using the fixed trained projection axes. For cross-modal spatial comparison, sample MEG patterns at the dataset's explicit electrode correspondences. Full-source fitting still uses all sources. Random-control slots are not anatomical matches.
+**Train/Test splits: five disjoint test folds.** Shuffle trials once within each subject and condition and divide into five nearly equal groups (approximately 80/20 Train/test). Each condition needs at least five trials. Optional group splitting keeps whole groups together and requires every condition in each fold. Refit preprocessing, dimensionality reduction, transformations and centroids from scratch for every fold. There is one test partition, no test A/B and no tuning partition. Training folds overlap, so fold ranges are descriptive rather than confidence intervals.
 
 **Analysis 1 — subspace similarity.** Compute principal angles and overlap for temporal scores and spatial patterns separately. Overlap is the sum of squared principal-angle cosines divided by the requested k; missing numerical dimensions count as zero. Values range from 0 (orthogonal) to 1 (same full-rank subspace). This permits component rotations/mixing and does not require equal component order. Test overlap describes the two held-out representations directly.
 
 **Analysis 2 — transformations.** Center each representation and divide by one scalar RMS using training statistics. Fit identity, orthogonal rotation/reflection, affine and quadratic maps in both directions. Identity uses no learned map; orthogonal preserves distances; affine allows general linear deformation; quadratic adds squared terms and interactions. Ridge is fixed in advance (`--ridge-alpha`, default 0.01), not chosen on test data. All four complexities are reported. Test NRMSE is prediction error norm divided by the target's distance from its training-mean baseline; Q² = 1 − NRMSE². NRMSE below 1 / Q² above 0 beats that baseline. Improvements with complexity must be assessed on test folds; rotations alone need not have physiological meaning.
 
-**Analysis 3 — exploratory spatial grouping.** Fit K-means separately in each modality for every requested cluster count (default 2–6), using all k spatial-pattern coordinates. Report every count without selecting a winner. Training centroids assign held-out locations. Cross-modal adjusted Rand index compares group membership (1 identical, approximately 0 chance-level); silhouette describes separation/compactness. There are no test-half stability analyses. Clustering does not establish discrete biological networks.
+**Analysis 3 — exploratory spatial grouping.** Fit K-means separately in each modality for every requested cluster count (default 2–6), using all k spatial-pattern coordinates. Report every count without selecting a winner. Training centroids assign held-out locations. Cross-modal adjusted Rand index compares group membership (1 identical, approximately 0 chance-level); silhouette describes separation/compactness.
 
 **Outputs.** `overlap.csv`, `alignment.csv`, `clusters.csv`, `splits.csv`, within-modality comparison tables, and saved preprocessing, model scores/weights, patterns, transformations, centroids and mapping audits. Every result table separates all-data description from cross-validation with an `analysis` label. All-data artifacts use repeat -1 (`-01` in filenames); fold artifacts use 000–004. `COMPLETE.json` marks successful completion. New runs no longer produce `reliability.csv` or `cluster_selection.csv`; the reader retains older-format support.
 
 **Plots.** Dashed lines show the all-data descriptive values. Solid lines show test-fold medians, with minimum–maximum shading. Figures cover overlap versus k, transformation error by complexity/direction for a selected k, and spatial ARI versus predeclared cluster count. The notebook separately displays full-data tables before test results.
 
-**Scope.** Generalization concerns unseen trials from the same participants, time grid and locations—not unseen subjects or anatomy. No inferential significance test for transformation improvement or clustering is implemented. Upstream iEEG preprocessing may already pool trials; this pipeline does not undo that operation.
 
 ## Implementation and reporting gaps to resolve
 

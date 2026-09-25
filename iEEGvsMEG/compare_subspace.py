@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Trial-held-out comparison of PCA, PLSSVD and joint PCA spaces.
 
-python -u compare_subspace.py --meg-kind paired_coverage --models separate_pca plssvd joint_pca
+submit_to_cluster -n 2 -q short.q "python -u compare_subspace.py --meg-kind full_concatenated"  --project MINDLAB2021_MEG-TempSeqAges
 
 Input: the resumable cache produced by plssvd_eval.py (ROOT/out/trial_cache).
 Output: ROOT/out/compare_subspace/MEG_KIND. Read with compare_subspace.ipynb.
