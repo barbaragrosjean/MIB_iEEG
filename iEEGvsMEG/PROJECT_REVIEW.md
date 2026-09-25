@@ -65,18 +65,19 @@ TODO
 
 
 ## 2. Alternative objectives and PLSSVD validation
+**Question1.** Does maximizing cross-modal covariance produce reproducible shared patterns, and how much modality-specific variance do those patterns retain?
 
-**Question.** Does maximizing cross-modal covariance produce reproducible shared patterns, and how much modality-specific variance do those patterns retain?
+**Model :** PLSSVD selects paired unit-norm weight vectors that maximize cross-covariance. The implementation uses full nonzero sample-space factors. PLSSVD itself is a covariance decomposition. The validation adds ridge regression from one modality's latent scores to the other modality's original features..
 
-**Method used.** `cov_models_utils.py` fits separate PCA, joint PCA on feature-concatenated modalities, and exact PLSSVD on `X.T @ Y/(n−1)`. Separate PCA maximizes each modality's variance; joint PCA maximizes variance of the concatenated data; PLSSVD selects paired unit-norm weight vectors that maximize cross-covariance. The implementation uses full nonzero sample-space factors, not a preliminary truncation to k PCs.
-
-PLSSVD itself is a covariance decomposition. The validation adds ridge regression from one modality's latent scores to the other modality's original features. Thus model fitting, cross-modal association and prediction are related but distinct evaluations. PCA also needs held-out evaluation for a fair comparison.
-
-**Evaluation method (updated).** Fix the component count in advance with `n_components` / `--n-components` (default **5**). There is no tuning partition or component selection. `repeats` / `--repeats` / `--n-splits` controls the number of repeated random splits (default **5**). `train_fraction` / `--train-fraction` defaults to **0.7**. Every split, including split 0, uses the same complete cached participant cohort and fixed anatomical/participant assignment. Only trial partitions change. Models and train-derived normalization are refitted independently in each split.
-
-Trials are partitioned separately within participant, modality and condition before condition averaging. Approximately 70% train the model; the remaining 30% form the test set. Two halves of that test set provide supplementary reliability estimates. Their union supplies the main test average; it is not an additional independent test set. At least six trials per condition are required, with small-count adjustments to keep two training trials and two per test half. Group splitting is available for dependent trials, requiring at least three valid groups with sufficient trials in each condition. Both conditions are stacked by condition/time. MEG and iEEG trials are not individually paired.
-
-No model parameter is fitted on test averages. The same requested k is used across splits; insufficient training rank raises an error rather than selecting a smaller k. Every split uses the same complete cohort, not an 80% subset. For paired/control compositions, MEG participants form a fixed available pool and only the assigned subset contributes; `n_meg_contributing` reports this count. These are repeated random holdouts, not disjoint K-fold cross-validation: test sets may overlap between splits, and the evaluation concerns new trials from the same participants. Split 0 is special only for optional null diagnostics and example time-course plots.
+**PLSSVD Validation:** 
+- Trials are partitioned separately within participant, modality and condition before condition averaging. 
+- Approximately 70% train the model; the remaining 30% form the test set. 
+- At least six trials per condition are required, with small-count adjustments to keep two training trials and two per test half. 
+- Group splitting is available for dependent trials, requiring at least three valid groups with sufficient trials in each condition. 
+- Both conditions are average for the fit.
+- 5 fix components are always retained. insufficient training rank raises an error rather than selecting a smaller k. 
+- Every split uses the same complete cohort, not an 80% subset. The evaluation concerns new trials from the same participants. 
+- Split 0 is special only for optional null diagnostics and example time-course plots.
 
 **Goodness of fit on each test set.** Three complementary questions are computed:
 
@@ -102,11 +103,12 @@ The denominator is evaluated through observation Gram matrices. The test latent 
 
 **Remaining scope.** Define scientifically meaningful acceptance criteria and supply group/exchangeability metadata. Audit upstream preprocessing for leakage. A stable shared evoked response can reflect common stimulus timing rather than condition-specific information. Optional temporal-shift and spatial-row-shuffle results remain diagnostics unless their exchangeability assumptions are justified. Across-split score consistency does not establish independent spatial-weight stability, subject-level generalization or a calibrated noise ceiling.
 
-The separate `compare_subspace.py` workflow still uses train/tune/test partitions to select alignment penalties and cluster counts. That workflow was not changed by removing tuning from `plssvd_eval`; its scores are not a comparison on identical partitions unless a shared split design is implemented explicitly.
 
-## 3. Within-modality comparison across models
+## 3. Comapre models within modality
 
 **Question.** Within iEEG, and separately within MEG, are the dominant PCA patterns the same as the patterns selected by PLSSVD or joint PCA?
+
+**Method used.** `cov_models_utils.py` fits separate PCA, joint PCA on feature-concatenated modalities, and exact PLSSVD on `X.T @ Y/(n−1)`. Separate PCA maximizes each modality's variance; joint PCA maximizes variance of the concatenated data; PLSSVD selects paired unit-norm weight vectors that maximize cross-covariance. The implementation uses full nonzero sample-space factors.
 
 **Implemented.** `compare_models.py` supplies descriptive comparisons in `cov_models.ipynb` and held-out comparisons within the existing `compare_subspace.py` batch pipeline. All model pairs are compared separately within iEEG and MEG at common dimensions. Temporal scores, two-condition contrasts (when stacked), and forward patterns on **all native features** are compared. Pattern regression is recomputed for each retained k.
 
