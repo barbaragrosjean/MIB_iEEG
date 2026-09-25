@@ -186,7 +186,7 @@ def plot_within_models(result, k, partition='test'):
                 matrix[i,j] = values.median()
         im = ax.imshow(np.ma.masked_invalid(matrix),vmin=0,vmax=1,cmap='viridis',aspect='auto')
         ax.set(title='iEEG' if modality=='ieeg' else 'MEG',
-               xticks=range(4),xticklabels=['Time\noverlap','Time\nmatched |r|','Space\noverlap','Space\nmatched |r|'],
+               xticks=range(4),xticklabels=['Time subspace\noverlap','Time components\nmean |r|','Spatial subspace\noverlap','Spatial components\nmean |r|'],
                yticks=range(len(pairs)),yticklabels=[labels.get(a,a)+' vs '+labels.get(b,b) for a,b in pairs])
         ax.axvline(1.5,color='white',lw=2)
         for i in range(len(pairs)):
@@ -199,3 +199,49 @@ def plot_within_models(result, k, partition='test'):
     fig.suptitle(f'Within-modality model similarity · {k} components · {setting}')
     fig.supxlabel('Equal condition averages · component pairs chosen from time courses · median across runs',fontsize=9)
     return [fig]
+
+
+def plot_within_components(result, k=10, partition='in_sample'):
+    """Individual matched correlations; fixed matching among the first k axes.
+
+    Labels A→B expose permutations. Uses the first recorded repetition, not
+    an average across potentially different assignments in repeated fits.
+    """
+    import matplotlib.pyplot as plt
+    corr = result['within_model_correlations']
+    corr = corr[(corr.k == k) & (corr.partition == partition)]
+    if corr.empty:
+        raise ValueError('No component correlations for this dimension/partition.')
+    repeat = corr.repeat.min()
+    corr = corr[corr.repeat == repeat]
+    pairs = result['within_model_pairs']
+    pairs = pairs[(pairs.k == k) & (pairs.repeat == repeat) & pairs.valid_training_pair]
+    keys = ['modality','model_a','model_b','k','repeat','component_a','component_b']
+    matched = corr.merge(pairs[keys], on=keys, validate='many_to_one')
+    labels = {'separate_pca':'PCA','joint_pca':'Joint PCA','plssvd':'PLSSVD'}
+    fig, axes = plt.subplots(2,2,figsize=(max(11,k*1.05),6),layout='constrained')
+    for row,modality in enumerate(('ieeg','meg')):
+        sub = corr[corr.modality == modality]
+        model_pairs = list(sub[['model_a','model_b']].drop_duplicates().itertuples(index=False,name=None))
+        for col,space in enumerate(('temporal_scores','spatial_patterns')):
+            ax = axes[row,col]
+            matrix = np.full((len(model_pairs),k),np.nan)
+            annotations = {}
+            for i,(a,b) in enumerate(model_pairs):
+                records = matched[(matched.modality==modality)&(matched.model_a==a)&(matched.model_b==b)&(matched.space==space)]
+                for record in records.itertuples():
+                    j = int(record.component_a)-1
+                    matrix[i,j] = abs(record.signed_r)
+                    annotations[i,j] = f'{abs(record.signed_r):.2f}\n{record.component_a}→{record.component_b}'
+            im = ax.imshow(np.ma.masked_invalid(matrix),cmap='viridis',vmin=0,vmax=1,aspect='auto')
+            ax.set(title=f'{"iEEG" if modality=="ieeg" else "MEG"} · {"Time courses" if col==0 else "Spatial patterns"}',
+                   xticks=range(k),xticklabels=range(1,k+1),xlabel='Component in first model (A)',
+                   yticks=range(len(model_pairs)),yticklabels=[f'{labels.get(a,a)} vs {labels.get(b,b)}' for a,b in model_pairs])
+            for i in range(len(model_pairs)):
+                for j in range(k):
+                    ax.text(j,i,annotations.get((i,j),'—'),ha='center',va='center',fontsize=8,
+                            color='black' if matrix[i,j]>.55 else 'white')
+    fig.colorbar(im,ax=axes.ravel().tolist(),label='Individual matched |Pearson r|',shrink=.8)
+    fig.suptitle(f'Individual components · matching within first {k} · {partition} · run {repeat}')
+    fig.supxlabel('Each cell: |r| and component A→B. Spatial comparisons reuse temporal pairs; no spatial rematching.',fontsize=9)
+    return fig
