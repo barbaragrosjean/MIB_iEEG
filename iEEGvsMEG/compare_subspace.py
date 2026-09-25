@@ -5,8 +5,8 @@ python -u compare_subspace.py --meg-kind paired_coverage --models separate_pca p
 
 Input: the resumable cache produced by plssvd_eval.py (ROOT/out/trial_cache).
 Output: ROOT/out/compare_subspace/MEG_KIND. Read with compare_subspace.ipynb.
-Independent trial partitions share condition/time rows and a fixed anatomical
-mapping within each repetition. All repetitions use all cached participants.
+All-data descriptive fit followed by shuffled folds with disjoint test trials.
+Conditions are averaged; participant/source assignments remain fixed across folds.
 Spatial tests concern new trials at the same locations, NOT new participants.
 """
 from pathlib import Path
@@ -138,18 +138,9 @@ def evaluate_alignment(representations, ridge_grid):
         x, y = normalized[source], normalized[target]
         direction = source+'_to_'+target
         for complexity in ('identity', 'orthogonal', 'affine', 'quadratic'):
-            candidates = ridge_grid if complexity in ('affine', 'quadratic') else [0.]
-            selected = None
-            best = np.inf
-            for alpha in candidates:
-                fitted = fit_alignment(x['train'], y['train'], complexity, alpha)
-                error = alignment_error(y['tune'], predict_alignment(fitted, x['tune']))['nrmse']
-                if np.isfinite(error) and error < best:
-                    selected = (alpha, fitted); best = error
-            if selected is None:
-                raise ValueError('No finite tuning alignment error.')
-            alpha, fitted = selected
-            for part in ('train', 'tune', 'test_a', 'test_b', 'test'):
+            alpha = ridge_grid[0] if complexity in ('affine', 'quadratic') else 0.
+            fitted = fit_alignment(x['train'], y['train'], complexity, alpha)
+            for part in x:
                 rows.append(dict(direction=direction, complexity=complexity, partition=part,
                                  alpha=alpha, **alignment_error(y[part], predict_alignment(fitted, x[part]))))
             prefix = direction+'_'+complexity
@@ -173,54 +164,28 @@ def _silhouette(x, labels, seed):
 
 
 def evaluate_clusters(representations, cluster_counts, seed):
-    """Common cluster count selected by tuning compactness, never test agreement.
-
-    K-means is fit in each modality's full k-dimensional spatial pattern space.
-    Orthogonal alignment preserves within-space distances, so it is unnecessary
-    for independent clustering/ARI. Fixed-centroid and refit stability are distinct.
-    """
+    """Report every predeclared count; no tuning or test-driven selection."""
     normalized = {m: normalize_from_train(representations[m])[0] for m in MODALITIES}
-    best = -np.inf; selected = None; tuning = []
+    rows, artifacts = [], {}
     for count in sorted(set(cluster_counts)):
-        if any(len(np.unique(normalized[m]['train'], axis=0)) < count for m in MODALITIES):
+        if any(len(np.unique(normalized[m]['train'],axis=0)) < count for m in MODALITIES):
+            rows.append(dict(metric='unavailable', modality='both', partition='train', value=np.nan, n_clusters=count))
             continue
-        fitted = {m: KMeans(n_clusters=count, n_init=20, random_state=seed).fit(normalized[m]['train'])
-                  for m in MODALITIES}
-        scores = [_silhouette(normalized[m]['tune'], fitted[m].predict(normalized[m]['tune']), seed)
-                  for m in MODALITIES]
-        value = float(np.mean(scores))
-        tuning.append(dict(n_clusters=count, ieeg_silhouette=scores[0], meg_silhouette=scores[1],
-                           selection_score=value))
-        if np.isfinite(value) and value > best:
-            selected = (count, fitted); best = value
-    if selected is None:
-        return [dict(metric='unavailable', modality='both', partition='test', value=np.nan, n_clusters=0)], {}, tuning
-    count, fitted = selected
-    labels = {m: {p: fitted[m].predict(x) for p, x in normalized[m].items()} for m in MODALITIES}
-    rows = []
-    for part in ('test_a', 'test_b', 'test'):
-        rows.append(dict(metric='cross_modal_ari', modality='both', partition=part,
-                         value=adjusted_rand_score(labels['ieeg'][part], labels['meg'][part])))
+        fitted = {m: KMeans(n_clusters=count,n_init=20,random_state=seed).fit(normalized[m]['train']) for m in MODALITIES}
+        labels = {m: {p:fitted[m].predict(x) for p,x in normalized[m].items()} for m in MODALITIES}
+        for part in normalized['ieeg']:
+            rows.append(dict(metric='cross_modal_ari',modality='both',partition=part,
+                             value=adjusted_rand_score(labels['ieeg'][part],labels['meg'][part]),n_clusters=count))
+            for m in MODALITIES:
+                rows.append(dict(metric='silhouette',modality=m,partition=part,
+                                 value=_silhouette(normalized[m][part],labels[m][part],seed),n_clusters=count))
+                artifacts[f'c{count}_{m}_{part}'] = labels[m][part]
+        for m in MODALITIES: artifacts[f'c{count}_{m}_centers'] = fitted[m].cluster_centers_
     for m in MODALITIES:
-        rows.append(dict(metric='fixed_centroid_stability', modality=m, partition='test_a_vs_test_b',
-                         value=adjusted_rand_score(labels[m]['test_a'], labels[m]['test_b'])))
-        refit = {p: KMeans(n_clusters=count, n_init=20, random_state=seed).fit_predict(normalized[m][p])
-                 for p in ('test_a', 'test_b')}
-        rows.append(dict(metric='refit_stability', modality=m, partition='test_a_vs_test_b',
-                         value=adjusted_rand_score(refit['test_a'], refit['test_b'])))
-        rows.append(dict(metric='test_silhouette', modality=m, partition='test',
-                         value=_silhouette(normalized[m]['test'], labels[m]['test'], seed)))
-        for p in refit:
-            labels[m]['refit_'+p] = refit[p]
-    for row in rows:
-        row['n_clusters'] = count
-    artifacts = {m+'_'+p: lab for m in MODALITIES for p, lab in labels[m].items()}
-    artifacts.update({m+'_centers': fitted[m].cluster_centers_ for m in MODALITIES})
-    for m in MODALITIES:
-        _, center, scale = normalize_from_train(representations[m])
+        _,center,scale = normalize_from_train(representations[m])
         artifacts[m+'_normalization_center'] = center
         artifacts[m+'_normalization_rms'] = scale
-    return rows, artifacts, tuning
+    return rows, artifacts
 
 
 def _representations(fold, scores, k):
@@ -236,17 +201,19 @@ def _representations(fold, scores, k):
 def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MODELS,
                    dimensions=(1, 2, 3, 5, 10), repeats=5, seed=2026,
                    block_scaling='equal_variance', split_unit='trial',
-                   cluster_counts=(2, 3, 4, 5, 6), ridge_grid=(1e-4, 1e-2, 1., 100.),
+                   cluster_counts=(2, 3, 4, 5, 6), ridge_grid=(1e-2,),
                    max_gram_gib=2., scratch_dir=None):
     """Run/export comparison; reuse an already complete PLSSVD trial cache."""
-    from plssvd_eval_utils import load_trial_cache, _split_subject, _temporary_fold, _project, _r
+    from plssvd_eval_utils import load_trial_cache, _subject_folds, _temporary_fold, _project
     dimensions = sorted(set(dimensions))
-    if not dimensions or min(dimensions) < 1 or repeats < 1:
-        raise ValueError('Positive dimensions and repeats are required.')
+    if not dimensions or min(dimensions) < 1 or repeats < 2:
+        raise ValueError('Positive dimensions and at least two folds are required.')
     if not models or not set(models) <= set(MODELS) or meg_kind not in MEG_KINDS:
         raise ValueError('Unknown model or MEG dataset.')
     if not cluster_counts or min(cluster_counts) < 2 or not ridge_grid or min(ridge_grid) <= 0:
         raise ValueError('Cluster counts must be >=2 and ridge penalties >0.')
+    if len(ridge_grid) != 1:
+        raise ValueError('Use one fixed ridge penalty; tuning has been removed.')
     out = Path(output_dir); out.mkdir(parents=True, exist_ok=True)
     if (out/'config.json').exists():
         raise FileExistsError('Results already exist. Choose a new --output-dir or use --plot-only.')
@@ -255,7 +222,7 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
     for modality, subjects in (('ieeg', trials.ieeg), ('meg', trials.meg)):
         if not subjects or {s.subject for s in subjects} != set(map(str, manifest['config'][modality+'_subjects'])):
             raise ValueError('Trial cache is incomplete. Finish prepare_trial_cache first.')
-    config = dict(cache_dir=str(Path(cache_dir).resolve()), meg_kind=meg_kind, models=list(models),
+    config = dict(schema_version=2, condition_mode='average', full_data_repeat=-1, cache_dir=str(Path(cache_dir).resolve()), meg_kind=meg_kind, models=list(models),
                   dimensions=dimensions, repeats=repeats, seed=seed, block_scaling=block_scaling,
                   split_unit=split_unit, cluster_counts=list(cluster_counts), ridge_grid=list(ridge_grid),
                   max_gram_gib=max_gram_gib, scope='new trials at fixed participant locations',
@@ -263,25 +230,28 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
                   normalization='training column means and one RMS per modality',
                   within_model_comparison='all model pairs within each modality; all native features',
                   within_model_matching='Pearson Hungarian assignment/signs on training temporal scores, frozen across spaces and partitions',
-                  repetitions='overlapping sensitivity analyses; not independent confidence intervals')
+                  repetitions='disjoint test folds; fixed assignments; overlapping training sets')
     (out/'config.json').write_text(json.dumps(config, indent=2))
     (out/'cache_config.json').write_text(json.dumps(manifest['config'], indent=2))
     np.savez_compressed(out/'axes.npz', times=trials.times, conditions=trials.conditions)
-    tables = {name: [] for name in ('overlap', 'alignment', 'reliability', 'clusters', 'cluster_selection', 'splits',
+    tables = {name: [] for name in ('overlap', 'alignment', 'clusters', 'splits',
                                   'within_model_metrics', 'within_model_pairs', 'within_model_correlations')}
-    for repeat, seq in enumerate(np.random.SeedSequence(seed).spawn(repeats)):
-        rng = np.random.default_rng(seq)
-        matching_seed = int(rng.integers(2**31-1))
-        indices = {m: {s.subject: _split_subject(s, rng, split_unit) for s in getattr(trials, m)} for m in MODALITIES}
+    matching_seq, split_seq = np.random.SeedSequence(seed).spawn(2)
+    matching_seed = int(np.random.default_rng(matching_seq).integers(2**31-1))
+    rng = np.random.default_rng(split_seq)
+    assignments = {m:{s.subject:_subject_folds(s,rng,split_unit,repeats) for s in getattr(trials,m)} for m in MODALITIES}
+    # Descriptive all-data fit first; never used to initialize/select fold models.
+    for repeat in [-1] + list(range(repeats)):
+        analysis = 'in_sample' if repeat == -1 else 'cross_validation'
+        indices = {m:{s.subject:({'train':[np.arange(len(a)) for a in s.data]} if repeat == -1
+                                 else assignments[m][s.subject][repeat]) for s in getattr(trials,m)} for m in MODALITIES}
         for m in MODALITIES:
             for subject, partitions in indices[m].items():
                 for part, conditions in partitions.items():
-                    if part == 'test':
-                        continue  # test is exactly the union of test_a and test_b
                     for condition, ix in zip(trials.conditions, conditions):
-                        tables['splits'].extend(dict(repeat=repeat, modality=m, subject=subject,
-                                                     partition=part, condition=condition, trial_index=int(i)) for i in ix)
-        with _temporary_fold(trials, meg_kind, indices, matching_seed, scratch_dir) as prepared_fold:
+                        tables['splits'].extend(dict(analysis=analysis, repeat=repeat, modality=m, subject=subject,
+                                                     partition='in_sample' if repeat == -1 else part, condition=condition, trial_index=int(i)) for i in ix)
+        with _temporary_fold(trials, meg_kind, indices, matching_seed, scratch_dir, condition_mode="average") as prepared_fold:
             fold, scalers, audit, pairing = prepared_fold
             audit.to_csv(out/f'matching_{repeat:03d}.csv', index=False)
             (out/f'pairing_{repeat:03d}.json').write_text(json.dumps(pairing, indent=2))
@@ -293,47 +263,41 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
                 np.save(out/f'{m}_electrode_map_{repeat:03d}.npy', fold['train'][m].electrode_to_feature)
             fitted = fit_models(fold['train'], models, max(dimensions), block_scaling, max_gram_gib)
             for name, model in fitted.items():
-                print(f'Repetition {repeat+1}/{repeats}: {meg_kind}, {name}', flush=True)
+                print(f'{"All-data fit" if repeat == -1 else f"Fold {repeat+1}/{repeats}"}: {meg_kind}, {name}', flush=True)
                 scores = {p: {m: _project(fold[p][m], model, m) for m in MODALITIES} for p in fold}
                 np.savez_compressed(out/f'{name}_{repeat:03d}_model.npz', **model,
                                     **{f'{p}_{m}_scores': a for p, modalities in scores.items() for m, a in modalities.items()})
                 for k in dimensions:
-                    base = dict(model=name, repeat=repeat, k=k)
+                    base = dict(analysis=analysis, model=name, repeat=repeat, k=k)
                     representations = _representations(fold, scores, k)
                     for space, reps in representations.items():
                         prefix = f'{name}_{repeat:03d}_k{k}_{space}'
                         if space == 'spatial_patterns':
                             np.savez_compressed(out/f'{prefix}.npz', **{m+'_'+p: x for m, parts in reps.items() for p, x in parts.items()})
-                        for part in ('train', 'tune', 'test_a', 'test_b', 'test'):
+                        for part in fold:
                             metrics = subspace_metrics(reps['ieeg'][part], reps['meg'][part])
                             metrics['angles_deg'] = json.dumps(metrics['angles_deg'])
-                            tables['overlap'].append(dict(**base, space=space, partition=part, **metrics))
-                        for m in MODALITIES:
-                            a, b = reps[m]['test_a'], reps[m]['test_b']
-                            metrics = subspace_metrics(a, b)
-                            metrics['angles_deg'] = json.dumps(metrics['angles_deg'])
-                            correlations = _r(a, b)
-                            tables['reliability'].append(dict(**base, space=space, modality=m,
-                                mean_signed_r=float(np.mean(correlations)),
-                                component_r=json.dumps(correlations.tolist()), **metrics))
+                            tables['overlap'].append(dict(**base, space=space, partition='in_sample' if repeat == -1 else part, **metrics))
                         rows, artifacts = evaluate_alignment(reps, ridge_grid)
+                        if repeat == -1:
+                            for row in rows: row['partition'] = 'in_sample'
                         tables['alignment'].extend(dict(**base, space=space, **row) for row in rows)
                         np.savez_compressed(out/f'{prefix}_alignment.npz', **artifacts)
-                    rows, artifacts, tuning = evaluate_clusters(representations['spatial_patterns'], cluster_counts, matching_seed)
+                    rows, artifacts = evaluate_clusters(representations['spatial_patterns'], cluster_counts, matching_seed)
+                    if repeat == -1:
+                        for row in rows: row['partition'] = 'in_sample'
                     tables['clusters'].extend(dict(**base, **row) for row in rows)
-                    tables['cluster_selection'].extend(dict(**base, **row) for row in tuning)
                     np.savez_compressed(out/f'{name}_{repeat:03d}_k{k}_clusters.npz', **artifacts)
                 del scores
             if len(fitted) > 1:
                 from compare_models import compare_fitted_models
                 within = compare_fitted_models(fold, fitted, dimensions, repeat=repeat)
                 for key, table in within.items():
+                    table['analysis'] = analysis
+                    if repeat == -1 and 'partition' in table: table['partition'] = 'in_sample'
                     tables[key].extend(table.to_dict('records'))
         for table, rows in tables.items():
             frame = pd.DataFrame(rows)
-            if table == 'cluster_selection' and frame.empty:
-                frame = pd.DataFrame(columns=['model', 'repeat', 'k', 'n_clusters',
-                                              'ieeg_silhouette', 'meg_silhouette', 'selection_score'])
             if not (table.startswith('within_model_') and frame.empty):
                 frame.to_csv(out/f'{table}.csv', index=False)
     (out/'COMPLETE.json').write_text(json.dumps(dict(repeats=repeats, models=list(models))))
@@ -345,7 +309,8 @@ def load_results(output_dir):
     config = json.loads((root/'config.json').read_text())
     if not (root/'COMPLETE.json').exists():
         warnings.warn('Run has not completed; tables may describe only finished repetitions.')
-    names = ['overlap', 'alignment', 'reliability', 'clusters', 'cluster_selection']
+    names = ['overlap', 'alignment', 'clusters']
+    if config.get('schema_version',1) < 2: names += ['reliability','cluster_selection']
     names += [name for name in ('within_model_metrics', 'within_model_pairs', 'within_model_correlations')
               if (root/f'{name}.csv').exists()]
     return config, {name: pd.read_csv(root/f'{name}.csv') for name in names}
@@ -355,6 +320,8 @@ def plot_results(output_dir, k=None, show=True):
     """Save cross-modal and available within-modal model comparison figures."""
     import matplotlib.pyplot as plt
     config, tables = load_results(output_dir)
+    if config.get('schema_version',1) >= 2:
+        return _plot_kfold_results(output_dir, config, tables, k, show)
     k = k or max(config['dimensions'])
     if k not in config['dimensions']:
         raise ValueError('Choose a dimension saved in this run.')
@@ -434,6 +401,57 @@ def plot_results(output_dir, k=None, show=True):
     return figures
 
 
+def _plot_kfold_results(output_dir, config, tables, k, show):
+    """Separate all-data descriptions from held-out fold performance."""
+    import matplotlib.pyplot as plt
+    k = k or max(config['dimensions'])
+    if k not in config['dimensions']: raise ValueError('Choose a saved dimension.')
+    paths = []
+    def finish(fig,name):
+        for ext in ('png','pdf'): fig.savefig(Path(output_dir)/f'{name}.{ext}',dpi=180,bbox_inches='tight')
+        if show: plt.show()
+        plt.close(fig); paths.append(str(Path(output_dir)/f'{name}.png'))
+    fig,axes=plt.subplots(1,2,figsize=(12,4),layout='constrained')
+    for ax,space in zip(axes,('temporal_scores','spatial_patterns')):
+        for model in config['models']:
+            data=tables['overlap']; data=data[(data.space==space)&(data.model==model)]
+            full=data[data.partition=='in_sample'].sort_values('k')
+            line,=ax.plot(full.k,full.overlap,'--',label=model+' all data')
+            grouped=data[data.partition=='test'].groupby('k').overlap.agg(['median','min','max'])
+            ax.plot(grouped.index,grouped['median'],'o-',color=line.get_color(),label=model+' test folds')
+            ax.fill_between(grouped.index,grouped['min'],grouped['max'],color=line.get_color(),alpha=.12)
+        ax.set(title=space,xlabel='Components',ylabel='Subspace overlap',ylim=(0,1.02));ax.legend(fontsize=7)
+    fig.suptitle('All-data description vs held-out geometry; shading = fold range')
+    finish(fig,'subspace_overlap')
+    fig,axes=plt.subplots(2,2,figsize=(12,8),layout='constrained')
+    order=['identity','orthogonal','affine','quadratic']
+    for i,space in enumerate(('temporal_scores','spatial_patterns')):
+        for j,direction in enumerate(('ieeg_to_meg','meg_to_ieeg')):
+            ax=axes[i,j]
+            for model in config['models']:
+                data=tables['alignment'];data=data[(data.k==k)&(data.space==space)&(data.direction==direction)&(data.model==model)]
+                full=data[data.partition=='in_sample'].set_index('complexity').reindex(order)
+                line,=ax.plot(range(4),full.nrmse,'--',label=model+' all data')
+                g=data[data.partition=='test'].groupby('complexity').nrmse.agg(['median','min','max']).reindex(order)
+                ax.plot(range(4),g['median'],'o-',color=line.get_color(),label=model+' test')
+                ax.fill_between(range(4),g['min'],g['max'],color=line.get_color(),alpha=.12)
+            ax.axhline(1,color='grey',ls=':');ax.set(title=space+' '+direction,xticks=range(4),xticklabels=order,ylabel='Normalized error');ax.legend(fontsize=7)
+    fig.suptitle(f'Transformations, k={k}; fixed ridge, no tuning')
+    finish(fig,f'alignment_complexity_k{k}')
+    fig,ax=plt.subplots(figsize=(8,4),layout='constrained')
+    data=tables['clusters'];data=data[(data.k==k)&(data.metric=='cross_modal_ari')]
+    for model in config['models']:
+        full=data[(data.model==model)&(data.partition=='in_sample')].sort_values('n_clusters')
+        line,=ax.plot(full.n_clusters,full.value,'--',label=model+' all data')
+        g=data[(data.model==model)&(data.partition=='test')].groupby('n_clusters').value.agg(['median','min','max'])
+        if len(g):
+            ax.plot(g.index,g['median'],'o-',color=line.get_color(),label=model+' test')
+            ax.fill_between(g.index,g['min'],g['max'],color=line.get_color(),alpha=.12)
+    ax.set(xlabel='Predeclared cluster count',ylabel='Cross-modal ARI',title=f'Spatial grouping, k={k}; no cluster selection',ylim=(-1,1.02));ax.legend(fontsize=7)
+    finish(fig,f'cluster_agreement_k{k}')
+    return paths
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parent)
@@ -443,12 +461,12 @@ def main():
     parser.add_argument('--meg-kind', choices=MEG_KINDS, default='full_concatenated')
     parser.add_argument('--models', nargs='+', choices=MODELS, default=list(MODELS))
     parser.add_argument('--dimensions', nargs='+', type=int, default=[1, 2, 3, 5, 10])
-    parser.add_argument('--repeats', type=int, default=5)
+    parser.add_argument('--repeats', '--n-splits', dest='repeats', type=int, default=5)
     parser.add_argument('--seed', type=int, default=2026)
     parser.add_argument('--block-scaling', choices=['none', 'equal_variance'], default='equal_variance')
     parser.add_argument('--split-unit', choices=['trial', 'group'], default='trial')
     parser.add_argument('--cluster-counts', nargs='+', type=int, default=[2, 3, 4, 5, 6])
-    parser.add_argument('--ridge-grid', nargs='+', type=float, default=[1e-4, 1e-2, 1., 100.])
+    parser.add_argument('--ridge-alpha', type=float, default=1e-2, help='Fixed transformation ridge penalty; no tuning.')
     parser.add_argument('--max-gram-gib', type=float, default=2.)
     parser.add_argument('--plot-only', action='store_true', help='Regenerate figures from saved result tables.')
     args = parser.parse_args()
@@ -460,7 +478,7 @@ def main():
                        meg_kind=args.meg_kind, models=args.models, dimensions=args.dimensions,
                        repeats=args.repeats, seed=args.seed, block_scaling=args.block_scaling,
                        split_unit=args.split_unit, cluster_counts=args.cluster_counts,
-                       ridge_grid=args.ridge_grid, max_gram_gib=args.max_gram_gib, scratch_dir=args.scratch_dir)
+                       ridge_grid=(args.ridge_alpha,), max_gram_gib=args.max_gram_gib, scratch_dir=args.scratch_dir)
     plot_results(out, show=False)
     print(f'Outputs saved to: {out.resolve()}', flush=True)
 
