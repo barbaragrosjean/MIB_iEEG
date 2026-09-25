@@ -5,7 +5,7 @@ Run from a cluster checkout containing the project helpers and src.setting:
     python -u plssvd_eval.py --root /path/to/iEEGvsMEG
 
 Defaults preserve the notebook analysis and exclude MEG SUBJ_0038. Outputs
-are saved under ROOT/out/plssvd_eval_kfold; trials use ROOT/out/trial_cache.
+are saved under ROOT/out/plssvd_eval_{MEG_KIND}; trials use ROOT/out/trial_cache.
 Requires the notebook's Python dependencies, including mat73 for raw MEG.
 Tests concern new trials from the same participants, not new participants.
 """
@@ -26,7 +26,7 @@ def parse_args():
     parser.add_argument('--cache-dir', type=Path, help='Default: ROOT/out/trial_cache.')
     parser.add_argument('--scratch-dir', type=Path,
                         help='Temporary fold storage; default: system temporary directory (honors TMPDIR).')
-    parser.add_argument('--output-dir', type=Path, help='Default: ROOT/out/plssvd_eval_kfold')
+    parser.add_argument('--output-dir', type=Path, help='Default: ROOT/out/plssvd_eval_{MEG_KIND}')
     parser.add_argument('--trial-metadata-csv', type=Path)
     parser.add_argument('--meg-kind', default='full_concatenated', choices=[
         'full_average', 'full_concatenated', 'coverage_average', 'paired_coverage', 'random_control'])
@@ -57,7 +57,7 @@ def main():
     meg_dir = args.meg_dir or root / 'MEG' / 'dataMEG'
     ieeg_dir = args.ieeg_dir or root / 'ieeg_shortWOBS_fs250'
     cache_dir = args.cache_dir or root / 'out' / 'trial_cache'
-    output_dir = args.output_dir or root / 'out' / 'plssvd_eval_kfold'
+    output_dir = args.output_dir or root / 'out' / f'plssvd_eval_{args.meg_kind}'
     output_dir.mkdir(parents=True, exist_ok=True)
     if (output_dir / 'validation_options.json').exists() or any(output_dir.glob('model_*.npz')):
         raise FileExistsError('Choose a new --output-dir; existing evaluations are not overwritten.')

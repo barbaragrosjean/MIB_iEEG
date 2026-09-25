@@ -4,6 +4,7 @@ No fitting or test-driven component selection occurs here. Spatial inputs are
 forward patterns on the same ordered features, not projection weights.
 """
 from itertools import combinations
+from dataclasses import replace
 import json
 import numpy as np
 import pandas as pd
@@ -49,7 +50,7 @@ def compare_representations(representations, *, modality, k, repeat=0):
     """Compare model -> space -> partition -> paired-row arrays.
 
     Select ONE component assignment and orientation on training temporal scores
-    per model pair, then reuse it for temporal scores, condition contrasts and
+    per model pair, then reuse it for condition-averaged temporal scores and
     spatial patterns in every partition. Undefined training correlations are
     excluded from matched summaries, with valid counts reported. No test
     rematching or test sign flips. Full signed Pearson matrices are exported.
@@ -91,6 +92,13 @@ def compare_representations(representations, *, modality, k, repeat=0):
              ('within_model_correlations', correlations)]}
 
 
+def _condition_average(dataset, scores):
+    """Average already fitted score contributions; never refit model weights."""
+    if dataset.condition_mode == 'stack':
+        scores = scores.reshape(dataset.arrays[0].shape[0], dataset.arrays[0].shape[-1], -1).mean(0)
+    return replace(dataset, condition_mode='average'), scores
+
+
 def compare_fitted_models(fold, fitted, dimensions, repeat=0):
     """Held-out comparison on ALL native features within each modality.
 
@@ -104,17 +112,13 @@ def compare_fitted_models(fold, fitted, dimensions, repeat=0):
         raise ValueError('Within-modality comparison requires at least two models.')
     collected = {}
     for modality in ('ieeg', 'meg'):
-        scores = {name: {part: _project(datasets[modality], model, modality)
+        scores = {name: {part: _condition_average(datasets[modality], _project(datasets[modality], model, modality))[1]
                         for part, datasets in fold.items()} for name, model in fitted.items()}
         for k in dimensions:
             reps = {}
             for name, parts in scores.items():
                 temporal = {p: s[:, :k] for p, s in parts.items()}
                 reps[name] = dict(temporal_scores=temporal)
-                ds = fold['train'][modality]
-                if ds.condition_mode == 'stack' and ds.arrays[0].shape[0] == 2:
-                    nt = ds.arrays[0].shape[-1]
-                    reps[name]['condition_contrast'] = {p: s[nt:]-s[:nt] for p, s in temporal.items()}
             result = compare_representations(reps, modality=modality, k=k, repeat=repeat)
             for key, value in result.items():
                 collected.setdefault(key, []).append(value)
@@ -122,7 +126,7 @@ def compare_fitted_models(fold, fitted, dimensions, repeat=0):
                 for part in fold:
                     spatial = {name: dict(
                         temporal_scores={'train': reps[name]['temporal_scores']['train']},
-                        spatial_patterns={part: _patterns(fold[part][modality], reps[name]['temporal_scores'][part])})
+                        spatial_patterns={part: _patterns(replace(fold[part][modality], condition_mode='average'), reps[name]['temporal_scores'][part])})
                         for name in (name_a, name_b)}
                     result = compare_representations(spatial, modality=modality, k=k, repeat=repeat)
                     for key in ('within_model_metrics', 'within_model_correlations'):
@@ -142,15 +146,12 @@ def compare_cov_models_within(models, ieeg, meg, dimensions=(1, 2, 3, 5, 10)):
         for k in dimensions:
             reps = {}
             for name, model in models.items():
-                scores = getattr(model, modality+'_scores')
+                averaged, scores = _condition_average(dataset, getattr(model, modality+'_scores'))
                 if k < 1 or k > scores.shape[1]:
                     raise ValueError('Choose dimensions available in every fitted model.')
                 scores = scores[:, :k]
                 reps[name] = dict(temporal_scores={'train': scores},
-                                 spatial_patterns={'train': _patterns(dataset, scores)})
-                if dataset.condition_mode == 'stack' and dataset.arrays[0].shape[0] == 2:
-                    nt = dataset.arrays[0].shape[-1]
-                    reps[name]['condition_contrast'] = {'train': scores[nt:]-scores[:nt]}
+                                 spatial_patterns={'train': _patterns(averaged, scores)})
             result = compare_representations(reps, modality=modality, k=k)
             for key, value in result.items():
                 if 'partition' in value:
@@ -160,40 +161,41 @@ def compare_cov_models_within(models, ieeg, meg, dimensions=(1, 2, 3, 5, 10)):
 
 
 def plot_within_models(result, k, partition='test'):
-    """Overlap/matching summaries and primary-repetition correlation heatmaps."""
+    """One compact summary: rows=model pairs, columns=space and metric.
+
+    Matching comes from temporal scores; absolute spatial correlations retain
+    those assignments. Repeated runs are summarized by their median.
+    """
     import matplotlib.pyplot as plt
     table = result['within_model_metrics']
     table = table[(table.k == k) & (table.partition == partition)]
     if table.empty:
         raise ValueError('No results for this dimension/partition.')
-    figures = []
-    for (modality, space), group in table.groupby(['modality', 'space'], sort=False):
-        fig, axes = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
-        pairs = list(group.groupby(['model_a', 'model_b'], sort=False))
-        for ax, metric in zip(axes, ['overlap', 'matched_signed_r']):
-            for index, ((a, b), rows) in enumerate(pairs):
-                values = rows[metric].dropna().to_numpy()
-                ax.scatter(np.repeat(index, len(values)), values, alpha=.5)
-                if len(values):
-                    ax.plot(index, np.median(values), 'k_')
-            labels = [a+' / '+b for (a, b), _ in pairs]
-            ax.set(xticks=range(len(labels)), xticklabels=labels, ylabel=metric,
-                   ylim=(-1.05, 1.05) if metric.endswith('_r') else (-.05, 1.05))
-            ax.tick_params(axis='x', labelrotation=20)
-        fig.suptitle(f'{modality}: {space}, k={k}, {partition} (dots = repetitions)')
-        figures.append(fig)
-    corr = result['within_model_correlations']
-    corr = corr[(corr.k == k) & (corr.partition == partition) & (corr.repeat == corr.repeat.min())]
-    for (modality, space), group in corr.groupby(['modality', 'space'], sort=False):
-        groups = list(group.groupby(['model_a', 'model_b'], sort=False))
-        fig, axes = plt.subplots(1, len(groups), figsize=(5*len(groups), 4),
-                                 squeeze=False, constrained_layout=True)
-        for ax, ((a, b), pair) in zip(axes.flat, groups):
-            matrix = pair.pivot(index='component_a', columns='component_b', values='signed_r')
-            im = ax.imshow(matrix, vmin=-1, vmax=1, cmap='RdBu_r')
-            ax.set(title=f'{a} vs {b}', xlabel=b, ylabel=a,
-                   xticks=range(k), xticklabels=range(1, k+1), yticks=range(k), yticklabels=range(1, k+1))
-            fig.colorbar(im, ax=ax, label='Pearson r (native signs)')
-        fig.suptitle(f'{modality}: {space}, {partition}, primary repetition')
-        figures.append(fig)
-    return figures
+    modalities = [m for m in ('ieeg','meg') if m in set(table.modality)]
+    labels = {'separate_pca':'PCA', 'plssvd':'PLSSVD', 'joint_pca':'Joint PCA'}
+    columns = [(space,metric) for space in ('temporal_scores','spatial_patterns')
+               for metric in ('overlap','matched_abs_r')]
+    fig, axes = plt.subplots(1,len(modalities),figsize=(11,3.8),squeeze=False,layout='constrained')
+    for ax, modality in zip(axes.flat,modalities):
+        sub = table[table.modality == modality]
+        pairs = list(sub[['model_a','model_b']].drop_duplicates().itertuples(index=False,name=None))
+        matrix = np.full((len(pairs),len(columns)),np.nan)
+        for i,(a,b) in enumerate(pairs):
+            for j,(space,metric) in enumerate(columns):
+                values = sub[(sub.model_a==a)&(sub.model_b==b)&(sub.space==space)][metric]
+                matrix[i,j] = values.median()
+        im = ax.imshow(np.ma.masked_invalid(matrix),vmin=0,vmax=1,cmap='viridis',aspect='auto')
+        ax.set(title='iEEG' if modality=='ieeg' else 'MEG',
+               xticks=range(4),xticklabels=['Time\noverlap','Time\nmatched |r|','Space\noverlap','Space\nmatched |r|'],
+               yticks=range(len(pairs)),yticklabels=[labels.get(a,a)+' vs '+labels.get(b,b) for a,b in pairs])
+        ax.axvline(1.5,color='white',lw=2)
+        for i in range(len(pairs)):
+            for j in range(4):
+                v = matrix[i,j]
+                ax.text(j,i,f'{v:.2f}' if np.isfinite(v) else '—',ha='center',va='center',
+                        color='black' if v>.55 else 'white',fontsize=11)
+    fig.colorbar(im,ax=axes.ravel().tolist(),label='Similarity (0–1)',shrink=.8)
+    setting = 'Same-data comparison' if partition=='in_sample' else partition
+    fig.suptitle(f'Within-modality model similarity · {k} components · {setting}')
+    fig.supxlabel('Equal condition averages · component pairs chosen from time courses · median across runs',fontsize=9)
+    return [fig]

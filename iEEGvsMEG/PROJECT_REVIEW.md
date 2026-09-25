@@ -161,3 +161,5 @@ Fit identity, orthogonal rotation/reflection, regularized affine and regularized
 | High | Reproducibility | The six-test synthetic suite passed on 23 September, but `tests/test_comparison_extensions.py` is absent on 24 September; only its compiled cache remains. Restore the test source before rerunning validation. A dependency manifest is also absent; `src.setting/GetInfo`, data and cluster paths remain external. |
 
 
+
+Within-modality display update: compare_models now always compares equal-condition-average temporal scores and corresponding forward patterns; condition-contrast comparisons are removed. Existing stacked fitted scores are averaged without refitting weights. The covariance notebook fits on condition averages. Its final cell exports detailed CSVs and one annotated two-panel similarity summary (iEEG/MEG; temporal/spatial overlap and matched absolute correlation), saved as PNG/PDF. PLSSVD batch output defaults to ROOT/out/plssvd_eval_{MEG_KIND}, with --output-dir still available.
