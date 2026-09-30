@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 plt.style.use('petroff10')
 
-PROJECT_PATH = '../MINDLAB2021_MEG-TempSeqAges/scratch/learning_bach_iEEG'
+PROJECT_PATH = '../../MINDLAB2021_MEG-TempSeqAges/scratch/learning_bach_iEEG'
 OUT_PATH = 'outs'    
 EVENT_ID = {'old/correct': 1,
  'new/correct': 2,

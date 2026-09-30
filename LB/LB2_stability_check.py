@@ -162,9 +162,12 @@ for iter in range(100) :
     w_all = Compute_weights(nb_compo, freq, subj_included) # variability in terms of the association of the suject together
     W_ALL.append(w_all)
 W_ALL = np.concat([w[None, :, :] for w in W_ALL], axis=0)
+
 mean_corr_all, corr_all = mean_component_correlation(W_ALL)
 with open(out_path + '/mean_corr_all.p', "wb") as f:
     pickle.dump(mean_corr_all, f)
+with open(out_path + '/mean_corr_all_W.p', "wb") as f:
+    pickle.dump(W_ALL, f)
 
 for iter in range(100) : 
     # Exclude a trial
@@ -174,6 +177,8 @@ W_TR = np.concat([w[None, :, :] for w in W_TR], axis=0)
 mean_corr_tr, corr_tr = mean_component_correlation(W_TR)
 with open(out_path + '/mean_corr_tr.p', "wb") as f:
     pickle.dump(mean_corr_tr, f)
+with open(out_path + '/mean_corr_tr_W.p', "wb") as f:
+    pickle.dump(W_TR, f)
 
 TRANS =[]
 data_grp = get_data_grp(subj_included=subj_included, type_data='tfr', data_path=data_path)
@@ -198,13 +203,16 @@ for subj in subj_included:
     subj_rm.append(subj)
     TRANS.append(np.concat([t[None, :, :] for t in transform], axis =0)) 
 
-corr_trans = np.zeros(len(subj_included), 50, 5)
+corr_trans = np.zeros((len(subj_included), 50, 5))
 for s in range(len(subj_included)):
     for i in range(50):
         for c in range(5):
             corr_trans[s, i, c] = np.corrcoef(big_trans[:, c],TRANS[s][i, c, :])[0, 1]
 corr_trans_mean =corr_trans.mean(1)
 loo_stability = subject_influence(W_SUBJ, W_ALL)
+
+with open(out_path + '/W_subj_stability_W.p', "wb") as f:
+    pickle.dump(W_SUBJ, f)
 
 with open(out_path + '/W_subj_stability.p', "wb") as f:
     pickle.dump(loo_stability, f)
