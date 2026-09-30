@@ -930,3 +930,60 @@ def _plot_fixed_evaluation(result, finish):
                  if result['validation_options'].get('schema_version',1) >= 3 else
                  'Refitted temporal-pattern consistency; test sets can overlap across splits')
     finish(fig, 'fold_temporal_stability')
+
+
+def plot_test_score_correlations(output_dir, n_components=25, absolute=True):
+    """Mean test Pearson matrix across folds, in native singular-value order.
+
+    Default averages |r| to avoid cancellation from fold-specific signs. No
+    test-based permutation/alignment is used. Signed mode orients both sides
+    of each PLS pair using the largest absolute training iEEG score entry.
+    Correlations are over held-out condition-averaged time courses, not trials.
+    """
+    from compare_models import correlation_matrix
+    root = Path(output_dir)
+    options = json.loads((root/'validation_options.json').read_text())
+    if not (root/'COMPLETE.json').exists():
+        raise FileNotFoundError('Evaluation is incomplete; COMPLETE.json is missing.')
+    if isinstance(n_components, bool) or not isinstance(n_components, (int, np.integer)) or n_components < 1:
+        raise ValueError('n_components must be a positive integer.')
+    available = options.get('n_components', 0)
+    if available < n_components:
+        raise ValueError(f'Saved run contains {available} components; requested {n_components}. '
+                         f'Rerun plssvd_eval.py --n-components {n_components} into a new output directory '
+                         '(each training fold must support that rank).')
+    matrices = []
+    for fold in range(options['repeats']):
+        with np.load(root/f'model_{fold:03d}.npz',allow_pickle=False) as saved:
+            x = saved['test_ieeg'][:, :n_components].copy()
+            y = saved['test_meg'][:, :n_components].copy()
+            if min(x.shape[1], y.shape[1]) < n_components:
+                raise ValueError(f'Fold {fold} has fewer components than declared.')
+            if not absolute:
+                train = saved['train_ieeg'][:, :n_components]
+                signs = np.sign(train[np.argmax(np.abs(train),axis=0),np.arange(n_components)])
+                signs[signs==0] = 1
+                x *= signs; y *= signs
+            r = correlation_matrix(x,y)
+            matrices.append(np.abs(r) if absolute else r)
+    matrices = np.stack(matrices)
+    valid = np.isfinite(matrices).sum(0)
+    mean = np.divide(np.nansum(matrices,axis=0),valid,
+                     out=np.full((n_components,n_components),np.nan),where=valid>0)
+    kind = 'absolute' if absolute else 'signed'
+    stem = root/f'test_score_correlation_{kind}_k{n_components}'
+    table = pd.DataFrame(mean,index=np.arange(1,n_components+1),columns=np.arange(1,n_components+1))
+    table.index.name='iEEG_X_component'; table.columns.name='MEG_Y_component'
+    table.to_csv(stem.with_suffix('.csv'))
+    np.savez_compressed(stem.with_suffix('.npz'),fold_correlations=matrices,valid_fold_counts=valid,mean=mean)
+    fig,ax=plt.subplots(figsize=(9,8),layout='constrained')
+    im=ax.imshow(np.ma.masked_invalid(mean),vmin=0 if absolute else -1,vmax=1,
+                 cmap='viridis' if absolute else 'RdBu_r',interpolation='nearest')
+    ticks=np.arange(n_components) if n_components<=30 else np.arange(0,n_components,5)
+    ax.set(xticks=ticks,xticklabels=ticks+1,yticks=ticks,yticklabels=ticks+1,
+           xlabel='MEG output Y component',ylabel='iEEG output X component',
+           title=f'Mean held-out {"|Pearson r|" if absolute else "Pearson r"} across {len(matrices)} folds\n{n_components} components · native PLS order')
+    fig.colorbar(im,ax=ax,label='Mean |r|' if absolute else 'Mean r')
+    fig.supxlabel('Correlations across test time points; equal fold weights. No component rematching across folds.',fontsize=9)
+    for ext in ('png','pdf'):fig.savefig(stem.with_suffix('.'+ext),dpi=180,bbox_inches='tight')
+    return fig,table
