@@ -77,10 +77,8 @@ def main():
     coord, _, electrodes, subjects, regions = GetInfo(
         ieeg_subjects, data_path=str(ieeg_dir), project_path=str(args.project_path if args.project_path is not None else PROJECT_PATH))
     # Preserve the notebook coordinate conversion; exporter receives metres.
-    coord = np.asarray(coord)
-    coord = np.where(abs(coord) > 100, coord / 1000, coord)
-    coord = np.where(abs(coord) > 100, coord / 1000, coord)
-    coord = coord / 1000
+    from coverage_matching_utils import ieeg_getinfo_coordinates_m
+    coord = ieeg_getinfo_coordinates_m(coord)
     metadata = pd.DataFrame(coord, columns=['x', 'y', 'z'])
     metadata['subject'] = subjects
     metadata['channel'] = electrodes

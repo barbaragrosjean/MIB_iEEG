@@ -32,6 +32,18 @@ def coordinates_mm(values, unit):
     return a
 
 
+def ieeg_getinfo_coordinates_m(values):
+    """Apply the project's requested GetInfo coordinate correction, returning metres.
+
+    Raw GetInfo values only: externally supplied metadata already declares its
+    unit and must not receive this correction a second time.
+    """
+    coord = np.array(values, dtype=float)
+    coord = np.where(abs(coord) > 100, coord / 1000, coord)
+    coord = np.where(abs(coord) > 100, coord / 1000, coord)
+    return coord / 1000
+
+
 def _preprocess(a, mode, multiplier=1.):
     a = np.asarray(a, dtype=np.float32) * multiplier
     if a.ndim != 3 or not np.isfinite(a).all():
@@ -62,7 +74,9 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
     x, y, z; optional channel/region. Pass the same columns directly as an
     electrode_metadata DataFrame to reuse already prepared GetInfo metadata.
     Optional subject lists preserve the supplied participant selection/order.
-    Alternatively use original GetInfo.
+    Alternatively use original GetInfo. Raw GetInfo coordinates receive the
+    project correction (two >100 divisions, then /1000 to metres). Explicit
+    metadata is used with its declared unit and is not corrected again.
     Pickles must come from a trusted source.
 
     MEG time must be supplied as .npy/.csv or explicit tmin and sfreq.
@@ -131,6 +145,8 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
             raise ValueError('GetInfo channel order does not match concatenated epoch participant order.')
         meta = pd.DataFrame({'subject': owners, 'channel': electrodes, 'region': regions,
                              'channel_index': np.concatenate([np.arange(n) for n in counts])})
+        coord = ieeg_getinfo_coordinates_m(coord)
+        ieeg_coordinate_unit = 'm'
     coord = coordinates_mm(coord, ieeg_coordinate_unit)
     meta[['x', 'y', 'z']] = coord
     meg, positions, meg_times = [], [], None
