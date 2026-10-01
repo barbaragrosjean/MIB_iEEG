@@ -23,6 +23,7 @@ def parse_args():
     parser.add_argument('--ieeg-dir', type=Path, help='Epoch directory (default: ROOT/ieeg_shortWOBS_fs250).')
     parser.add_argument('--meg-raw-dir', type=Path, default=Path(
         '/projects/MINDLAB2025_MEG-Auditory_Cognitive_Maps/scratch/APR2020_Block3_SingleTrial_BarbaraNikita'))
+    parser.add_argument('--project-path', type=Path, help='GetInfo project directory; default: PROJECT_PATH as configured, without ROOT prefix.')
     parser.add_argument('--cache-dir', type=Path, help='Default: ROOT/out/trial_cache.')
     parser.add_argument('--scratch-dir', type=Path,
                         help='Temporary fold storage; default: system temporary directory (honors TMPDIR).')
@@ -74,7 +75,7 @@ def main():
         raise FileNotFoundError(f'No subjects found: check {meg_dir} and {ieeg_dir}.')
     print(f'MEG subjects: {len(meg_subjects)}; iEEG subjects: {len(ieeg_subjects)}', flush=True)
     coord, _, electrodes, subjects, regions = GetInfo(
-        ieeg_subjects, data_path=str(ieeg_dir), project_path=str(root.parent / PROJECT_PATH))
+        ieeg_subjects, data_path=str(ieeg_dir), project_path=str(args.project_path if args.project_path is not None else PROJECT_PATH))
     # Preserve the notebook coordinate conversion; exporter receives metres.
     coord = np.asarray(coord)
     coord = np.where(abs(coord) > 100, coord / 1000, coord)

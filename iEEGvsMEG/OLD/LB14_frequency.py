@@ -22,7 +22,7 @@ print('iEEG Subject number : ', len(ieeg_subj_list))
 
 compute_ieeg = False
 # Get the coordinate
-project_path = '../' + PROJECT_PATH
+project_path = PROJECT_PATH
 coord, areas, elect_list, subj_list, regions_ieeg = GetInfo(ieeg_subj_list, data_path=ieeg_datapath, project_path=project_path)
 coord=np.array(coord)
 coord = np.where(abs(coord) >100, coord/1000, coord)

@@ -126,7 +126,7 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
             raise ImportError('Provide METADATA_CSV or restore the original src.setting/GetInfo module.') from exc
         coord, areas, electrodes, reported_owners, regions = GetInfo(
             ieeg_subjects, data_path=str(ieeg_dir),
-            project_path=str(project_path if project_path is not None else Path('..') / PROJECT_PATH))
+            project_path=str(project_path if project_path is not None else PROJECT_PATH))
         if not np.array_equal(np.asarray(reported_owners, dtype=str), owners):
             raise ValueError('GetInfo channel order does not match concatenated epoch participant order.')
         meta = pd.DataFrame({'subject': owners, 'channel': electrodes, 'region': regions,

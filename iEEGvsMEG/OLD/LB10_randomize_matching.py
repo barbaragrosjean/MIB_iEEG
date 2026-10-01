@@ -25,7 +25,7 @@ with open(info_file) as json_data:
     d = json.load(json_data)
     time_ieeg = d['time_epoch']
 
-project_path = '../' + PROJECT_PATH
+project_path = PROJECT_PATH
 coord, areas, elect_list, subj_list, regions_ieeg = GetInfo(ieeg_subj_list, data_path=ieeg_datapath, project_path=project_path)
 
 meg_data_source = get_meg_data(meg_outpath, meg_subj_list)

@@ -180,7 +180,7 @@ def main(argv=None):
         project=args.project_path
         if args.metadata_csv is None and project is None:
             from src.setting import PROJECT_PATH
-            project=root.parent/PROJECT_PATH
+            project=PROJECT_PATH
         ieeg=load_dataset('ieeg',meg_dir=meg_dir,ieeg_dir=ieeg_dir,metadata_csv=args.metadata_csv,
                           project_path=project,ieeg_subjects=subjects,
                           ieeg_coordinate_unit=args.ieeg_coordinate_unit,meg_coordinate_unit=args.meg_coordinate_unit,
