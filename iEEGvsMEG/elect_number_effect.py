@@ -126,13 +126,46 @@ def plot_elect_number_effect(result):
     return fig
 
 
-def visualize_elect_number_effect(output_dir, *, save=True):
-    """Read completed result tables and plot; never loads recordings or runs PCA."""
+def visualize_elect_number_effect(output_dir, *, min_channels=None, max_channels=None,
+                                  channel_counts=None, save=True):
+    """Plot saved counts within inclusive bounds, or an explicit list of counts.
+
+    No PCA is recomputed. Returned metrics/pairs contain only selected counts;
+    the original saved configuration is retained alongside visualized_counts.
+    Filtered plots use a separate filename and never replace the full plot.
+    """
     result = load_elect_number_effect(output_dir)
+    def positive_integer(value):
+        return not isinstance(value, bool) and isinstance(value, (int, np.integer)) and value > 0
+    for name,value in [('min_channels',min_channels),('max_channels',max_channels)]:
+        if value is not None and not positive_integer(value):
+            raise ValueError(f'{name} must be a positive integer.')
+    if min_channels is not None and max_channels is not None and min_channels > max_channels:
+        raise ValueError('min_channels must not exceed max_channels.')
+    available = sorted(result['metrics'].n_channels.unique().tolist())
+    selected = available
+    if channel_counts is not None:
+        selected = [channel_counts] if np.isscalar(channel_counts) else list(channel_counts)
+        if not selected or any(not positive_integer(v) for v in selected):
+            raise ValueError('channel_counts must contain positive integers.')
+        missing = sorted(set(selected)-set(available))
+        if missing: raise ValueError(f'Channel counts not present in saved results: {missing}')
+        selected = sorted(set(selected))
+    selected = [v for v in selected if (min_channels is None or v >= min_channels)
+                and (max_channels is None or v <= max_channels)]
+    if not selected: raise ValueError('No saved channel counts fall within this selection.')
+    result['metrics'] = result['metrics'][result['metrics'].n_channels.isin(selected)].copy()
+    result['component_pairs'] = result['component_pairs'][result['component_pairs'].n_channels.isin(selected)].copy()
+    result['visualized_counts'] = selected
     fig = plot_elect_number_effect(result)
     if save:
+        stem = 'channel_number_effect'
+        if selected != available:
+            import hashlib
+            tag = hashlib.sha256(json.dumps(selected).encode()).hexdigest()[:8]
+            stem += f'_{selected[0]}-{selected[-1]}_{tag}'
         for extension in ('png','pdf'):
-            fig.savefig(Path(output_dir)/f'channel_number_effect.{extension}',dpi=180,bbox_inches='tight')
+            fig.savefig(Path(output_dir)/f'{stem}.{extension}',dpi=180,bbox_inches='tight')
     return result, fig
 
 
