@@ -1,7 +1,7 @@
-"""Random channel-removal sensitivity of full-concatenated MEG PCA.
+"""Random channel-count sensitivity of full-concatenated MEG PCA.
 
 Call run_elect_number_effect from coverage_matching.ipynb with loaded datasets.
-Each seeded repetition removes another random batch of 100 remaining channels.
+Each seeded repetition adds random channels in fixed steps up to 20,000.
 The fixed iEEG reference and MEG representation/preprocessing never change.
 """
 from pathlib import Path
@@ -31,14 +31,22 @@ class _SelectedChannels:
             offset += block.shape[1]
 
 
+def _channel_counts(n_features, step):
+    if step < 5:
+        raise ValueError('step must be at least 5 for five-component PCA.')
+    counts=list(range(step,min(20000,n_features)+1,step))
+    if not counts:
+        raise ValueError('step exceeds the available channel count or the 20,000-channel cap.')
+    return counts
+
+
 def run_elect_number_effect(meg, ieeg, *, step=100, repeats=1, seed=2026,
                            output_dir='out/elect_number_effect', max_gram_gib=2.):
-    """Fit five PCs at full count, then N-100, N-200, ... while >=5 remain.
+    """Fit five PCs at step, 2*step, ... up to min(20,000, available channels).
 
-    Uniform sampling is across concatenated channels, not balanced by subject.
-    Within each repetition subsets are nested. Independent permutations across
-    repetitions quantify sampling variability. Variance fractions use the
-    remaining MEG channels as denominator; total variance is saved separately.
+    Only complete steps are evaluated. Each repetition uses nested prefixes
+    of a random permutation of all channels; no subject balancing is applied.
+    Variance fractions use the selected channels as their denominator.
     """
     for name,value in [('step',step),('repeats',repeats)]:
         if isinstance(value,bool) or not isinstance(value,(int,np.integer)) or value < 1:
@@ -49,10 +57,10 @@ def run_elect_number_effect(meg, ieeg, *, step=100, repeats=1, seed=2026,
         raise ValueError('Both datasets require at least five features.')
     out=Path(output_dir);out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()): raise FileExistsError('Use a new output directory to avoid mixing runs.')
-    counts=list(range(meg.n_features,4,-step))
-    config=dict(n_components=5,step=step,repeats=repeats,seed=seed,channel_counts=counts,
+    counts = _channel_counts(meg.n_features, step)
+    config=dict(schema_version=2,max_channels=20000,n_components=5,step=step,repeats=repeats,seed=seed,channel_counts=counts,
                 n_full_channels=meg.n_features,condition_mode=meg.condition_mode,
-                sampling='nested uniform channel removal, independent seeded paths',
+                sampling='nested uniform channel addition, independent seeded paths',
                 scope='descriptive in-sample sensitivity; fixed full iEEG PCA reference')
     (out/'config.json').write_text(json.dumps(config,indent=2))
     reference=fit_block_pca(ieeg,n_components=5,max_gram_gib=max_gram_gib);reference.dataset=ieeg
@@ -65,7 +73,7 @@ def run_elect_number_effect(meg, ieeg, *, step=100, repeats=1, seed=2026,
     metrics=[];pairs=[];full_fit=None
     for repeat,sequence in enumerate(np.random.SeedSequence(seed).spawn(repeats)):
         order=np.random.default_rng(sequence).permutation(meg.n_features)
-        # Remaining channels at count n are order[:n]; the tail is removed first.
+        # Selected channels at count n are order[:n]; each step adds the next batch.
         np.save(out/f'channel_order_{repeat:03d}.npy',order)
         for count in counts:
             selected=_SelectedChannels(meg,order[:count])
@@ -114,5 +122,79 @@ def plot_elect_number_effect(result):
         ax.set(title=title,xlabel='Remaining MEG channels',ylabel='Fraction / similarity',ylim=(0,1.02))
         ax.grid(alpha=.2)
     fig.suptitle('Channel-count effect: full-concatenated MEG vs fixed 5-PC iEEG reference')
-    fig.supxlabel('Channels increase left → right. Nested random removal; shading = range across sampling paths, not confidence intervals.',fontsize=9)
+    fig.supxlabel('Channels increase left → right. Nested random addition (new runs capped at 20,000); shading = range across sampling paths, not confidence intervals.',fontsize=9)
     return fig
+
+
+def visualize_elect_number_effect(output_dir, *, save=True):
+    """Read completed result tables and plot; never loads recordings or runs PCA."""
+    result = load_elect_number_effect(output_dir)
+    fig = plot_elect_number_effect(result)
+    if save:
+        for extension in ('png','pdf'):
+            fig.savefig(Path(output_dir)/f'channel_number_effect.{extension}',dpi=180,bbox_inches='tight')
+    return result, fig
+
+
+def main(argv=None):
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser(description='Run five-PC MEG channel-count sensitivity up to 20,000 channels on a cluster.')
+    parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parent)
+    parser.add_argument('--meg-dir',type=Path)
+    parser.add_argument('--ieeg-dir',type=Path)
+    parser.add_argument('--output-dir',type=Path)
+    parser.add_argument('--metadata-csv',type=Path,help='Optional electrode metadata; otherwise use LB src.setting.GetInfo.')
+    parser.add_argument('--project-path',type=Path,help='Anatomical project path for GetInfo.')
+    parser.add_argument('--ieeg-coordinate-unit',choices=['m','mm'],default='mm')
+    parser.add_argument('--meg-coordinate-unit',choices=['m','mm'],default='m')
+    parser.add_argument('--meg-times-file',type=Path)
+    parser.add_argument('--meg-tmin',type=float,help='Defaults to first iEEG epoch time.')
+    parser.add_argument('--sfreq',type=float,default=250.)
+    parser.add_argument('--conditions',nargs='+',type=int,default=[1,2])
+    parser.add_argument('--condition-mode',choices=['average','stack'],default='average')
+    parser.add_argument('--step',type=int,default=100)
+    parser.add_argument('--repeats',type=int,default=1)
+    parser.add_argument('--seed',type=int,default=2026)
+    parser.add_argument('--max-gram-gib',type=float,default=2.)
+    parser.add_argument('--plot-only',action='store_true',help='Load saved results without loading recordings or fitting PCA.')
+    args=parser.parse_args(argv)
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    root=args.root.expanduser().resolve()
+    out=args.output_dir or root/'out'/'elect_number_effect'
+    if not args.plot_only:
+        if out.exists() and any(out.iterdir()):
+            raise FileExistsError('Choose a new --output-dir or use --plot-only for completed results.')
+        for directory in (root,root.parent,root.parent/'LB'):sys.path.insert(0,str(directory))
+        from coverage_matching_utils import load_dataset
+        meg_dir=args.meg_dir or root/'MEG'/'dataMEG'
+        ieeg_dir=args.ieeg_dir or root/'ieeg_shortWOBS_fs250'
+        subjects=sorted(p.name.removesuffix('_epochs.p') for p in ieeg_dir.glob('*_epochs.p'))
+        if not subjects:raise FileNotFoundError(f'No iEEG epochs in {ieeg_dir}.')
+        tmin=args.meg_tmin
+        if tmin is None and args.meg_times_file is None:
+            info=json.loads((ieeg_dir/f'{subjects[0]}_info.json').read_text())
+            tmin=float(info['time_epoch'][0])
+        project=args.project_path
+        if args.metadata_csv is None and project is None:
+            from src.setting import PROJECT_PATH
+            project=root.parent/PROJECT_PATH
+        ieeg=load_dataset('ieeg',meg_dir=meg_dir,ieeg_dir=ieeg_dir,metadata_csv=args.metadata_csv,
+                          project_path=project,ieeg_subjects=subjects,
+                          ieeg_coordinate_unit=args.ieeg_coordinate_unit,meg_coordinate_unit=args.meg_coordinate_unit,
+                          meg_times_file=args.meg_times_file,meg_tmin=tmin,sfreq=args.sfreq,
+                          conditions=tuple(args.conditions),condition_mode=args.condition_mode)
+        meg=load_dataset('full_concatenated',reference=ieeg)
+        print(f'Loaded {meg.n_features} MEG channels; {ieeg.n_features} iEEG electrodes.',flush=True)
+        run_elect_number_effect(meg,ieeg,step=args.step,repeats=args.repeats,seed=args.seed,
+                               output_dir=out,max_gram_gib=args.max_gram_gib)
+        (out/'run_config.json').write_text(json.dumps(vars(args),default=str,indent=2))
+    _,fig=visualize_elect_number_effect(out)
+    plt.close(fig)
+    print(f'Results and figures: {out.resolve()}',flush=True)
+
+
+if __name__ == '__main__':
+    main()
