@@ -374,10 +374,10 @@ def plot_weight_cluster_centroids(result, title='', *, metadata, figsize=(20, 12
 
 
 def kmeans_weight_space(weights, metadata, *, n_clusters=5, seed=2026,
-                        bin_edges=None, block_size=512):
-    """Group K-means in signed thresholded first-three-component weight space.
+                        bin_edges=None, block_size=512, use_thresholded=True):
+    """Group K-means in signed first-three-component weights, optionally thresholded.
 
-    No spatial coordinates enter the fit. All-zero thresholded rows are labelled
+    No spatial coordinates enter the fit. All-zero selected-input rows are labelled
     -1 and excluded (cosine distance is undefined). K-means uses Euclidean
     distance, no additional feature standardization, and 20 initializations.
     Spatial centroids are unweighted means of member MNI coordinates and are
@@ -397,10 +397,13 @@ def kmeans_weight_space(weights, metadata, *, n_clusters=5, seed=2026,
     if not np.isfinite(xyz).all(): raise ValueError('MNI coordinates must be finite.')
     magnitude, thresholds = threshold_weights(w[:,:3])
     thresholded = np.sign(w[:,:3])*magnitude
-    active = np.linalg.norm(thresholded,axis=1)>0
-    if len(np.unique(thresholded[active],axis=0)) < n_clusters:
-        raise ValueError('Fewer distinct nonzero thresholded profiles than clusters; reduce n_clusters.')
-    fit = KMeans(n_clusters=int(n_clusters),random_state=seed,n_init=20).fit(thresholded[active])
+    if not isinstance(use_thresholded, (bool, np.bool_)):
+        raise ValueError("use_thresholded must be True or False.")
+    selected_weights = thresholded if use_thresholded else w[:,:3]
+    active = np.linalg.norm(selected_weights,axis=1)>0
+    if len(np.unique(selected_weights[active],axis=0)) < n_clusters:
+        raise ValueError('Fewer distinct nonzero selected-input profiles than clusters; reduce n_clusters.')
+    fit = KMeans(n_clusters=int(n_clusters),random_state=seed,n_init=20).fit(selected_weights[active])
     labels = np.full(len(w),-1,dtype=int)
     labels[active] = fit.labels_
     edges = np.asarray(np.arange(0,310,10) if bin_edges is None else bin_edges,float)
@@ -411,9 +414,11 @@ def kmeans_weight_space(weights, metadata, *, n_clusters=5, seed=2026,
     members = meta.copy().reset_index(drop=True)
     members['feature_row'] = np.arange(len(w))
     members['cluster_id'] = labels
+    members['use_thresholded'] = bool(use_thresholded)
     for c in range(3):
         members[f'weight_{c+1}'] = w[:,c]
         members[f'thresholded_weight_{c+1}'] = thresholded[:,c]
+        members[f'input_weight_{c+1}'] = selected_weights[:,c]
     clusters, curves = [], []
     for label in range(n_clusters):
         rows = np.flatnonzero(labels==label)
@@ -424,8 +429,8 @@ def kmeans_weight_space(weights, metadata, *, n_clusters=5, seed=2026,
             weight_centroid_1=center[0],weight_centroid_2=center[1],weight_centroid_3=center[2],
             centroid_x=spatial_center[0],centroid_y=spatial_center[1],centroid_z=spatial_center[2],
             spatial_rms_mm=np.sqrt(np.mean(spatial_dist**2)),spatial_radius90_mm=np.quantile(spatial_dist,.9),
-            weight_rms=np.sqrt(np.mean(np.sum((thresholded[rows]-center)**2,axis=1)))))
-        unit = thresholded[rows]/np.linalg.norm(thresholded[rows],axis=1)[:,None]
+            weight_rms=np.sqrt(np.mean(np.sum((selected_weights[rows]-center)**2,axis=1)))))
+        unit = selected_weights[rows]/np.linalg.norm(selected_weights[rows],axis=1)[:,None]
         count, total = np.zeros(len(edges)-1,dtype=np.int64), np.zeros(len(edges)-1)
         for start in range(0,len(rows),block_size):
             ii = np.arange(start,min(start+block_size,len(rows)))
@@ -451,6 +456,8 @@ def plot_kmeans_weight_space(result, title=''):
     from matplotlib.lines import Line2D
     from matplotlib.colors import to_hex
     members, clusters = result['memberships'], result['clusters']
+    mode = 'Thresholded' if bool(members.use_thresholded.iloc[0]) else 'Original'
+    title = f'{title} · {mode.lower()} weights'
     colors = {int(row.cluster_id):plt.get_cmap('turbo')(j/max(len(clusters)-1,1))
               for j,row in enumerate(clusters.itertuples())}
     figures = []
@@ -459,12 +466,12 @@ def plot_kmeans_weight_space(result, title=''):
     for row in clusters.itertuples():
         data = members[members.cluster_id==row.cluster_id]
         color = colors[row.cluster_id]
-        ax.scatter(data.thresholded_weight_1,data.thresholded_weight_2,data.thresholded_weight_3,
+        ax.scatter(data.input_weight_1,data.input_weight_2,data.input_weight_3,
                    s=9,alpha=.4,color=color,rasterized=True,label=f'C{row.cluster_id} (n={row.n_sources})')
         ax.scatter(row.weight_centroid_1,row.weight_centroid_2,row.weight_centroid_3,
                    s=220,marker='*',color=color,edgecolor='black',linewidth=1.2)
         ax.text(row.weight_centroid_1,row.weight_centroid_2,row.weight_centroid_3,f' C{row.cluster_id}')
-    ax.set(xlabel='Thresholded weight 1',ylabel='Thresholded weight 2',zlabel='Thresholded weight 3',
+    ax.set(xlabel=f'{mode} weight 1',ylabel=f'{mode} weight 2',zlabel=f'{mode} weight 3',
            title=f'{title} · K-means weight space (stars = fitted centers)')
     ax.legend(fontsize=8); figures.append(fig)
     fig = plt.figure(figsize=(22,8))
@@ -489,7 +496,7 @@ def plot_kmeans_weight_space(result, title=''):
             bins = np.histogram_bin_edges(data[f'weight_{c+1}'],bins=35)
             bins = np.unique(np.r_[bins,0.])
             ax.hist(data[f'weight_{c+1}'],bins=bins,density=True,histtype='step',color='black',label='Original')
-            ax.hist(data[f'thresholded_weight_{c+1}'],bins=bins,density=True,alpha=.55,color=colors[row.cluster_id],label='Thresholded')
+            ax.hist(data[f'input_weight_{c+1}'],bins=bins,density=True,alpha=.55,color=colors[row.cluster_id],label=f'K-means input: {mode.lower()}')
             ax.set(title=f'C{row.cluster_id} · component {c+1}',xlabel='Signed weight',ylabel='Density')
     axes[0,0].legend(fontsize=8)
     fig.suptitle(f'{title} · within-cluster weight distributions'); figures.append(fig)
@@ -497,7 +504,7 @@ def plot_kmeans_weight_space(result, title=''):
     for label,frame in result['distance_curves'].groupby('cluster_id',sort=True):
         axes[0].plot(frame.distance_mid_mm,frame.cosine_distance,'o-',color=colors[label],label=f'C{label}')
         axes[1].plot(frame.distance_mid_mm,frame.n_pairs,'o-',color=colors[label],label=f'C{label}')
-    axes[0].set(xlabel='MNI pair distance (mm)',ylabel='Mean cosine distance (thresholded 3D weights)',ylim=(-.05,2.05))
+    axes[0].set(xlabel='MNI pair distance (mm)',ylabel=f'Mean cosine distance ({mode.lower()} 3D weights)',ylim=(-.05,2.05))
     axes[1].set(xlabel='MNI pair distance (mm)',ylabel='Number of unordered pairs',yscale='symlog')
     axes[0].legend(); fig.suptitle(f'{title} · within-cluster pairs (all clusters overlaid)')
     figures.append(fig)

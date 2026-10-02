@@ -140,3 +140,22 @@ def test_kmeans_weight_space_ignores_coordinates_and_pair_metrics():
     except ValueError as exc:
         assert 'three components' in str(exc)
     else: raise AssertionError('Must require three fitted components')
+
+
+def test_kmeans_original_weight_switch():
+    from modality_specificity import kmeans_weight_space
+    rng = np.random.default_rng(6)
+    w = rng.normal(size=(25,3))
+    meta = pd.DataFrame({'x':np.arange(25.),'y':0.,'z':0.,'subject':'a'})
+    r = kmeans_weight_space(w,meta,n_clusters=3,use_thresholded=False,bin_edges=[0,30])
+    m = r['memberships']
+    assert (m.cluster_id >= 0).all()
+    np.testing.assert_array_equal(m[['input_weight_1','input_weight_2','input_weight_3']], w)
+    assert not m.use_thresholded.any()
+    for row in r['clusters'].itertuples():
+        selected = w[m.cluster_id == row.cluster_id]
+        np.testing.assert_allclose(selected.mean(0),[row.weight_centroid_1,row.weight_centroid_2,row.weight_centroid_3])
+        if len(selected)>1:
+            expected = pdist(selected,metric='cosine').mean()
+            actual = r['distance_curves'].query('cluster_id == @row.cluster_id').cosine_distance.iloc[0]
+            assert np.isclose(actual,expected)
