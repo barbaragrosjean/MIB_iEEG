@@ -62,6 +62,26 @@ def plot_thresholded_brains(datasets, retained):
     return fig
 
 
+def spatial_metadata(metadata):
+    """Copy native-feature metadata with a canonical subject column.
+
+    MEG ownership takes precedence over the paired iEEG subject label.
+    Preserve row order and participant_average labels; never invent owners.
+    """
+    out = metadata.copy()
+    owner = next((name for name in ('meg_subject', 'subject', 'ieeg_subject')
+                  if name in out.columns), None)
+    if owner is None:
+        raise ValueError('Spatial analysis requires subject, meg_subject or ieeg_subject metadata.')
+    if out[owner].isna().any():
+        raise ValueError(f'Missing participant labels in {owner}.')
+    out['subject'] = out[owner].astype(str)
+    missing = {'x', 'y', 'z'} - set(out.columns)
+    if missing:
+        raise ValueError(f'Missing coordinate columns: {sorted(missing)}')
+    return out
+
+
 def spatial_weight_distance(weights, metadata, *, bin_edges=None, n_permutations=199,
                             seed=2026, block_size=512, progress=None):
     """Exact all-pair cosine-distance curves, group and individual subjects.
@@ -74,6 +94,7 @@ def spatial_weight_distance(weights, metadata, *, bin_edges=None, n_permutations
     and linear in permutation count. Null envelopes are pointwise, not CIs.
     """
     from scipy.spatial.distance import cdist
+    metadata = spatial_metadata(metadata)
     w = np.asarray(weights, dtype=float)
     xyz = metadata[['x', 'y', 'z']].to_numpy(dtype=float)
     if w.ndim != 2 or w.shape[1] < 1 or xyz.shape != (len(w), 3):

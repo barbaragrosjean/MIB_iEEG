@@ -42,3 +42,25 @@ def test_coordinate_shuffle_equivalence_and_zero_profiles():
     expected = [cosine[(distance>=lo)&(distance<hi)].mean() for lo,hi in [(0,5),(5,40)]]
     actual = result['null_curves'].query("scope == 'group' and permutation == 0").cosine_distance
     np.testing.assert_allclose(actual, expected)
+
+
+def test_meg_metadata_uses_native_subject_and_preserves_rows():
+    from modality_specificity import spatial_metadata
+    meta = pd.DataFrame({'x':[0.,1.,2.,3.], 'y':0., 'z':0.,
+                         'meg_subject':['m1','m1','m2','m2'],
+                         'ieeg_subject':['i1','i2','i1','i2']}, index=[9,7,5,3])
+    normalized = spatial_metadata(meta)
+    assert normalized.subject.tolist() == ['m1','m1','m2','m2']
+    assert normalized.index.tolist() == [9,7,5,3]
+    assert 'subject' not in meta
+    result = spatial_weight_distance(np.array([[1.,0],[0,1],[1,1],[-1,1]]),
+                                    meta, bin_edges=[0,10], n_permutations=3)
+    assert set(result['curves'].query("scope == 'subject'").subject) == {'m1','m2'}
+    averaged = meta.drop(columns='ieeg_subject').assign(meg_subject='participant_average')
+    assert spatial_metadata(averaged).subject.unique().tolist() == ['participant_average']
+    try:
+        spatial_metadata(meta.drop(columns=['meg_subject','ieeg_subject']))
+    except ValueError as exc:
+        assert 'requires subject' in str(exc)
+    else:
+        raise AssertionError('Missing ownership should not silently create a subject')
