@@ -79,7 +79,7 @@ def test_semivariogram_formula_and_constant_component():
     assert result['curves'].query('component == 2').p_two_sided.isna().all()
 
 
-def test_clusters_centroid_sign_subject_and_hemisphere():
+def test_group_clusters_centroid_and_cross_subject_connectivity():
     from modality_specificity import weight_clusters
     # Three adjacent positive sources, isolated high negative, plus background.
     x = np.array([-20.,-19,-18,20,40,50,60,70,80,90,100,110,120,130,140,150])
@@ -92,4 +92,11 @@ def test_clusters_centroid_sign_subject_and_hemisphere():
     assert np.isclose(row.centroid_x, np.average(x[:3],weights=[8,9,10]))
     assert row.representative_row == 1
     meta.loc[2,'meg_subject']='m2'
-    assert weight_clusters(w,meta,radius_mm=2,min_sources=3)['clusters'].empty
+    pooled = weight_clusters(w,meta,radius_mm=2,min_sources=3)
+    assert len(pooled['clusters']) == 1
+    assert pooled['clusters'].iloc[0].n_subjects == 2
+    assert pooled['clusters'].iloc[0].scope == 'group'
+    assert np.isclose(pooled['clusters'].iloc[0].centroid_x, row.centroid_x)
+    assert set(pooled['memberships'].subject) == {'m1', 'm2'}
+    assert len(pooled['thresholds']) == 1
+    assert np.isclose(pooled['thresholds'].iloc[0].threshold, np.abs(w).mean()+np.abs(w).std())

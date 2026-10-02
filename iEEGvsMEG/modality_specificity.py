@@ -258,11 +258,12 @@ def plot_component_semivariograms(result, title=''):
 
 
 def weight_clusters(weights, metadata, *, radius_mm=10., min_sources=3):
-    """Subject/component/sign/hemisphere connected clusters above subject mean+SD.
+    """Group/component/sign/hemisphere clusters above group mean+SD.
 
     Euclidean MNI adjacency is a fallback, not cortical-surface adjacency.
     Midline x==0 points are isolated from both hemispheres. Feature rows and
-    exact co-locations are preserved. No independent subject model is fitted.
+    exact co-locations are preserved. Subjects do not constrain connectivity;
+    their labels are retained only for membership and contribution counts.
     """
     from scipy.spatial import cKDTree
     from scipy.sparse import coo_matrix
@@ -277,37 +278,36 @@ def weight_clusters(weights, metadata, *, radius_mm=10., min_sources=3):
     clusters, memberships, audit = [], [], []
     owners = meta.subject.to_numpy()
     hemi = np.where(xyz[:,0]<0, 'left', np.where(xyz[:,0]>0, 'right', 'midline'))
-    for subject in pd.unique(owners):
-        rows = np.flatnonzero(owners == subject)
-        for c in range(w.shape[1]):
-            magnitudes = np.abs(w[rows,c])
-            threshold = magnitudes.mean()+magnitudes.std(ddof=0)
-            retained = rows[(magnitudes >= threshold) & (magnitudes > 0)]
-            audit.append(dict(subject=subject, component=c+1, threshold=threshold, n_sources=len(rows), n_selected=len(retained)))
-            for sign in (-1,1):
-                for hemisphere in ('left','right','midline'):
-                    selected = retained[(np.sign(w[retained,c]) == sign) & (hemi[retained] == hemisphere)]
-                    if not len(selected): continue
-                    pairs = cKDTree(xyz[selected]).query_pairs(radius_mm, output_type='ndarray')
-                    graph = coo_matrix((np.ones(len(pairs)), (pairs[:,0],pairs[:,1])), shape=(len(selected),len(selected)))
-                    _, labels = connected_components(graph, directed=False)
-                    for label in np.unique(labels):
-                        members = selected[labels == label]
-                        if len(members) < min_sources: continue
-                        magnitude = np.abs(w[members,c])
-                        center = np.average(xyz[members], axis=0, weights=magnitude)
-                        distances = np.linalg.norm(xyz[members]-center, axis=1)
-                        nearest = members[np.argmin(distances)]
-                        cid = len(clusters)+1
-                        clusters.append(dict(cluster_id=cid, subject=subject, component=c+1, sign=sign,
-                            hemisphere=hemisphere, n_sources=len(members), n_unique_locations=len(np.unique(xyz[members],axis=0)),
-                            total_magnitude=magnitude.sum(), threshold=threshold,
-                            centroid_x=center[0],centroid_y=center[1],centroid_z=center[2],
-                            spread_rms_mm=np.sqrt(np.average(distances**2, weights=magnitude)),
-                            representative_row=int(nearest), representative_x=xyz[nearest,0],
-                            representative_y=xyz[nearest,1],representative_z=xyz[nearest,2]))
-                        memberships.extend(dict(cluster_id=cid,subject=subject,component=c+1,feature_row=int(i),weight=w[i,c]) for i in members)
-    columns = ['cluster_id','subject','component','sign','hemisphere','n_sources','n_unique_locations','total_magnitude','threshold',
+    rows = np.arange(len(w))
+    for c in range(w.shape[1]):
+        magnitudes = np.abs(w[rows,c])
+        threshold = magnitudes.mean()+magnitudes.std(ddof=0)
+        retained = rows[(magnitudes >= threshold) & (magnitudes > 0)]
+        audit.append(dict(scope='group', component=c+1, threshold=threshold, n_sources=len(rows), n_selected=len(retained)))
+        for sign in (-1,1):
+            for hemisphere in ('left','right','midline'):
+                selected = retained[(np.sign(w[retained,c]) == sign) & (hemi[retained] == hemisphere)]
+                if not len(selected): continue
+                pairs = cKDTree(xyz[selected]).query_pairs(radius_mm, output_type='ndarray')
+                graph = coo_matrix((np.ones(len(pairs)), (pairs[:,0],pairs[:,1])), shape=(len(selected),len(selected)))
+                _, labels = connected_components(graph, directed=False)
+                for label in np.unique(labels):
+                    members = selected[labels == label]
+                    if len(members) < min_sources: continue
+                    magnitude = np.abs(w[members,c])
+                    center = np.average(xyz[members], axis=0, weights=magnitude)
+                    distances = np.linalg.norm(xyz[members]-center, axis=1)
+                    nearest = members[np.argmin(distances)]
+                    cid = len(clusters)+1
+                    clusters.append(dict(cluster_id=cid, scope='group', n_subjects=len(np.unique(owners[members])), component=c+1, sign=sign,
+                        hemisphere=hemisphere, n_sources=len(members), n_unique_locations=len(np.unique(xyz[members],axis=0)),
+                        total_magnitude=magnitude.sum(), threshold=threshold,
+                        centroid_x=center[0],centroid_y=center[1],centroid_z=center[2],
+                        spread_rms_mm=np.sqrt(np.average(distances**2, weights=magnitude)),
+                        representative_row=int(nearest), representative_x=xyz[nearest,0],
+                        representative_y=xyz[nearest,1],representative_z=xyz[nearest,2]))
+                    memberships.extend(dict(cluster_id=cid,subject=owners[i],component=c+1,feature_row=int(i),weight=w[i,c]) for i in members)
+    columns = ['cluster_id','scope','n_subjects','component','sign','hemisphere','n_sources','n_unique_locations','total_magnitude','threshold',
                'centroid_x','centroid_y','centroid_z','spread_rms_mm','representative_row','representative_x','representative_y','representative_z']
     return dict(clusters=pd.DataFrame(clusters,columns=columns),
                 memberships=pd.DataFrame(memberships,columns=['cluster_id','subject','component','feature_row','weight']),
