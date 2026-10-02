@@ -65,8 +65,6 @@ rt_list_perm=[]
 trans_save = np.zeros((3, 2, nb_trials, len(time_tfr)),dtype=np.float32)
 pca.fit(np.concat([data_grp[0, :,:], data_grp[1, :, :]], axis=-1).T)
 
-# load subject TFR data
-
 TFR_data = {}
 for subj in subj_list:
     file = epoch_path + f'/{subj}_TFRtrials.p'
@@ -111,51 +109,34 @@ for r_ in range(r_run):
                 trans_save[pc_use, condi, tr, :] = dataset[tr, :, :].T @ pca.components_[pc_use, :]
 
     rt_list.append(rt_all)
-
-    # generate r_perm RT permutations for this resampling
-
     rt_all_perm = []
 
     for p_ in range(r_perm):
-        rt_all_perm.append([
-            rng.permutation(rt_all[0]),
-            rng.permutation(rt_all[1])
-        ])
-
+        rt_all_perm.append([rng.permutation(rt_all[0]),rng.permutation(rt_all[1])])
     rt_list_perm.append(rt_all_perm)
 
     for to_t in to_try :
         trans = trans_save[int(to_t[-1:])-1, :, :, :] 
-
         for i in range(2):
             if to_t in ['0_pc1','0_pc2', '0_pc3'] : 
                 peaks = np.array([find_tp[to_t](trans[i], tr) for tr in range(trans[i].shape[0])])
                 metr = np.asarray(time_tfr)[peaks]
-
                 r, p = pearsonr(rt_all[i], metr)
-
                 metr_list.append(metr)
                 corr_list.append((r, p, to_t, i, 'delay', r_))
-
                 for p_ in range(r_perm):
                     r_perm_, p_perm = pearsonr(rt_all_perm[p_][i], metr)
                     corr_list_perm.append((r_perm_, p_perm, to_t, i, 'delay', p_, r_))
 
-
             elif to_t in ['desc_slop_pc2', 'asc_slop_pc2', 'slop_pc3'] : 
                 metr=[]
                 for tr in range(trans[i].shape[0]) :
-                    try : 
-                        m = find_tp[to_t](trans[i], tr)
-                    except : 
-                        m = np.nan
+                    try : m = find_tp[to_t](trans[i], tr)
+                    except : m = np.nan
                     metr.append(m)
-
                 r, p = pearsonr(rt_all[i], metr)
-
                 corr_list.append((r, p, to_t, i, 'slope', r_))
                 metr_list.append(metr)
-
                 for p_ in range(r_perm):
                     r_perm_, p_perm = pearsonr(rt_all_perm[p_][i], metr)
                     corr_list_perm.append((r_perm_, p_perm, to_t, i, 'slope', p_, r_))
@@ -163,12 +144,9 @@ for r_ in range(r_run):
 
             elif to_t in ['area_under_pc2', 'area_above_pc2'] :
                 metr = np.array([find_tp[to_t](trans[i], tr) for tr in range(trans[i].shape[0])])
-
                 r, p = pearsonr(rt_all[i], metr)
-
                 metr_list.append(metr)
                 corr_list.append((r, p, to_t, i, 'auc', r_))
-
                 for p_ in range(r_perm):
                     r_perm_, p_perm = pearsonr(rt_all_perm[p_][i], metr)
                     corr_list_perm.append((r_perm_, p_perm, to_t, i, 'auc', p_, r_))
@@ -178,25 +156,16 @@ for r_ in range(r_run):
                 peaks = np.array([find_tp[to_t](trans[i], tr) for tr in range(trans[i].shape[0])])
                 ampl = trans[i][np.arange(trans[i].shape[0]), peaks]
                 delay = np.asarray(time_tfr)[peaks]
-
                 r_amp, p_amp = pearsonr(rt_all[i], ampl)
                 r_del, p_del = pearsonr(rt_all[i], delay)
-
                 metr_list.extend([ampl, delay])
-
-                corr_list.extend([
-                    (r_amp, p_amp, to_t, i, 'ampl', r_),
-                    (r_del, p_del, to_t, i, 'delay', r_)
-                ])
-
+                corr_list.extend([(r_amp, p_amp, to_t, i, 'ampl', r_),(r_del, p_del, to_t, i, 'delay', r_)])
                 for p_ in range(r_perm):
                     r_amp_perm, p_amp_perm = pearsonr(rt_all_perm[p_][i], ampl)
                     r_del_perm, p_del_perm = pearsonr(rt_all_perm[p_][i], delay)
-
                     corr_list_perm.extend([
                         (r_amp_perm, p_amp_perm, to_t, i, 'ampl', p_, r_),
-                        (r_del_perm, p_del_perm, to_t, i, 'delay', p_, r_)
-                    ])
+                        (r_del_perm, p_del_perm, to_t, i, 'delay', p_, r_)])
 
 
 corr = np.vstack(corr_list)
@@ -205,95 +174,59 @@ metr = np.vstack(metr_list)
 rt = np.stack(rt_list, axis=0)
 rt_list_perm = np.asarray(rt_list_perm)
 
-
-# -------------------------------------------------------------------------
-# permutation p-value for EACH resampling
-# -------------------------------------------------------------------------
-
-correlation = pd.DataFrame(
-    corr,
-    columns=['corr', 'p', 'test', 'condi', 'type_m', 'r_']
-)
-
-correlation_perm = pd.DataFrame(
-    corr_perm,
-    columns=['corr', 'p', 'test', 'condi', 'type_m', 'p_', 'r_']
-)
-
+correlation = pd.DataFrame(corr,columns=['corr', 'p', 'test', 'condi', 'type_m', 'r_'])
+correlation_perm = pd.DataFrame(corr_perm,columns=['corr', 'p', 'test', 'condi', 'type_m', 'p_', 'r_'])
 correlation['corr'] = correlation['corr'].astype(float)
 correlation['condi'] = correlation['condi'].astype(int)
 correlation['r_'] = correlation['r_'].astype(int)
-
 correlation_perm['corr'] = correlation_perm['corr'].astype(float)
 correlation_perm['condi'] = correlation_perm['condi'].astype(int)
 correlation_perm['p_'] = correlation_perm['p_'].astype(int)
 correlation_perm['r_'] = correlation_perm['r_'].astype(int)
 
-
 p_perm_list = []
 
 for r_ in range(r_run):
-
     for to_t in to_try:
-
         for condi in range(2):
-
             for type_m in ['delay', 'ampl', 'slope', 'auc']:
-
-                m = correlation.query(
-                    "test == @to_t and condi == @condi and type_m == @type_m and r_ == @r_"
-                )
-
-                m_perm = correlation_perm.query(
-                    "test == @to_t and condi == @condi and type_m == @type_m and r_ == @r_"
-                )
-
+                m = correlation.query("test == @to_t and condi == @condi and type_m == @type_m and r_ == @r_")
+                m_perm = correlation_perm.query("test == @to_t and condi == @condi and type_m == @type_m and r_ == @r_")
                 if m.shape[0] != 0:
-
                     r_obs = float(m['corr'].iloc[0])
-
                     r_perm_null = m_perm['corr'].values.astype(float)
+                    p_perm = (np.sum(np.abs(r_perm_null) >= np.abs(r_obs)) + 1) / (len(r_perm_null) + 1)
+                    p_perm_list.append((r_,to_t,condi,type_m,r_obs,p_perm))
 
-                    p_perm = (
-                        np.sum(
-                            np.abs(r_perm_null) >= np.abs(r_obs)
-                        ) + 1
-                    ) / (
-                        len(r_perm_null) + 1
-                    )
-
-                    p_perm_list.append(
-                        (
-                            r_,
-                            to_t,
-                            condi,
-                            type_m,
-                            r_obs,
-                            p_perm
-                        )
-                    )
-
-
-p_resampling = pd.DataFrame(
-    p_perm_list,
-    columns=[
-        'r_',
-        'test',
-        'condi',
-        'type_m',
-        'corr',
-        'p_perm'
-    ]
-)
-
+p_resampling = pd.DataFrame(p_perm_list,columns=['r_','test','condi','type_m','corr','p_perm'])
 
 # -------------------------------------------------------------------------
-# binomial test
+# Binomial test
 # -------------------------------------------------------------------------
-
 from scipy.stats import binomtest
 
 binomial_list = []
+for to_t in to_try:
+    for condi in range(2):
+        for type_m in ['delay', 'ampl', 'slope', 'auc']:
+            m = p_resampling.query("test == @to_t and condi == @condi and type_m == @type_m")
+            if m.shape[0] != 0:
+                n_run = len(m)
+                n_sig = np.sum(m['p_perm'].values < 0.05)
+                prop_sig = n_sig / n_run
+                binom = binomtest(k=n_sig,n=n_run,p=0.05,alternative='greater')
+                p_binom = binom.pvalue
+                median_corr = np.median(m['corr'].values)
+                binomial_list.append((to_t,condi,type_m,median_corr,n_run,n_sig,prop_sig,p_binom))
+
+
+results_binomial = pd.DataFrame(binomial_list,columns=['test','condi','type_m','median_corr','n_run','n_sig','prop_sig','p_binom'])
+print(results_binomial)
+
+# -------------------------------------------------------------------------
+# Compare mediane test
+# -------------------------------------------------------------------------
+median_test_list = []
 
 for to_t in to_try:
 
@@ -301,64 +234,19 @@ for to_t in to_try:
 
         for type_m in ['delay', 'ampl', 'slope', 'auc']:
 
-            m = p_resampling.query(
-                "test == @to_t and condi == @condi and type_m == @type_m"
-            )
+            m = correlation.query("test == @to_t and condi == @condi and type_m == @type_m")
+            m_perm = correlation_perm.query("test == @to_t and condi == @condi and type_m == @type_m")
 
             if m.shape[0] != 0:
-
-                n_run = len(m)
-
-                n_sig = np.sum(
-                    m['p_perm'].values < 0.05
-                )
-
-                prop_sig = n_sig / n_run
-
-                binom = binomtest(
-                    k=n_sig,
-                    n=n_run,
-                    p=0.05,
-                    alternative='greater'
-                )
-
-                p_binom = binom.pvalue
-
-                median_corr = np.median(
-                    m['corr'].values
-                )
-
-                binomial_list.append(
-                    (
-                        to_t,
-                        condi,
-                        type_m,
-                        median_corr,
-                        n_run,
-                        n_sig,
-                        prop_sig,
-                        p_binom
-                    )
-                )
+                r_obs = m['corr'].values.astype(float)
+                median_corr = np.median(r_obs)
+                median_corr_perm = (m_perm.groupby('p_')['corr'].median().values)
+                p_median = (np.sum(np.abs(median_corr_perm) >= np.abs(median_corr)) + 1)/(len(median_corr_perm) + 1)
+                median_test_list.append((to_t,condi,type_m,median_corr,len(median_corr_perm),p_median))
 
 
-results_binomial = pd.DataFrame(
-    binomial_list,
-    columns=[
-        'test',
-        'condi',
-        'type_m',
-        'median_corr',
-        'n_run',
-        'n_sig',
-        'prop_sig',
-        'p_binom'
-    ]
-)
-
-
-print(results_binomial)
-
+results_median = pd.DataFrame(median_test_list,columns=['test','condi','type_m','median_corr','n_perm','p_median'])
+print(results_median)
 
 # save
 
@@ -369,7 +257,7 @@ if not os.path.exists(out_path) :
 with open(out_path + f"/tp_corr_{r_run}.pkl", "wb") as f:
     pickle.dump(corr, f)
 
-with open(out_path + f"/tp_corr_{r_run}_perm.pkl", "wb") as f:
+with open(out_path + f"/tp_corr_{r_run}_perm{r_perm}.pkl", "wb") as f:
     pickle.dump(corr_perm, f)
 
 with open(out_path + f"/tp_metr_{r_run}.pkl", "wb") as f:
@@ -378,11 +266,14 @@ with open(out_path + f"/tp_metr_{r_run}.pkl", "wb") as f:
 with open(out_path + f"/tp_rt_{r_run}.pkl", "wb") as f:
     pickle.dump(rt, f)
 
-with open(out_path + f"/tp_rt_{r_run}_perm.pkl", "wb") as f:
+with open(out_path + f"/tp_rt_{r_run}_perm{r_perm}.pkl", "wb") as f:
     pickle.dump(rt_list_perm, f)
 
-with open(out_path + f"/tp_p_resampling_{r_run}.pkl", "wb") as f:
+with open(out_path + f"/tp_p_resampling_{r_run}_{r_perm}.pkl", "wb") as f:
     pickle.dump(p_resampling, f)
 
-with open(out_path + f"/tp_binomial_{r_run}.pkl", "wb") as f:
+with open(out_path + f"/tp_binomial_{r_run}_{r_perm}.pkl", "wb") as f:
     pickle.dump(results_binomial, f)
+
+with open(out_path + f"/results_median_{r_run}_{r_perm}.pkl", "wb") as f:
+    pickle.dump(results_median, f)
