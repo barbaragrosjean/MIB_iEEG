@@ -64,3 +64,32 @@ def test_meg_metadata_uses_native_subject_and_preserves_rows():
         assert 'requires subject' in str(exc)
     else:
         raise AssertionError('Missing ownership should not silently create a subject')
+
+
+def test_semivariogram_formula_and_constant_component():
+    from modality_specificity import component_semivariograms
+    w = np.array([[0.,1.],[1,1],[2,1],[4,1]])
+    meta = pd.DataFrame({'x':[0.,1,3,6], 'y':0., 'z':0., 'subject':['a']*4})
+    result = component_semivariograms(w,meta,bin_edges=[0,2,10],n_permutations=3,block_size=2)
+    frame = result['curves'].query("scope == 'group' and component == 1")
+    d = pdist(meta[['x','y','z']])
+    v = .5*pdist(w[:,:1],metric='sqeuclidean')/np.var(w[:,0])
+    np.testing.assert_allclose(frame.semivariance,[v[d<2].mean(),v[d>=2].mean()])
+    assert result['curves'].query('component == 2').semivariance.isna().all()
+    assert result['curves'].query('component == 2').p_two_sided.isna().all()
+
+
+def test_clusters_centroid_sign_subject_and_hemisphere():
+    from modality_specificity import weight_clusters
+    # Three adjacent positive sources, isolated high negative, plus background.
+    x = np.array([-20.,-19,-18,20,40,50,60,70,80,90,100,110,120,130,140,150])
+    w = np.zeros((16,1)); w[:3,0]=[8,9,10]; w[3,0]=-10
+    meta = pd.DataFrame({'x':x,'y':0.,'z':0.,'meg_subject':'m1'})
+    result = weight_clusters(w,meta,radius_mm=2,min_sources=3)
+    assert len(result['clusters']) == 1
+    row = result['clusters'].iloc[0]
+    assert row.n_sources == 3 and row.sign == 1 and row.hemisphere == 'left'
+    assert np.isclose(row.centroid_x, np.average(x[:3],weights=[8,9,10]))
+    assert row.representative_row == 1
+    meta.loc[2,'meg_subject']='m2'
+    assert weight_clusters(w,meta,radius_mm=2,min_sources=3)['clusters'].empty

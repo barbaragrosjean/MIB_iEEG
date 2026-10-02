@@ -83,7 +83,7 @@ def spatial_metadata(metadata):
 
 
 def spatial_weight_distance(weights, metadata, *, bin_edges=None, n_permutations=199,
-                            seed=2026, block_size=512, progress=None):
+                            seed=2026, block_size=512, progress=None, metric="cosine"):
     """Exact all-pair cosine-distance curves, group and individual subjects.
 
     Uses signed, unthresholded profiles from ONE group fit. Each unordered
@@ -111,12 +111,16 @@ def spatial_weight_distance(weights, metadata, *, bin_edges=None, n_permutations
     # Bounding-box diagonal ensures every pair is covered, including the final edge.
     if len(xyz) and np.linalg.norm(np.ptp(xyz, axis=0)) > edges[-1]:
         raise ValueError('Increase the last bin edge to cover the coordinate bounding-box diagonal.')
+    if metric not in ("cosine", "semivariance"):
+        raise ValueError("Unknown spatial metric.")
+    if metric == "semivariance" and w.shape[1] != 1:
+        raise ValueError("Semivariance requires one component at a time.")
     norm = np.linalg.norm(w, axis=1)
-    valid = norm > 0
+    valid = norm > 0 if metric == "cosine" else np.ones(len(w), dtype=bool)
     subjects = metadata.subject.astype(str).to_numpy()
     audit = pd.DataFrame([dict(subject=s, n_channels=int((subjects == s).sum()),
         n_zero_norm=int(((subjects == s) & ~valid).sum())) for s in pd.unique(subjects)])
-    w, xyz, subjects = w[valid] / norm[valid, None], xyz[valid], subjects[valid]
+    w, xyz, subjects = (w[valid] / norm[valid, None] if metric == "cosine" else w[valid]), xyz[valid], subjects[valid]
     labels = list(pd.unique(subjects))
     groups = [np.flatnonzero(subjects == s) for s in labels]
     subject_index = np.array([labels.index(s) for s in subjects])
@@ -144,18 +148,25 @@ def spatial_weight_distance(weights, metadata, *, bin_edges=None, n_permutations
             counts[0] += np.bincount(bins, minlength=nb)
             counts += np.bincount(within_key, minlength=counts.size).reshape(counts.shape)
             for repeat, p in enumerate(permutations):
-                distances = np.clip(1 - w[p[ii]] @ w[p[jj]].T, 0, 2)[a, b]
+                if metric == "cosine":
+                    distances = np.clip(1 - w[p[ii]] @ w[p[jj]].T, 0, 2)[a, b]
+                else:
+                    distances = .5 * (w[p[ii[a]], 0] - w[p[jj[b]], 0])**2
                 sums[repeat, 0] += np.bincount(bins, weights=distances, minlength=nb)
                 sums[repeat] += np.bincount(within_key, weights=distances[same], minlength=counts.size).reshape(counts.shape)
         if progress is not None:
             progress(f'Processed {min(start+block_size, len(w))}/{len(w)} channels')
     means = np.divide(sums, counts[None], out=np.full_like(sums, np.nan), where=counts[None]>0)
+    if metric == "semivariance":
+        variances = np.array([np.var(w[:, 0])] + [np.var(w[g, 0]) for g in groups])
+        means = np.divide(means, variances[None, :, None], out=np.full_like(means, np.nan),
+                          where=variances[None, :, None] > 0)
     rows, null_rows = [], []
     for group, label in enumerate(['all_channels']+labels):
         scope = 'group' if group == 0 else 'subject'
         for j in range(nb):
             observed, null = means[0, group, j], means[1:, group, j]
-            populated = counts[group, j] > 0
+            populated = np.isfinite(observed)
             # Two-sided permutation tail test; ties included; Monte Carlo +1 correction.
             p = min(1., 2*min((1+np.sum(null <= observed))/(n_permutations+1),
                                (1+np.sum(null >= observed))/(n_permutations+1))) if populated else np.nan
@@ -174,7 +185,11 @@ def spatial_weight_distance(weights, metadata, *, bin_edges=None, n_permutations
     ordered = ix[np.argsort(table.loc[ix, 'p_two_sided'].to_numpy())]
     table.loc[ordered, 'p_holm'] = np.minimum(1, np.maximum.accumulate(
         table.loc[ordered, 'p_two_sided'].to_numpy()*np.arange(len(ordered),0,-1)))
-    return {'curves': table, 'null_curves': pd.DataFrame(null_rows), 'channel_audit': audit}
+    null_table = pd.DataFrame(null_rows)
+    if metric == 'semivariance':
+        table = table.rename(columns={'cosine_distance': 'semivariance'})
+        null_table = null_table.rename(columns={'cosine_distance': 'semivariance'})
+    return {'curves': table, 'null_curves': null_table, 'channel_audit': audit}
 
 
 def plot_spatial_weight_distance(result, title=''):
@@ -199,5 +214,119 @@ def plot_spatial_weight_distance(result, title=''):
             ax.set_visible(False)
         axes.flat[0].legend(fontsize=7)
         fig.suptitle(f'{title} · {scope} · signed group-model weights')
+        figures.append(fig)
+    return figures
+
+
+def component_semivariograms(weights, metadata, **options):
+    """Per-component normalized semivariograms; Holm over all components/bins/scopes."""
+    results = []
+    for c in range(weights.shape[1]):
+        result = spatial_weight_distance(weights[:, c:c+1], metadata, metric='semivariance', **options)
+        for table in result.values():
+            table['component'] = c+1
+        results.append(result)
+    combined = {key: pd.concat([r[key] for r in results], ignore_index=True) for key in results[0]}
+    table = combined['curves']
+    ix = table.index[table.p_two_sided.notna()]
+    order = ix[np.argsort(table.loc[ix, 'p_two_sided'].to_numpy())]
+    table.loc[order, 'p_holm'] = np.minimum(1, np.maximum.accumulate(
+        table.loc[order, 'p_two_sided'].to_numpy()*np.arange(len(order), 0, -1)))
+    return combined
+
+
+def plot_component_semivariograms(result, title=''):
+    """One figure per group/subject, panels for individual components."""
+    figures = []
+    for (scope, subject), group in result['curves'].groupby(['scope','subject'], sort=False):
+        components = list(group.groupby('component'))
+        cols = min(3, len(components))
+        fig, axes = plt.subplots(int(np.ceil(len(components)/cols)), cols,
+            figsize=(5*cols, 3.3*int(np.ceil(len(components)/cols))), squeeze=False, constrained_layout=True)
+        for ax, (c, frame) in zip(axes.flat, components):
+            ax.fill_between(frame.distance_mid_mm, frame.null_low, frame.null_high, color='gray', alpha=.25)
+            ax.plot(frame.distance_mid_mm, frame.null_mean, '--', color='gray', label='Shuffle mean / 95% envelope')
+            ax.plot(frame.distance_mid_mm, frame.semivariance, 'o-', markersize=3, label='Observed')
+            sig = frame.p_holm < .05
+            ax.scatter(frame.loc[sig,'distance_mid_mm'], frame.loc[sig,'semivariance'], marker='*', color='crimson', label='Holm p < .05')
+            ax.set(title=f'Component {c}', xlabel='MNI distance (mm)', ylabel='Normalized semivariance', ylim=(0,None))
+        for ax in list(axes.flat)[len(components):]: ax.set_visible(False)
+        axes.flat[0].legend(fontsize=7)
+        fig.suptitle(f'{title} · {scope}: {subject}')
+        figures.append(fig)
+    return figures
+
+
+def weight_clusters(weights, metadata, *, radius_mm=10., min_sources=3):
+    """Subject/component/sign/hemisphere connected clusters above subject mean+SD.
+
+    Euclidean MNI adjacency is a fallback, not cortical-surface adjacency.
+    Midline x==0 points are isolated from both hemispheres. Feature rows and
+    exact co-locations are preserved. No independent subject model is fitted.
+    """
+    from scipy.spatial import cKDTree
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    meta = spatial_metadata(metadata)
+    w = np.asarray(weights, float)
+    xyz = meta[['x','y','z']].to_numpy(float)
+    if w.ndim != 2 or len(w) != len(meta) or not np.isfinite(w).all() or not np.isfinite(xyz).all():
+        raise ValueError('Finite weights and coordinates with matching rows are required.')
+    if not np.isfinite(radius_mm) or radius_mm <= 0 or not isinstance(min_sources, int) or min_sources < 1:
+        raise ValueError('Use positive radius_mm and integer min_sources.')
+    clusters, memberships, audit = [], [], []
+    owners = meta.subject.to_numpy()
+    hemi = np.where(xyz[:,0]<0, 'left', np.where(xyz[:,0]>0, 'right', 'midline'))
+    for subject in pd.unique(owners):
+        rows = np.flatnonzero(owners == subject)
+        for c in range(w.shape[1]):
+            magnitudes = np.abs(w[rows,c])
+            threshold = magnitudes.mean()+magnitudes.std(ddof=0)
+            retained = rows[(magnitudes >= threshold) & (magnitudes > 0)]
+            audit.append(dict(subject=subject, component=c+1, threshold=threshold, n_sources=len(rows), n_selected=len(retained)))
+            for sign in (-1,1):
+                for hemisphere in ('left','right','midline'):
+                    selected = retained[(np.sign(w[retained,c]) == sign) & (hemi[retained] == hemisphere)]
+                    if not len(selected): continue
+                    pairs = cKDTree(xyz[selected]).query_pairs(radius_mm, output_type='ndarray')
+                    graph = coo_matrix((np.ones(len(pairs)), (pairs[:,0],pairs[:,1])), shape=(len(selected),len(selected)))
+                    _, labels = connected_components(graph, directed=False)
+                    for label in np.unique(labels):
+                        members = selected[labels == label]
+                        if len(members) < min_sources: continue
+                        magnitude = np.abs(w[members,c])
+                        center = np.average(xyz[members], axis=0, weights=magnitude)
+                        distances = np.linalg.norm(xyz[members]-center, axis=1)
+                        nearest = members[np.argmin(distances)]
+                        cid = len(clusters)+1
+                        clusters.append(dict(cluster_id=cid, subject=subject, component=c+1, sign=sign,
+                            hemisphere=hemisphere, n_sources=len(members), n_unique_locations=len(np.unique(xyz[members],axis=0)),
+                            total_magnitude=magnitude.sum(), threshold=threshold,
+                            centroid_x=center[0],centroid_y=center[1],centroid_z=center[2],
+                            spread_rms_mm=np.sqrt(np.average(distances**2, weights=magnitude)),
+                            representative_row=int(nearest), representative_x=xyz[nearest,0],
+                            representative_y=xyz[nearest,1],representative_z=xyz[nearest,2]))
+                        memberships.extend(dict(cluster_id=cid,subject=subject,component=c+1,feature_row=int(i),weight=w[i,c]) for i in members)
+    columns = ['cluster_id','subject','component','sign','hemisphere','n_sources','n_unique_locations','total_magnitude','threshold',
+               'centroid_x','centroid_y','centroid_z','spread_rms_mm','representative_row','representative_x','representative_y','representative_z']
+    return dict(clusters=pd.DataFrame(clusters,columns=columns),
+                memberships=pd.DataFrame(memberships,columns=['cluster_id','subject','component','feature_row','weight']),
+                thresholds=pd.DataFrame(audit))
+
+
+def plot_weight_cluster_centroids(result, title=''):
+    """Per-component brain maps: marker at a real member nearest each centroid."""
+    figures = []
+    for component in sorted(result['thresholds'].component.unique()):
+        table = result['clusters'].query('component == @component')
+        fig = plt.figure(figsize=(12,4))
+        heading = f'{title} · component {component} · representative sources'
+        if table.empty:
+            plotting.plot_glass_brain(None,figure=fig,title=heading+' (no clusters)')
+        else:
+            plotting.plot_markers(table.sign.to_numpy(float),
+                table[['representative_x','representative_y','representative_z']].to_numpy(),
+                node_size=35, node_cmap='RdBu_r',node_vmin=-1,node_vmax=1,
+                node_threshold=None,colorbar=True,figure=fig,title=heading)
         figures.append(fig)
     return figures
