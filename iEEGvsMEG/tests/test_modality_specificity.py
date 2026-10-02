@@ -115,3 +115,28 @@ def test_cluster_compactness_and_radial_profiles():
     assert np.isclose(row.radius90_mm, dist.max())
     assert np.isclose(row.spread_rms_mm,np.sqrt(np.average(dist**2,weights=[8,9,10])))
     assert len(r['memberships'].query('component == 1')) == 3
+
+
+def test_kmeans_weight_space_ignores_coordinates_and_pair_metrics():
+    from modality_specificity import kmeans_weight_space
+    w = np.zeros((15,3))
+    w[:3] = [[8,0,0],[9,0,0],[10,0,0]]
+    w[3:6] = [[0,-8,0],[0,-9,0],[0,-10,0]]
+    meta = pd.DataFrame({'x':np.arange(15.),'y':0.,'z':0.,'meg_subject':['a']*7+['b']*8})
+    result = kmeans_weight_space(w,meta,n_clusters=2,bin_edges=[0,1,3,30],block_size=2)
+    shuffled = meta.copy();shuffled['x'] = shuffled.x.to_numpy()[::-1]
+    other = kmeans_weight_space(w,shuffled,n_clusters=2,bin_edges=[0,1,3,30],block_size=3)
+    np.testing.assert_array_equal(result['memberships'].cluster_id,other['memberships'].cluster_id)
+    assert (result['memberships'].cluster_id == -1).sum() == 9
+    assert result['distance_curves'].n_pairs.sum() == 6
+    np.testing.assert_allclose(result['distance_curves'].cosine_distance.dropna(),0,atol=1e-14)
+    for row in result['clusters'].itertuples():
+        selected = result['memberships'].query('cluster_id == @row.cluster_id')
+        center = selected[['thresholded_weight_1','thresholded_weight_2','thresholded_weight_3']].mean().to_numpy()
+        np.testing.assert_allclose(center,[row.weight_centroid_1,row.weight_centroid_2,row.weight_centroid_3])
+        assert np.isclose(row.centroid_x,selected.x.mean())
+    try:
+        kmeans_weight_space(w[:,:2],meta,n_clusters=2)
+    except ValueError as exc:
+        assert 'three components' in str(exc)
+    else: raise AssertionError('Must require three fitted components')

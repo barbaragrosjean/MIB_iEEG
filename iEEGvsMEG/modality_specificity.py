@@ -371,3 +371,134 @@ def plot_weight_cluster_centroids(result, title='', *, metadata, figsize=(20, 12
         fig.suptitle(f'{title} · component {component} · group clusters (stars = centroids)',fontsize=18)
         figures.append(fig)
     return figures
+
+
+def kmeans_weight_space(weights, metadata, *, n_clusters=5, seed=2026,
+                        bin_edges=None, block_size=512):
+    """Group K-means in signed thresholded first-three-component weight space.
+
+    No spatial coordinates enter the fit. All-zero thresholded rows are labelled
+    -1 and excluded (cosine distance is undefined). K-means uses Euclidean
+    distance, no additional feature standardization, and 20 initializations.
+    Spatial centroids are unweighted means of member MNI coordinates and are
+    descriptive only. Weight centroids are the actual fitted K-means centers.
+    """
+    from sklearn.cluster import KMeans
+    from scipy.spatial.distance import cdist
+    meta = spatial_metadata(metadata)
+    w = np.asarray(weights, float)
+    if w.ndim != 2 or w.shape[1] < 3 or len(w) != len(meta) or not np.isfinite(w).all():
+        raise ValueError('Provide finite native weights with at least three components and matching metadata.')
+    if not isinstance(n_clusters, (int, np.integer)) or n_clusters < 2:
+        raise ValueError('n_clusters must be an integer >= 2.')
+    if not isinstance(block_size, (int, np.integer)) or block_size < 1:
+        raise ValueError('block_size must be a positive integer.')
+    xyz = meta[['x','y','z']].to_numpy(float)
+    if not np.isfinite(xyz).all(): raise ValueError('MNI coordinates must be finite.')
+    magnitude, thresholds = threshold_weights(w[:,:3])
+    thresholded = np.sign(w[:,:3])*magnitude
+    active = np.linalg.norm(thresholded,axis=1)>0
+    if len(np.unique(thresholded[active],axis=0)) < n_clusters:
+        raise ValueError('Fewer distinct nonzero thresholded profiles than clusters; reduce n_clusters.')
+    fit = KMeans(n_clusters=int(n_clusters),random_state=seed,n_init=20).fit(thresholded[active])
+    labels = np.full(len(w),-1,dtype=int)
+    labels[active] = fit.labels_
+    edges = np.asarray(np.arange(0,310,10) if bin_edges is None else bin_edges,float)
+    if edges.ndim != 1 or len(edges)<2 or not np.isfinite(edges).all() or edges[0]!=0 or np.any(np.diff(edges)<=0):
+        raise ValueError('Bin edges must start at zero and strictly increase.')
+    if np.linalg.norm(np.ptp(xyz,axis=0)) > edges[-1]:
+        raise ValueError('Increase final distance bin to cover the MNI bounding-box diagonal.')
+    members = meta.copy().reset_index(drop=True)
+    members['feature_row'] = np.arange(len(w))
+    members['cluster_id'] = labels
+    for c in range(3):
+        members[f'weight_{c+1}'] = w[:,c]
+        members[f'thresholded_weight_{c+1}'] = thresholded[:,c]
+    clusters, curves = [], []
+    for label in range(n_clusters):
+        rows = np.flatnonzero(labels==label)
+        spatial_center = xyz[rows].mean(axis=0)
+        spatial_dist = np.linalg.norm(xyz[rows]-spatial_center,axis=1)
+        center = fit.cluster_centers_[label]
+        clusters.append(dict(cluster_id=label,n_sources=len(rows),n_subjects=meta.iloc[rows].subject.nunique(),
+            weight_centroid_1=center[0],weight_centroid_2=center[1],weight_centroid_3=center[2],
+            centroid_x=spatial_center[0],centroid_y=spatial_center[1],centroid_z=spatial_center[2],
+            spatial_rms_mm=np.sqrt(np.mean(spatial_dist**2)),spatial_radius90_mm=np.quantile(spatial_dist,.9),
+            weight_rms=np.sqrt(np.mean(np.sum((thresholded[rows]-center)**2,axis=1)))))
+        unit = thresholded[rows]/np.linalg.norm(thresholded[rows],axis=1)[:,None]
+        count, total = np.zeros(len(edges)-1,dtype=np.int64), np.zeros(len(edges)-1)
+        for start in range(0,len(rows),block_size):
+            ii = np.arange(start,min(start+block_size,len(rows)))
+            for other in range(start,len(rows),block_size):
+                jj = np.arange(other,min(other+block_size,len(rows)))
+                a,b = np.nonzero(ii[:,None]<jj[None,:])
+                if not len(a): continue
+                d = cdist(xyz[rows[ii]],xyz[rows[jj]])[a,b]
+                bins = np.minimum(np.searchsorted(edges,d,side='right')-1,len(edges)-2)
+                cosine = np.clip(1-unit[ii]@unit[jj].T,0,2)[a,b]
+                count += np.bincount(bins,minlength=len(count))
+                total += np.bincount(bins,weights=cosine,minlength=len(count))
+        for j in range(len(count)):
+            curves.append(dict(cluster_id=label,distance_low_mm=edges[j],distance_high_mm=edges[j+1],
+                distance_mid_mm=(edges[j]+edges[j+1])/2,n_pairs=count[j],
+                cosine_distance=total[j]/count[j] if count[j] else np.nan))
+    return dict(clusters=pd.DataFrame(clusters),memberships=members,thresholds=thresholds,
+                distance_curves=pd.DataFrame(curves))
+
+
+def plot_kmeans_weight_space(result, title=''):
+    """3D weight space, full native brain cloud, histograms, within-cluster curves."""
+    from matplotlib.lines import Line2D
+    from matplotlib.colors import to_hex
+    members, clusters = result['memberships'], result['clusters']
+    colors = {int(row.cluster_id):plt.get_cmap('turbo')(j/max(len(clusters)-1,1))
+              for j,row in enumerate(clusters.itertuples())}
+    figures = []
+    fig = plt.figure(figsize=(12,10),constrained_layout=True)
+    ax = fig.add_subplot(111,projection='3d')
+    for row in clusters.itertuples():
+        data = members[members.cluster_id==row.cluster_id]
+        color = colors[row.cluster_id]
+        ax.scatter(data.thresholded_weight_1,data.thresholded_weight_2,data.thresholded_weight_3,
+                   s=9,alpha=.4,color=color,rasterized=True,label=f'C{row.cluster_id} (n={row.n_sources})')
+        ax.scatter(row.weight_centroid_1,row.weight_centroid_2,row.weight_centroid_3,
+                   s=220,marker='*',color=color,edgecolor='black',linewidth=1.2)
+        ax.text(row.weight_centroid_1,row.weight_centroid_2,row.weight_centroid_3,f' C{row.cluster_id}')
+    ax.set(xlabel='Thresholded weight 1',ylabel='Thresholded weight 2',zlabel='Thresholded weight 3',
+           title=f'{title} · K-means weight space (stars = fitted centers)')
+    ax.legend(fontsize=8); figures.append(fig)
+    fig = plt.figure(figsize=(22,8))
+    brain = plotting.plot_glass_brain(None,figure=fig,display_mode='lyrz',
+        title=f'{title} · brain locations of weight-space clusters (stars = spatial means)')
+    coords = members[['x','y','z']].to_numpy()
+    brain.add_markers(coords,marker_color='lightgray',marker_size=5,alpha=.2)
+    for row in clusters.itertuples():
+        selected = members.cluster_id.to_numpy()==row.cluster_id
+        brain.add_markers(coords[selected],marker_color=to_hex(colors[row.cluster_id]),marker_size=12,alpha=.6)
+        brain.add_markers(np.array([[row.centroid_x,row.centroid_y,row.centroid_z]]),
+            marker_color=to_hex(colors[row.cluster_id]),marker_size=260,marker='*',edgecolors='black',linewidths=1.2)
+    fig.legend(handles=[Line2D([0],[0],marker='o',color='none',markerfacecolor=colors[r.cluster_id],
+                 label=f'C{r.cluster_id}: RMS {r.spatial_rms_mm:.1f} mm') for r in clusters.itertuples()],
+               loc='lower center',ncol=min(5,len(clusters)),fontsize=10)
+    figures.append(fig)
+    fig,axes = plt.subplots(len(clusters),3,figsize=(15,2.6*len(clusters)),squeeze=False,constrained_layout=True)
+    for i,row in enumerate(clusters.itertuples()):
+        data = members[members.cluster_id==row.cluster_id]
+        for c,ax in enumerate(axes[i]):
+            # Identical edges for native and thresholded values within each panel.
+            bins = np.histogram_bin_edges(data[f'weight_{c+1}'],bins=35)
+            bins = np.unique(np.r_[bins,0.])
+            ax.hist(data[f'weight_{c+1}'],bins=bins,density=True,histtype='step',color='black',label='Original')
+            ax.hist(data[f'thresholded_weight_{c+1}'],bins=bins,density=True,alpha=.55,color=colors[row.cluster_id],label='Thresholded')
+            ax.set(title=f'C{row.cluster_id} · component {c+1}',xlabel='Signed weight',ylabel='Density')
+    axes[0,0].legend(fontsize=8)
+    fig.suptitle(f'{title} · within-cluster weight distributions'); figures.append(fig)
+    fig,axes = plt.subplots(1,2,figsize=(15,5),constrained_layout=True)
+    for label,frame in result['distance_curves'].groupby('cluster_id',sort=True):
+        axes[0].plot(frame.distance_mid_mm,frame.cosine_distance,'o-',color=colors[label],label=f'C{label}')
+        axes[1].plot(frame.distance_mid_mm,frame.n_pairs,'o-',color=colors[label],label=f'C{label}')
+    axes[0].set(xlabel='MNI pair distance (mm)',ylabel='Mean cosine distance (thresholded 3D weights)',ylim=(-.05,2.05))
+    axes[1].set(xlabel='MNI pair distance (mm)',ylabel='Number of unordered pairs',yscale='symlog')
+    axes[0].legend(); fig.suptitle(f'{title} · within-cluster pairs (all clusters overlaid)')
+    figures.append(fig)
+    return figures
