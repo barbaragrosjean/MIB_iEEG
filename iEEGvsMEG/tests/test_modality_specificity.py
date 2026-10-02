@@ -1,0 +1,44 @@
+import numpy as np
+import pandas as pd
+from scipy.spatial.distance import pdist
+from modality_specificity import spatial_weight_distance
+
+
+def test_exact_pairs_subjects_and_sign_invariance():
+    rng = np.random.default_rng(9)
+    w = rng.normal(size=(8, 3))
+    xyz = rng.normal(size=(8, 3))*10
+    xyz[1] = xyz[0]  # distinct co-located features must be included
+    meta = pd.DataFrame(xyz, columns=['x','y','z']).assign(subject=['a']*4+['b']*4)
+    options = dict(bin_edges=[0,10,30,100], n_permutations=7, block_size=3)
+    result = spatial_weight_distance(w, meta, **options)
+    group = result['curves'].query("scope == 'group'")
+    assert group.n_pairs.sum() == 28
+    assert result['curves'].query("scope == 'subject'").n_pairs.sum() == 12
+    for subject, frame in result['curves'].groupby('subject'):
+        mask = np.ones(8, bool) if subject == 'all_channels' else meta.subject.eq(subject).to_numpy()
+        distances, cosines = pdist(xyz[mask]), pdist(w[mask], metric='cosine')
+        for row in frame.itertuples():
+            selected = (distances >= row.distance_low_mm) & (distances < row.distance_high_mm)
+            if selected.any():
+                assert np.isclose(row.cosine_distance, cosines[selected].mean())
+    w[:,1] *= -1
+    flipped = spatial_weight_distance(w, meta, **options)
+    np.testing.assert_allclose(result['curves'].cosine_distance, flipped['curves'].cosine_distance, equal_nan=True)
+    np.testing.assert_allclose(result['null_curves'].cosine_distance, flipped['null_curves'].cosine_distance, equal_nan=True)
+    assert (result['curves'].p_holm.dropna() >= result['curves'].p_two_sided.dropna()).all()
+
+
+def test_coordinate_shuffle_equivalence_and_zero_profiles():
+    w = np.array([[1.,0],[0,1],[-1,0],[1,1],[0,0]])
+    meta = pd.DataFrame({'x':[0,2,10,20,30], 'y':0., 'z':0., 'subject':['a']*5})
+    result = spatial_weight_distance(w, meta, bin_edges=[0,5,40], n_permutations=3, seed=2, block_size=2)
+    assert result['channel_audit'].n_zero_norm.sum() == 1
+    assert result['curves'].query("scope == 'group'").n_pairs.sum() == 6
+    p = np.random.default_rng(2).permutation(4)
+    # Permuting profiles by p equals permuting coordinates by inverse(p).
+    distance = pdist(meta[['x','y','z']].to_numpy()[:4][np.argsort(p)])
+    cosine = pdist(w[:4], metric='cosine')
+    expected = [cosine[(distance>=lo)&(distance<hi)].mean() for lo,hi in [(0,5),(5,40)]]
+    actual = result['null_curves'].query("scope == 'group' and permutation == 0").cosine_distance
+    np.testing.assert_allclose(actual, expected)
