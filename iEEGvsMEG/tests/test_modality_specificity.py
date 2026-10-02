@@ -100,3 +100,18 @@ def test_group_clusters_centroid_and_cross_subject_connectivity():
     assert set(pooled['memberships'].subject) == {'m1', 'm2'}
     assert len(pooled['thresholds']) == 1
     assert np.isclose(pooled['thresholds'].iloc[0].threshold, np.abs(w).mean()+np.abs(w).std())
+
+
+def test_cluster_compactness_and_radial_profiles():
+    from modality_specificity import weight_clusters
+    x = np.array([-20.,-19,-18]+list(range(20,150,10)))
+    w = np.zeros((len(x),2)); w[:3,0]=[8,9,10]; w[:3,1]=[4,4.5,5]
+    meta = pd.DataFrame({'x':x,'y':0.,'z':0.,'subject':'s1'})
+    r = weight_clusters(w,meta,radius_mm=1.1,min_sources=3)
+    row = r['clusters'].query('component == 1').iloc[0]
+    assert np.isclose(row.edge_density_unique,2/3)
+    assert np.isclose(row.mean_profile_cosine,1)
+    dist = np.abs(x[:3]-np.average(x[:3],weights=[8,9,10]))
+    assert np.isclose(row.radius90_mm, dist.max())
+    assert np.isclose(row.spread_rms_mm,np.sqrt(np.average(dist**2,weights=[8,9,10])))
+    assert len(r['memberships'].query('component == 1')) == 3

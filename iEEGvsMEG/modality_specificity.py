@@ -299,34 +299,75 @@ def weight_clusters(weights, metadata, *, radius_mm=10., min_sources=3):
                     distances = np.linalg.norm(xyz[members]-center, axis=1)
                     nearest = members[np.argmin(distances)]
                     cid = len(clusters)+1
+                    # Spatial density counts unique locations to avoid inflation by
+                    # repeated source grids; centroids retain every native feature.
+                    unique_xyz = np.unique(xyz[members], axis=0)
+                    n_unique = len(unique_xyz)
+                    n_edges = (cKDTree(unique_xyz).count_neighbors(cKDTree(unique_xyz), radius_mm)-n_unique)/2
+                    density = 2*n_edges/(n_unique*(n_unique-1)) if n_unique > 1 else np.nan
+                    order = np.argsort(distances)
+                    r90 = distances[order[np.searchsorted(np.cumsum(magnitude[order]), .9*magnitude.sum())]]
+                    profiles = w[members]
+                    norms = np.linalg.norm(profiles, axis=1)
+                    directions = profiles/norms[:,None]
+                    # Mean unit direction: amplitude does not dominate similarity.
+                    mean_direction = directions.mean(axis=0)
+                    direction_norm = np.linalg.norm(mean_direction)
+                    similarities = directions @ (mean_direction/direction_norm) if direction_norm > 0 else np.full(len(members),np.nan)
                     clusters.append(dict(cluster_id=cid, scope='group', n_subjects=len(np.unique(owners[members])), component=c+1, sign=sign,
                         hemisphere=hemisphere, n_sources=len(members), n_unique_locations=len(np.unique(xyz[members],axis=0)),
                         total_magnitude=magnitude.sum(), threshold=threshold,
+                        radius90_mm=r90, max_radius_mm=distances.max(),
+                        edge_density_unique=density, mean_profile_cosine=float(np.mean(similarities)),
                         centroid_x=center[0],centroid_y=center[1],centroid_z=center[2],
                         spread_rms_mm=np.sqrt(np.average(distances**2, weights=magnitude)),
                         representative_row=int(nearest), representative_x=xyz[nearest,0],
                         representative_y=xyz[nearest,1],representative_z=xyz[nearest,2]))
-                    memberships.extend(dict(cluster_id=cid,subject=owners[i],component=c+1,feature_row=int(i),weight=w[i,c]) for i in members)
-    columns = ['cluster_id','scope','n_subjects','component','sign','hemisphere','n_sources','n_unique_locations','total_magnitude','threshold',
+                    memberships.extend(dict(cluster_id=cid,subject=owners[i],component=c+1,feature_row=int(i),weight=w[i,c],
+                        distance_to_centroid_mm=distances[j], profile_cosine_to_cluster=similarities[j]) for j,i in enumerate(members))
+    columns = ['cluster_id','scope','n_subjects','component','sign','hemisphere','n_sources','n_unique_locations','total_magnitude','threshold','radius90_mm','max_radius_mm','edge_density_unique','mean_profile_cosine',
                'centroid_x','centroid_y','centroid_z','spread_rms_mm','representative_row','representative_x','representative_y','representative_z']
     return dict(clusters=pd.DataFrame(clusters,columns=columns),
-                memberships=pd.DataFrame(memberships,columns=['cluster_id','subject','component','feature_row','weight']),
+                memberships=pd.DataFrame(memberships,columns=['cluster_id','subject','component','feature_row','weight','distance_to_centroid_mm','profile_cosine_to_cluster']),
                 thresholds=pd.DataFrame(audit))
 
 
-def plot_weight_cluster_centroids(result, title=''):
-    """Per-component brain maps: marker at a real member nearest each centroid."""
+def plot_weight_cluster_centroids(result, title='', *, metadata, figsize=(20, 12)):
+    """All electrodes, cluster members and true centroids in MNI projections.
+
+    Gray marks include every feature; colors indicate cluster identity, not
+    magnitude. Stars are mathematical centroids, not snapped member sources.
+    """
+    xyz = spatial_metadata(metadata)[['x','y','z']].to_numpy(float)
     figures = []
     for component in sorted(result['thresholds'].component.unique()):
         table = result['clusters'].query('component == @component')
-        fig = plt.figure(figsize=(12,4))
-        heading = f'{title} · component {component} · representative sources'
-        if table.empty:
-            plotting.plot_glass_brain(None,figure=fig,title=heading+' (no clusters)')
-        else:
-            plotting.plot_markers(table.sign.to_numpy(float),
-                table[['representative_x','representative_y','representative_z']].to_numpy(),
-                node_size=35, node_cmap='RdBu_r',node_vmin=-1,node_vmax=1,
-                node_threshold=None,colorbar=True,figure=fig,title=heading)
+        fig, axes = plt.subplots(2, 2, figsize=figsize, constrained_layout=True)
+        cmap = plt.get_cmap('turbo')
+        for ax, (u,v,name) in zip(axes.flat[:3], [(0,1,'Axial'),(0,2,'Coronal'),(1,2,'Sagittal')]):
+            ax.scatter(xyz[:,u],xyz[:,v],s=5,c='lightgray',alpha=.35,rasterized=True,label='All electrodes')
+            for j, row in enumerate(table.itertuples()):
+                color = cmap(j/max(len(table)-1,1))
+                members = result['memberships'].query('cluster_id == @row.cluster_id').feature_row.to_numpy(int)
+                ax.scatter(xyz[members,u],xyz[members,v],s=14,color=color,alpha=.6,rasterized=True)
+                center = np.array([row.centroid_x,row.centroid_y,row.centroid_z])
+                ax.scatter(center[u],center[v],s=260,marker='*',color=color,edgecolor='black',linewidth=1.3,zorder=5)
+                ax.annotate(str(row.cluster_id),center[[u,v]],xytext=(7,7),textcoords='offset points',fontsize=10,weight='bold')
+            ax.set(title=name, xlabel=f'MNI {"xyz"[u]} (mm)',ylabel=f'MNI {"xyz"[v]} (mm)',aspect='equal')
+            ax.grid(alpha=.15)
+        ax = axes.flat[3]
+        for j,row in enumerate(table.itertuples()):
+            data = result['memberships'].query('cluster_id == @row.cluster_id')
+            # Radial mean profiles, keeping all members; empty bins are omitted.
+            edges = np.linspace(0,max(data.distance_to_centroid_mm.max(),1e-9),9)
+            indices = np.minimum(np.searchsorted(edges,data.distance_to_centroid_mm,side='right')-1,7)
+            radial = data.assign(bin=indices).groupby('bin').agg(
+                distance=('distance_to_centroid_mm','mean'),similarity=('profile_cosine_to_cluster','mean'))
+            ax.plot(radial.distance,radial.similarity,'o-',color=cmap(j/max(len(table)-1,1)),
+                    label=f'C{row.cluster_id} ({"+" if row.sign>0 else "−"}), n={row.n_sources}, R90={row.radius90_mm:.1f} mm')
+        ax.set(xlabel='Distance to spatial centroid (mm)',ylabel='Cosine similarity to mean cluster profile',ylim=(-1.05,1.05),title='Weight-profile coherence vs spatial distance')
+        if len(table): ax.legend(fontsize=8)
+        else: ax.text(.5,.5,'No retained clusters',transform=ax.transAxes,ha='center')
+        fig.suptitle(f'{title} · component {component} · group clusters (stars = centroids)',fontsize=18)
         figures.append(fig)
     return figures
