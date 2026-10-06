@@ -35,8 +35,14 @@ def plot_weight_distributions(weights, summaries, bins=60):
     return fig
 
 
-def plot_thresholded_brains(datasets, retained):
-    """MNI glass brains; exact co-locations use mean including thresholded zeros."""
+def plot_thresholded_brains(datasets, retained, *, ieeg_radius_mm=None):
+    """MNI glass brains, iEEG radius groups and exact MEG co-locations.
+
+    None estimates iEEG radius from native MEG grids; 0 uses exact locations.
+    Averages include thresholded zeros and do not change model weights.
+    """
+    if ieeg_radius_mm is None:
+        ieeg_radius_mm, _ = estimate_meg_spacing(datasets["MEG"])
     k = next(iter(retained.values())).shape[1]
     fig, axes = plt.subplots(k, len(datasets), figsize=(16, 3*k), squeeze=False)
     for col, (modality, dataset) in enumerate(datasets.items()):
@@ -44,14 +50,15 @@ def plot_thresholded_brains(datasets, retained):
         values = retained[modality]
         if xyz.shape != (len(values), 3) or not np.isfinite(xyz).all():
             raise ValueError(f'{modality}: weights require matching finite MNI coordinates in mm.')
+        radius = ieeg_radius_mm if modality.lower() == 'ieeg' else 0.
+        grouped_xyz, grouped_values, _ = average_spatial_groups(values, xyz, radius_mm=radius)
         for component in range(k):
-            table = pd.DataFrame(xyz, columns=['x', 'y', 'z'])
-            table['weight'] = values[:, component]
-            grouped = table.groupby(['x', 'y', 'z'], sort=False).weight.mean().reset_index()
+            grouped = pd.DataFrame(grouped_xyz, columns=['x', 'y', 'z'])
+            grouped['weight'] = grouped_values[:, component]
             visible = grouped[grouped.weight > 0]
             title = f'{modality} · component {component+1}'
-            if len(grouped) < len(table):
-                title += ' · mean at co-locations'
+            if len(grouped) < len(xyz):
+                title += f' · mean within {radius:.1f} mm groups' if radius else ' · mean at co-locations'
             if visible.empty:
                 plotting.plot_glass_brain(None, figure=fig, axes=axes[component, col], title=title+' (none retained)')
             else:
@@ -508,4 +515,111 @@ def plot_kmeans_weight_space(result, title=''):
     axes[1].set(xlabel='MNI pair distance (mm)',ylabel='Number of unordered pairs',yscale='symlog')
     axes[0].legend(); fig.suptitle(f'{title} · within-cluster pairs (all clusters overlaid)')
     figures.append(fig)
+    return figures
+
+
+def estimate_meg_spacing(dataset):
+    """Median of per-subject median positive nearest-neighbour distances (mm)."""
+    from scipy.spatial import cKDTree
+    source = getattr(dataset, 'source_data', None) or {}
+    if source.get('meg_positions') is not None:
+        grids = zip(source['meg_subjects'], source['meg_positions'])
+    else:
+        meta = spatial_metadata(dataset.metadata)
+        grids = ((s, f[['x','y','z']].to_numpy()) for s,f in meta.groupby('subject'))
+    rows = []
+    for subject, xyz in grids:
+        xyz = np.unique(np.asarray(xyz, float),axis=0)
+        if not np.isfinite(xyz).all(): raise ValueError('MEG coordinates must be finite MNI mm.')
+        if len(xyz) < 2: continue
+        distance = cKDTree(xyz).query(xyz,k=2)[0][:,1]
+        rows.append(dict(subject=subject, n_unique_sources=len(xyz), median_spacing_mm=np.median(distance)))
+    if not rows: raise ValueError('Need at least two distinct MEG source positions to estimate spacing; provide an explicit radius.')
+    audit = pd.DataFrame(rows)
+    return float(audit.median_spacing_mm.median()), audit
+
+
+def average_spatial_groups(values, coordinates, *, radius_mm=0.):
+    """Non-chaining complete-linkage groups with maximum pair distance <= radius.
+
+    3D Euclidean distance in mm. Each row enters exactly one group. Uses sorted
+    unique coordinates for deterministic grouping; averages retain duplicate
+    feature contributions and zeroed weights. Group position is its mean MNI.
+    Complete linkage is quadratic in the number of unique positions.
+    """
+    from scipy.cluster.hierarchy import linkage, fcluster
+    xyz, values = np.asarray(coordinates,float), np.asarray(values,float)
+    if values.ndim != 2 or xyz.shape != (len(values),3) or not len(values) or not np.isfinite(values).all() or not np.isfinite(xyz).all():
+        raise ValueError('Finite channels × components and matching coordinates required.')
+    if not np.isfinite(radius_mm) or radius_mm < 0: raise ValueError('radius_mm must be finite and nonnegative.')
+    unique, inverse = np.unique(xyz,axis=0,return_inverse=True)
+    ids = np.arange(len(unique))
+    if radius_mm > 0 and len(unique)>1:
+        ids = fcluster(linkage(unique,method='complete',metric='euclidean'),t=radius_mm,criterion='distance')-1
+    _, labels = np.unique(ids[inverse],return_inverse=True)
+    count = np.bincount(labels)
+    positions = np.column_stack([np.bincount(labels,weights=xyz[:,i])/count for i in range(3)])
+    means = np.column_stack([np.bincount(labels,weights=values[:,i])/count for i in range(values.shape[1])])
+    return positions, means, pd.DataFrame(dict(feature_row=np.arange(len(values)),display_group=labels))
+
+
+def regional_weight_summary(weights, datasets, *, meg_labeler=None):
+    """Native-feature mean |weight|, retaining zeros; no spatial averaging."""
+    if meg_labeler is None:
+        from region_labels import get_region_label
+        meg_labeler = get_region_label
+    tables = []
+    for modality, dataset in datasets.items():
+        meta = dataset.metadata
+        if modality.lower() == 'ieeg':
+            if 'region' not in meta:
+                raise ValueError('iEEG metadata needs GetInfo region labels; reload with GetInfo or provide region metadata.')
+            labels = meta.region.to_numpy()
+        else:
+            # Legacy get_region_label explicitly expects metres, internal metadata is mm.
+            labels = meg_labeler(meta[['x','y','z']]/1000.)
+        labels = pd.Series(labels).fillna('Unassigned').astype(str).replace({'N':'Unassigned','Background':'Unassigned','':'Unassigned'})
+        values = np.asarray(weights[modality],float)
+        if len(labels)!=len(values): raise ValueError('Region labels must match native feature rows.')
+        for c in range(values.shape[1]):
+            frame = pd.DataFrame(dict(region=labels, magnitude=np.abs(values[:,c])))
+            summary = frame.groupby('region',sort=True).magnitude.agg(mean_abs_weight='mean',n_channels='size').reset_index()
+            summary['modality'], summary['component'] = modality,c+1
+            tables.append(summary)
+    return pd.concat(tables,ignore_index=True)
+
+
+def plot_regional_weight_polar(table):
+    """One polar panel per modality/component; absent regions are gaps, not zeros."""
+    modalities = list(table.modality.unique()); components = sorted(table.component.unique())
+    regions = sorted(table.region.unique()); angles = np.arange(len(regions))*2*np.pi/len(regions)
+    fig,axes = plt.subplots(len(components),len(modalities),figsize=(7*len(modalities),5.5*len(components)),
+                           subplot_kw={'projection':'polar'},squeeze=False,constrained_layout=True)
+    for i,c in enumerate(components):
+        for j,m in enumerate(modalities):
+            ax=axes[i,j]
+            values=table[(table.component==c)&(table.modality==m)].set_index('region').mean_abs_weight.reindex(regions).to_numpy()
+            ax.plot(np.r_[angles,angles[0]],np.r_[values,values[0]],'o-',markersize=4)
+            ax.set_xticks(angles,regions,fontsize=9)
+            ax.set_ylim(bottom=0)
+            ax.set_title(f'{m} · component {c}\nMean absolute weight',pad=25)
+    return fig
+
+
+def plot_modality_glasser(datasets, values, *, ieeg_radius_mm=0., sigma=4., view='lateral', **kwargs):
+    """Legacy HCP surface interpolation via plotting.plot_surf_stat_map.
+
+    These are continuous maps on HCP surfaces, not averages over Glasser parcels.
+    """
+    from coverage_matching_utils import plot_glasser_weights
+    figures = []
+    for modality,dataset in datasets.items():
+        xyz = dataset.metadata[['x','y','z']].to_numpy(float)
+        pos, averaged, _ = average_spatial_groups(values[modality],xyz,
+            radius_mm=ieeg_radius_mm if modality.lower()=='ieeg' else 0.)
+        for c in range(averaged.shape[1]):
+            fig = plt.figure(figsize=(16,6))
+            figure,_ = plot_glasser_weights(averaged[:,c],pos,absolute=True,sigma=sigma,
+                view=view,figure=fig,show=False,title=f'{modality} · component {c+1}',**kwargs)
+            figures.append((modality,c+1,figure))
     return figures

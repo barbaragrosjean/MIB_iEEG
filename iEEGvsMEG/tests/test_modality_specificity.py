@@ -159,3 +159,35 @@ def test_kmeans_original_weight_switch():
             expected = pdist(selected,metric='cosine').mean()
             actual = r['distance_curves'].query('cluster_id == @row.cluster_id').cosine_distance.iloc[0]
             assert np.isclose(actual,expected)
+
+
+def test_meg_spacing_and_nonchaining_display_means():
+    from types import SimpleNamespace
+    from modality_specificity import estimate_meg_spacing, average_spatial_groups
+    grid=np.array([[0.,0,0],[5,0,0],[10,0,0],[10,0,0]])
+    ds=SimpleNamespace(source_data={'meg_subjects':['a','b'],'meg_positions':[grid,grid]})
+    radius,audit=estimate_meg_spacing(ds)
+    assert radius==5 and len(audit)==2
+    xyz=np.array([[0.,0,0],[3,0,0],[6,0,0],[0,0,0]])
+    values=np.array([[0.],[4],[10],[2]])
+    pos,means,members=average_spatial_groups(values,xyz,radius_mm=radius)
+    assert len(pos)==2
+    for label,frame in members.groupby('display_group'):
+        rows=frame.feature_row.to_numpy()
+        if len(rows)>1: assert np.max(pdist(xyz[rows])) <= radius
+        np.testing.assert_allclose(means[label],values[rows].mean(0))
+    assert members.display_group.iloc[0]==members.display_group.iloc[3]
+
+
+def test_region_means_and_meg_label_units():
+    from types import SimpleNamespace
+    from modality_specificity import regional_weight_summary
+    ieeg=SimpleNamespace(metadata=pd.DataFrame({'region':['A','A','B']}))
+    meg=SimpleNamespace(metadata=pd.DataFrame({'x':[10.,20.],'y':0.,'z':0.}))
+    def labeler(coords):
+        np.testing.assert_allclose(coords.x,[.01,.02])
+        return ['A',None]
+    table=regional_weight_summary({'iEEG':np.array([[-2.],[0.],[6.]]),'MEG':np.array([[4.],[-8.]])},
+                                 {'iEEG':ieeg,'MEG':meg},meg_labeler=labeler)
+    assert table.query("modality == 'iEEG' and region == 'A'").mean_abs_weight.iloc[0]==1
+    assert table.query("modality == 'MEG' and region == 'Unassigned'").mean_abs_weight.iloc[0]==8
