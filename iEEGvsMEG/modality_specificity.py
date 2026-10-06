@@ -660,10 +660,13 @@ def plot_regional_weight_polar(table):
     return fig
 
 
-def plot_modality_glasser(datasets, values, *, ieeg_radius_mm=0., sigma=4., view='lateral', **kwargs):
+def plot_modality_glasser(datasets, values, *, ieeg_radius_mm=0., sigma=4., view='lateral',
+                          vmin=None, vmax=None, **kwargs):
     """Legacy HCP surface interpolation via plotting.plot_surf_stat_map.
 
     These are continuous maps on HCP surfaces, not averages over Glasser parcels.
+    vmin/vmax are shared across all modality/component panels when provided;
+    None retains automatic per-panel limits. They do not threshold the data.
     """
     from coverage_matching_utils import plot_glasser_weights
     figures = []
@@ -674,7 +677,8 @@ def plot_modality_glasser(datasets, values, *, ieeg_radius_mm=0., sigma=4., view
         for c in range(averaged.shape[1]):
             fig = plt.figure(figsize=(16,6))
             figure,_ = plot_glasser_weights(averaged[:,c],pos,absolute=True,sigma=sigma,
-                view=view,figure=fig,show=False,title=f'{modality} · component {c+1}',**kwargs)
+                view=view,figure=fig,show=False,title=f'{modality} · component {c+1}',
+                vmin=vmin,vmax=vmax,**kwargs)
             figures.append((modality,c+1,figure))
     return figures
 

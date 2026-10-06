@@ -606,14 +606,17 @@ def plot_voxel_weights(values, coordinates, *, voxel_size=20., size_base=2.,
 def plot_glasser_weights(values, coordinates, *, sigma=4., radius_sigma=3.,
                          min_support=.05, absolute=False, template=None, meshes=None,
                          view='lateral', threshold=None, cmap=None, title=None,
-                         figure=None, axes=None, show=True):
+                         figure=None, axes=None, show=True, vmin=None, vmax=None):
     """Gaussian-weighted electrode maps on the HCP inflated cortical surfaces.
 
     Reproduces OLD/LB_Summary.ipynb's 'Glasser' surface visualization: this is
     continuous interpolation on HCP meshes, NOT a Glasser parcel average.
     Coordinates and sigma are MNI mm. Kernels are truncated at radius_sigma
     standard deviations for bounded work/memory; unsupported voxels are masked
-    using min_support. Both hemispheres share one colour scale.
+    using min_support. Both hemispheres share one colour scale. Optional vmin
+    and vmax override colour limits (not data or masking). Missing limits use
+    the original defaults: 0 to max magnitude for absolute maps, otherwise
+    -max magnitude to +max magnitude. Explicit limits may be asymmetric.
 
     Optional meshes has pial_left/right, inflated_left/right and sulc_left/right
     attributes (defaults to hcp_utils.mesh); template defaults to MNI152 2 mm.
@@ -628,6 +631,11 @@ def plot_glasser_weights(values, coordinates, *, sigma=4., radius_sigma=3.,
         raise ValueError('sigma, radius_sigma and min_support must be positive finite values.')
     if threshold is not None and (not np.isfinite(threshold) or threshold < 0):
         raise ValueError('threshold must be nonnegative or None.')
+    limit = float(np.max(np.abs(values))) or 1.
+    color_min = (0. if absolute else -limit) if vmin is None else float(vmin)
+    color_max = limit if vmax is None else float(vmax)
+    if not np.isfinite([color_min, color_max]).all() or color_min >= color_max:
+        raise ValueError('Colour limits must be finite with vmin < vmax (including automatic defaults).')
     if meshes is None:
         try:
             import hcp_utils as hcp
@@ -689,8 +697,8 @@ def plot_glasser_weights(values, coordinates, *, sigma=4., radius_sigma=3.,
             getattr(meshes, f'inflated_{hemi}'), texture, hemi=hemi, view=view,
             bg_map=getattr(meshes, f'sulc_{hemi}'), axes=ax, figure=fig,
             cmap=cmap or ('Reds' if absolute else 'RdBu_r'),
-            vmin=0 if absolute else -limit, vmax=limit,
-            symmetric_cbar=not absolute, threshold=threshold, colorbar=True,
+            vmin=color_min, vmax=color_max,
+            symmetric_cbar=(not absolute and vmin is None and vmax is None), threshold=threshold, colorbar=True,
             title=f'{title or "Electrode weights"}: {hemi}',
         )
     if show:
