@@ -209,3 +209,31 @@ def test_shared_regions_preserve_metadata_and_anatomical_order():
     assert order==['A1','STG','HPC','PHC','S1','M1','DLPFC','OFC','Unassigned']
     table=regional_weight_summary({'iEEG':np.ones((2,1)),'MEG':np.ones((2,1))},datasets,labelled_metadata=metadata)
     assert table.query("modality == 'iEEG'").region.tolist()==['A1','HPC']
+
+
+def test_kmeans_hemisphere_split_and_region_means():
+    from modality_specificity import summarize_kmeans_regions_hemispheres
+    members=pd.DataFrame(dict(feature_row=range(5),cluster_id=[0,0,0,1,-1],subject=['a']*5,
+        x=[-10.,10.,0.,-20.,30.],y=0.,z=0.,input_weight_1=[-2.,4.,6.,8.,0.],
+        input_weight_2=[0.]*5,input_weight_3=[1.]*5))
+    metadata=members.copy();metadata['region_shared']=['A1','A1','HPC','HPC','A1']
+    result=summarize_kmeans_regions_hemispheres({'memberships':members},metadata)
+    centers=result['hemisphere_centroids']
+    assert centers.query("cluster_id == 0 and hemisphere == 'left'").centroid_x.iloc[0]==-10
+    assert centers.query("cluster_id == 0 and hemisphere == 'right'").centroid_x.iloc[0]==10
+    empty=centers.query("cluster_id == 1 and hemisphere == 'right'").iloc[0]
+    assert empty.n_sources==0 and np.isnan(empty.centroid_x)
+    assert result['hemisphere_audit'].query('cluster_id == 0').n_midline.iloc[0]==1
+    assert result['regional_weights'].query("cluster_id == 0 and region == 'A1' and component == 1").mean_abs_weight.iloc[0]==3
+    np.testing.assert_array_equal(result['memberships'].cluster_id,members.cluster_id)
+
+
+def test_regional_counts_include_duplicates_and_missing_regions():
+    from modality_specificity import regional_channel_counts
+    table=regional_channel_counts({'iEEG':pd.DataFrame({'region_shared':['HPC','A1','A1','Unassigned']}),
+                                   'MEG':pd.DataFrame({'region_shared':['M1','M1','A1']})})
+    assert table.query("modality == 'iEEG'").n_channels.sum()==4
+    assert table.query("modality == 'MEG'").n_channels.sum()==3
+    assert table.query("modality == 'iEEG' and region == 'A1'").n_channels.iloc[0]==2
+    assert table.query("modality == 'MEG' and region == 'HPC'").n_channels.iloc[0]==0
+    assert table.query("modality == 'iEEG'").region.tolist()==['A1','HPC','M1','Unassigned']

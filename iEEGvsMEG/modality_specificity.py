@@ -677,3 +677,121 @@ def plot_modality_glasser(datasets, values, *, ieeg_radius_mm=0., sigma=4., view
                 view=view,figure=fig,show=False,title=f'{modality} · component {c+1}',**kwargs)
             figures.append((modality,c+1,figure))
     return figures
+
+
+def summarize_kmeans_regions_hemispheres(result, labelled_metadata):
+    """Summarize existing K-means labels without refitting or relabelling.
+
+    Polar means use absolute selected-input weights (three components). Spatial
+    hemisphere centroids are unweighted means of native feature coordinates.
+    Exact x==0 features are counted as midline and excluded from left/right.
+    Empty hemispheres have count zero and NaN coordinates, never a fake centroid.
+    """
+    members = result['memberships'].copy()
+    meta = labelled_metadata.reset_index(drop=True)
+    rows = members.feature_row.to_numpy(int)
+    if len(meta) != len(members) or not np.array_equal(rows, np.arange(len(meta))):
+        raise ValueError('Shared region metadata must match K-means feature rows.')
+    if not np.allclose(members[['x','y','z']], meta[['x','y','z']], rtol=0, atol=1e-9):
+        raise ValueError('Shared region metadata coordinates/order differ from K-means inputs.')
+    members['region_shared'] = meta.region_shared.to_numpy()
+    members['hemisphere'] = np.where(members.x < 0,'left',np.where(members.x > 0,'right','midline'))
+    region_rows, center_rows, audit_rows = [], [], []
+    for cluster_id, frame in members[members.cluster_id >= 0].groupby('cluster_id',sort=True):
+        audit_rows.append(dict(cluster_id=cluster_id,n_total=len(frame),
+            n_left=int((frame.hemisphere=='left').sum()),n_right=int((frame.hemisphere=='right').sum()),
+            n_midline=int((frame.hemisphere=='midline').sum())))
+        for region, group in frame.groupby('region_shared',sort=False):
+            for component in (1,2,3):
+                region_rows.append(dict(cluster_id=cluster_id,region=region,component=component,
+                    n_channels=len(group),mean_abs_weight=float(group[f'input_weight_{component}'].abs().mean())))
+        for hemisphere in ('left','right'):
+            group = frame[frame.hemisphere == hemisphere]
+            xyz = group[['x','y','z']].to_numpy(float)
+            center = xyz.mean(axis=0) if len(xyz) else np.full(3,np.nan)
+            center_rows.append(dict(cluster_id=cluster_id,hemisphere=hemisphere,n_sources=len(group),
+                n_subjects=group.subject.nunique(),centroid_x=center[0],centroid_y=center[1],centroid_z=center[2],
+                spatial_rms_mm=float(np.sqrt(np.mean(np.sum((xyz-center)**2,axis=1)))) if len(xyz) else np.nan,
+                **{f'weight_centroid_{c}':group[f'input_weight_{c}'].mean() for c in (1,2,3)}))
+    return dict(regional_weights=pd.DataFrame(region_rows),hemisphere_centroids=pd.DataFrame(center_rows),
+                hemisphere_audit=pd.DataFrame(audit_rows),memberships=members)
+
+
+def plot_kmeans_cluster_polars(summary, title='', regions=None):
+    """One polar panel per cluster, three component curves; missing regions stay gaps."""
+    table = summary['regional_weights']
+    regions = ordered_regions(table.region.unique() if regions is None else regions)
+    angles = np.arange(len(regions))*2*np.pi/len(regions)
+    groups = list(table.groupby('cluster_id',sort=True))
+    cols = min(3,len(groups))
+    fig,axes = plt.subplots(int(np.ceil(len(groups)/cols)),cols,figsize=(6.5*cols,6*int(np.ceil(len(groups)/cols))),
+                           subplot_kw={'projection':'polar'},squeeze=False,constrained_layout=True)
+    palette = plt.get_cmap('tab20')
+    group_index = {r:g for g,(_,rs) in enumerate(REGION_GROUPS) for r in rs}
+    for ax,(cluster_id,frame) in zip(axes.flat,groups):
+        for component in (1,2,3):
+            values=frame[frame.component==component].set_index('region').mean_abs_weight.reindex(regions).to_numpy()
+            ax.plot(np.r_[angles,angles[0]],np.r_[values,values[0]],'o-',markersize=3,label=f'Component {component}')
+        ax.set_theta_offset(np.pi/2);ax.set_theta_direction(-1)
+        ax.set_xticks(angles,regions,fontsize=8)
+        for tick,r in zip(ax.get_xticklabels(),regions):tick.set_color(palette(group_index.get(r,len(REGION_GROUPS))))
+        ax.set_ylim(bottom=0);ax.set_title(f'Cluster {cluster_id} · mean absolute input weight',pad=25)
+    for ax in list(axes.flat)[len(groups):]:ax.set_visible(False)
+    axes.flat[0].legend(loc='upper right',bbox_to_anchor=(1.3,1.2),fontsize=8)
+    fig.suptitle(title)
+    return fig
+
+
+def plot_kmeans_hemisphere_centroids(summary, title=''):
+    """Large brain map: all features and cluster-coloured left/right spatial means."""
+    from matplotlib.colors import to_hex
+    from matplotlib.lines import Line2D
+    members = summary['memberships'];centers = summary['hemisphere_centroids']
+    clusters = sorted(members.loc[members.cluster_id>=0,'cluster_id'].unique())
+    colors = {c:to_hex(plt.get_cmap('turbo')(i/max(len(clusters)-1,1))) for i,c in enumerate(clusters)}
+    fig = plt.figure(figsize=(22,8))
+    brain=plotting.plot_glass_brain(None,figure=fig,display_mode='lyrz',
+        title=f'{title} · left/right spatial centroids (stars); K-means labels unchanged')
+    brain.add_markers(members[['x','y','z']].to_numpy(),marker_color='lightgray',marker_size=5,alpha=.2)
+    for cluster_id in clusters:
+        group=members[members.cluster_id==cluster_id]
+        brain.add_markers(group[['x','y','z']].to_numpy(),marker_color=colors[cluster_id],marker_size=12,alpha=.6)
+        valid=centers[(centers.cluster_id==cluster_id)&(centers.n_sources>0)]
+        if len(valid):
+            brain.add_markers(valid[['centroid_x','centroid_y','centroid_z']].to_numpy(),
+                marker_color=colors[cluster_id],marker_size=270,marker='*',edgecolors='black',linewidths=1.2)
+    fig.legend(handles=[Line2D([0],[0],marker='o',color='none',markerfacecolor=colors[c],label=f'C{c}') for c in clusters],
+               loc='lower center',ncol=min(8,len(clusters)))
+    return fig
+
+
+def regional_channel_counts(labelled_metadata):
+    """Count native feature rows per shared region, including co-located sources."""
+    regions = ordered_regions(set().union(*(set(frame.region_shared) for frame in labelled_metadata.values())))
+    groups = {r:group for group,labels in REGION_GROUPS for r in labels}
+    tables = []
+    for modality, frame in labelled_metadata.items():
+        counts = frame.region_shared.value_counts().reindex(regions,fill_value=0)
+        tables.append(pd.DataFrame(dict(modality=modality,region=regions,
+            region_group=[groups.get(r,'Other') for r in regions],n_channels=counts.to_numpy(dtype=int))))
+    return pd.concat(tables,ignore_index=True)
+
+
+def plot_regional_channel_counts(table):
+    """Counts in the same clockwise anatomical order/colours as weight polars."""
+    modalities = list(table.modality.unique())
+    regions = ordered_regions(table.region.unique())
+    angles = np.arange(len(regions))*2*np.pi/len(regions)
+    fig,axes = plt.subplots(1,len(modalities),figsize=(7*len(modalities),6.5),
+        subplot_kw={'projection':'polar'},squeeze=False,constrained_layout=True)
+    group_index = {r:g for g,(_,rs) in enumerate(REGION_GROUPS) for r in rs}
+    palette = plt.get_cmap('tab20')
+    for ax,modality in zip(axes.flat,modalities):
+        counts=table[table.modality==modality].set_index('region').n_channels.reindex(regions,fill_value=0).to_numpy()
+        ax.plot(np.r_[angles,angles[0]],np.r_[counts,counts[0]],'o-',markersize=4)
+        ax.set_theta_offset(np.pi/2);ax.set_theta_direction(-1)
+        ax.set_xticks(angles,regions,fontsize=9)
+        for tick,region in zip(ax.get_xticklabels(),regions):tick.set_color(palette(group_index.get(region,len(REGION_GROUPS))))
+        ax.set_ylim(bottom=0)
+        ax.set_title(f'{modality} · {int(counts.sum()):,} electrodes/sources\nCount per region',pad=25)
+    return fig
