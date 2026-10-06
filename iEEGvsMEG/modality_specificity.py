@@ -563,36 +563,84 @@ def average_spatial_groups(values, coordinates, *, radius_mm=0.):
     return positions, means, pd.DataFrame(dict(feature_row=np.arange(len(values)),display_group=labels))
 
 
-def regional_weight_summary(weights, datasets, *, meg_labeler=None):
-    """Native-feature mean |weight|, retaining zeros; no spatial averaging."""
-    if meg_labeler is None:
+# Display groups for the existing project labels, not a new atlas parcellation.
+REGION_GROUPS = (
+    ('Auditory / superior temporal', ('A1', 'STG')),
+    ('Other temporal', ('MTG', 'TP', 'VS')),
+    ('Medial temporal', ('HPC', 'PHC', 'AMY')),
+    ('Sensorimotor', ('S1', 'M1', 'premotor')),
+    ('Parietal', ('parietal',)),
+    ('Prefrontal', ('DLPFC', 'VLPFC', 'OFC')),
+    ('Insula / cingulate', ('INS', 'ACC', 'PCC')),
+    ('Occipital', ('Occ',)),
+    ('Subcortical', ('Caud', 'Put', 'Pal', 'THAL')),
+    ('Cerebellar', ('CERB',)),
+    ('Unassigned', ('Unassigned',)),
+)
+
+
+def ordered_regions(regions):
+    available = set(regions)
+    order = [r for _, labels in REGION_GROUPS for r in labels if r in available]
+    return order + sorted(available-set(order))
+
+
+def shared_coordinate_regions(datasets, *, labeler=None):
+    """One coordinate-based atlas mapping for both modalities; retain original labels.
+
+    Returns new metadata copies, never mutating the datasets. Coordinates are
+    native MNI mm, converted to metres for the legacy MEG get_region_label API.
+    """
+    if labeler is None:
         from region_labels import get_region_label
-        meg_labeler = get_region_label
+        labeler = get_region_label
+    names = list(datasets)
+    frames = [datasets[name].metadata.copy().reset_index(drop=True) for name in names]
+    coordinates = pd.concat([f[['x','y','z']] for f in frames],ignore_index=True)
+    if not np.isfinite(coordinates.to_numpy(float)).all():
+        raise ValueError('Regional labelling requires finite MNI coordinates in mm.')
+    labels = pd.Series(labeler(coordinates/1000.)).fillna('Unassigned').astype(str).replace(
+        {'N':'Unassigned','Background':'Unassigned','':'Unassigned'})
+    if len(labels)!=len(coordinates): raise ValueError('Atlas labels must match coordinate rows.')
+    offset, result = 0, {}
+    for name, frame in zip(names, frames):
+        frame['region_shared'] = labels.iloc[offset:offset+len(frame)].to_numpy()
+        frame['feature_row'] = np.arange(len(frame))
+        result[name] = frame
+        offset += len(frame)
+    return result
+
+
+def regional_weight_summary(weights, datasets, *, meg_labeler=None, labelled_metadata=None):
+    """Mean |weight| with the same coordinate-based labels for both modalities.
+
+    meg_labeler is retained for compatibility but is now used for BOTH modalities.
+    Pass shared_coordinate_regions output to labelled_metadata to reuse labels.
+    """
+    labelled = (shared_coordinate_regions(datasets, labeler=meg_labeler)
+                if labelled_metadata is None else labelled_metadata)
     tables = []
     for modality, dataset in datasets.items():
-        meta = dataset.metadata
-        if modality.lower() == 'ieeg':
-            if 'region' not in meta:
-                raise ValueError('iEEG metadata needs GetInfo region labels; reload with GetInfo or provide region metadata.')
-            labels = meta.region.to_numpy()
-        else:
-            # Legacy get_region_label explicitly expects metres, internal metadata is mm.
-            labels = meg_labeler(meta[['x','y','z']]/1000.)
-        labels = pd.Series(labels).fillna('Unassigned').astype(str).replace({'N':'Unassigned','Background':'Unassigned','':'Unassigned'})
+        labels = labelled[modality].region_shared.reset_index(drop=True)
         values = np.asarray(weights[modality],float)
         if len(labels)!=len(values): raise ValueError('Region labels must match native feature rows.')
         for c in range(values.shape[1]):
             frame = pd.DataFrame(dict(region=labels, magnitude=np.abs(values[:,c])))
-            summary = frame.groupby('region',sort=True).magnitude.agg(mean_abs_weight='mean',n_channels='size').reset_index()
+            summary = frame.groupby('region',sort=False).magnitude.agg(mean_abs_weight='mean',n_channels='size').reset_index()
             summary['modality'], summary['component'] = modality,c+1
             tables.append(summary)
-    return pd.concat(tables,ignore_index=True)
+    table = pd.concat(tables,ignore_index=True)
+    groups = {r:group for group,regions in REGION_GROUPS for r in regions}
+    table['region_group'] = table.region.map(groups).fillna('Other')
+    rank = {r:i for i,r in enumerate(ordered_regions(table.region))}
+    return table.assign(_order=table.region.map(rank)).sort_values(
+        ['modality','component','_order']).drop(columns='_order').reset_index(drop=True)
 
 
 def plot_regional_weight_polar(table):
     """One polar panel per modality/component; absent regions are gaps, not zeros."""
     modalities = list(table.modality.unique()); components = sorted(table.component.unique())
-    regions = sorted(table.region.unique()); angles = np.arange(len(regions))*2*np.pi/len(regions)
+    regions = ordered_regions(table.region.unique()); angles = np.arange(len(regions))*2*np.pi/len(regions)
     fig,axes = plt.subplots(len(components),len(modalities),figsize=(7*len(modalities),5.5*len(components)),
                            subplot_kw={'projection':'polar'},squeeze=False,constrained_layout=True)
     for i,c in enumerate(components):
@@ -600,7 +648,13 @@ def plot_regional_weight_polar(table):
             ax=axes[i,j]
             values=table[(table.component==c)&(table.modality==m)].set_index('region').mean_abs_weight.reindex(regions).to_numpy()
             ax.plot(np.r_[angles,angles[0]],np.r_[values,values[0]],'o-',markersize=4)
+            ax.set_theta_offset(np.pi/2)
+            ax.set_theta_direction(-1)
             ax.set_xticks(angles,regions,fontsize=9)
+            palette = plt.get_cmap('tab20')
+            group_index = {r:g for g,(_,rs) in enumerate(REGION_GROUPS) for r in rs}
+            for tick, region in zip(ax.get_xticklabels(), regions):
+                tick.set_color(palette(group_index.get(region, len(REGION_GROUPS))))
             ax.set_ylim(bottom=0)
             ax.set_title(f'{m} · component {c}\nMean absolute weight',pad=25)
     return fig

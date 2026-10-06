@@ -182,12 +182,30 @@ def test_meg_spacing_and_nonchaining_display_means():
 def test_region_means_and_meg_label_units():
     from types import SimpleNamespace
     from modality_specificity import regional_weight_summary
-    ieeg=SimpleNamespace(metadata=pd.DataFrame({'region':['A','A','B']}))
+    ieeg=SimpleNamespace(metadata=pd.DataFrame({'x':[1.,2.,3.],'y':0.,'z':0.,'region':['old1','old2','old3']}))
     meg=SimpleNamespace(metadata=pd.DataFrame({'x':[10.,20.],'y':0.,'z':0.}))
     def labeler(coords):
-        np.testing.assert_allclose(coords.x,[.01,.02])
-        return ['A',None]
+        np.testing.assert_allclose(coords.x,[.001,.002,.003,.01,.02])
+        return ['A','A','B','A',None]
     table=regional_weight_summary({'iEEG':np.array([[-2.],[0.],[6.]]),'MEG':np.array([[4.],[-8.]])},
                                  {'iEEG':ieeg,'MEG':meg},meg_labeler=labeler)
     assert table.query("modality == 'iEEG' and region == 'A'").mean_abs_weight.iloc[0]==1
     assert table.query("modality == 'MEG' and region == 'Unassigned'").mean_abs_weight.iloc[0]==8
+
+
+def test_shared_regions_preserve_metadata_and_anatomical_order():
+    from types import SimpleNamespace
+    from modality_specificity import shared_coordinate_regions, ordered_regions, regional_weight_summary
+    original = pd.DataFrame({'x':[10.,20.], 'y':0., 'z':0., 'region':['legacy1','legacy2']},index=[9,4])
+    datasets = {'iEEG':SimpleNamespace(metadata=original),'MEG':SimpleNamespace(metadata=original.drop(columns='region'))}
+    def labeler(coords):
+        np.testing.assert_allclose(coords.x,[.01,.02,.01,.02])
+        return ['HPC','A1','HPC','A1']
+    metadata=shared_coordinate_regions(datasets,labeler=labeler)
+    assert metadata['iEEG'].region_shared.tolist()==metadata['MEG'].region_shared.tolist()
+    assert metadata['iEEG'].region.tolist()==['legacy1','legacy2']
+    assert 'region_shared' not in original
+    order=ordered_regions(['OFC','S1','PHC','STG','A1','DLPFC','HPC','M1','Unassigned'])
+    assert order==['A1','STG','HPC','PHC','S1','M1','DLPFC','OFC','Unassigned']
+    table=regional_weight_summary({'iEEG':np.ones((2,1)),'MEG':np.ones((2,1))},datasets,labelled_metadata=metadata)
+    assert table.query("modality == 'iEEG'").region.tolist()==['A1','HPC']
