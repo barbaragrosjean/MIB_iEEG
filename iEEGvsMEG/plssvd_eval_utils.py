@@ -645,6 +645,8 @@ def _validate_iteration(trials,meg_kind,options=None,output_dir='out/plssvd_eval
 def load_plssvd_results(output_dir, cache_dir=None):
     """Reload a completed plssvd_eval.py run without reading raw trials.
 
+    Repeated runs use all completed child iterations, even if interrupted.
+    Unfinished children are excluded; aggregate tables are rebuilt in memory.
     Only result tables, axes, primary scores and null distributions are loaded.
     Large model weights/prediction maps remain on disk; ``artifacts`` provides
     paths for optional np.load/pd.read_csv access. For older output directories
@@ -654,21 +656,54 @@ def load_plssvd_results(output_dir, cache_dir=None):
     root=Path(output_dir).expanduser().resolve()
     options=json.loads((root/'validation_options.json').read_text())
     if options.get('schema_version') == 4:
-        if not (root/'COMPLETE.json').is_file():
-            raise FileNotFoundError('Repeated evaluation is incomplete: COMPLETE.json is absent.')
-        for iteration in range(options['n_iterations']):
-            if not (root/f'iteration_{iteration:03d}'/'COMPLETE.json').is_file():
-                raise FileNotFoundError(f'Missing completed iteration {iteration}.')
-        result = load_plssvd_results(root/'iteration_000', cache_dir)
-        result['iteration_stability'] = pd.read_csv(root/'iteration_stability.csv')
-        result['iteration_options'] = options
-        result['iterations_output_dir'] = root
-        for name in ('summary','components','fold_metrics','fold_stability','metrics','metric_summary'):
-            filename = name if name in ('summary','components','fold_metrics','fold_stability') else 'iteration_'+name
-            result['iteration_'+name] = pd.read_csv(root/f'{filename}.csv')
+        # The parent completion marker and aggregate CSVs are only written at
+        # the very end. Rebuild from completed children, never from stale totals.
+        iterations = [i for i in range(options['n_iterations'])
+                      if (root/f'iteration_{i:03d}'/'COMPLETE.json').is_file()]
+        if not iterations:
+            raise FileNotFoundError('No completed iterations available; at least one full K-fold iteration is required.')
+        tables = {name: [] for name in ('summary','components','fold_metrics','fold_stability')}
+        stability_rows = []
+        result = None
+        for iteration in iterations:
+            child = root/f'iteration_{iteration:03d}'
+            missing_models = [f for f in range(options['repeats'])
+                              if not (child/f'model_{f:03d}.npz').is_file()]
+            if missing_models:
+                raise FileNotFoundError(f'{child}: marked complete but missing fold models {missing_models}.')
+            current = load_plssvd_results(child, cache_dir)
+            if result is None:
+                result = current
+            else:
+                stability, _ = _across_split_stability(
+                    [result['primary_scores'], current['primary_scores']], options['n_components'])
+                stability_rows.append(stability.assign(reference_iteration=iterations[0], iteration=iteration))
+            for name in tables:
+                tables[name].append(current[name].assign(iteration=iteration))
+        for name, frames in tables.items():
+            result['iteration_'+name] = pd.concat(frames, ignore_index=True)
+        metrics = result['iteration_fold_metrics']
+        columns = [c for c in metrics.select_dtypes(include='number')
+                   if c not in ('repeat','iteration','n_components')]
+        means = metrics.groupby(['iteration','partition'])[columns].mean().reset_index()
+        result['iteration_metrics'] = means
+        result['iteration_metric_summary'] = means.melt(
+            id_vars=['iteration','partition'], var_name='metric').groupby(
+            ['partition','metric']).value.agg(['count','mean','std','min','max']).reset_index()
+        stability_columns = ['fold_a','fold_b','partition','modality','n_components',
+                             'matched_abs_r','status','reference_iteration','iteration']
+        result['iteration_stability'] = (pd.concat(stability_rows, ignore_index=True)
+            if stability_rows else pd.DataFrame(columns=stability_columns))
+        result.update(iteration_options=options, iterations_output_dir=root,
+                      available_iterations=iterations, n_iterations_loaded=len(iterations),
+                      n_iterations_requested=options['n_iterations'],
+                      is_partial=len(iterations) < options['n_iterations'])
         for name in ('trial_counts','electrode_metadata'):
             if (root/f'{name}.csv').exists():
                 result[name] = pd.read_csv(root/f'{name}.csv')
+        print(f"Loaded {len(iterations)}/{options['n_iterations']} completed iterations; "
+              f"first-iteration figures use iteration {iterations[0]+1}. "
+              "Unfinished iterations are excluded.")
         return result
     fixed = options.get('schema_version', 1) >= 2
     if fixed and not (root/'COMPLETE.json').is_file():
@@ -1061,11 +1096,11 @@ def plot_iteration_summary(output_dir):
     root = Path(output_dir)
     result = load_plssvd_results(root)
     config = result['iteration_options']
-    n, k, folds = config['n_iterations'], config['n_components'], config['repeats']
+    n, k, folds = result['n_iterations_loaded'], config['n_components'], config['repeats']
     cov = {p: [] for p in ('train','test')}
     curves = {(p,m): [] for p in ('train','test') for m in ('ieeg','meg')}
     correlations = []
-    for iteration in range(n):
+    for iteration in result['available_iterations']:
         fold_correlations = []
         for fold in range(folds):
             with np.load(root/f'iteration_{iteration:03d}'/f'model_{fold:03d}.npz') as saved:
@@ -1120,11 +1155,12 @@ def plot_iteration_summary(output_dir):
             ax.errorbar(np.arange(folds)+1,grouped.mean(),yerr=grouped.std() if n>1 else None,
                         marker='o',capsize=3,label=part)
         ax.set(title=title,xlabel='Fold',ylabel='Mean ± SD');ax.legend()
-    fig.suptitle(f'{n} iterations × {folds} folds · {validation_run_name(config["perm"], config["perm_type"])}\n'
+    fig.suptitle(f'{n}/{config["n_iterations"]} completed iterations × {folds} folds · {validation_run_name(config["perm"], config["perm_type"])}\n'
                  'Descriptive SD; same trials reused. Native component order, training-only sign orientation.')
     for extension in ('png','pdf'):
         fig.savefig(root/f'iteration_summary.{extension}',dpi=180)
     np.savez_compressed(root/'iteration_correlation_summary.npz',iteration_means=correlations,
+                        iteration_ids=result['available_iterations'],
                         mean=stats(correlations)[0],std=stats(correlations)[1] if n>1 else np.full((k,k),np.nan))
     return fig
 
@@ -1138,12 +1174,15 @@ def plot_permutation_comparison(runs_dir):
     """
     root=Path(runs_dir)
     def read_run(path):
-        if not (path/'COMPLETE.json').exists():
+        if not (path/'validation_options.json').exists():
             return None
         config=json.loads((path/'validation_options.json').read_text())
         if config.get('schema_version') != 4:
             raise ValueError(f'{path}: requires repeated evaluation schema 4.')
-        frame=pd.read_csv(path/'iteration_metrics.csv')
+        if not any((path/f'iteration_{i:03d}'/'COMPLETE.json').is_file()
+                   for i in range(config['n_iterations'])):
+            return None
+        frame=load_plssvd_results(path)['iteration_metrics']
         return config,frame.loc[frame.partition=='test','mean_r'].dropna().to_numpy()
     baseline=read_run(root/'none')
     fig,axes=plt.subplots(3,4,figsize=(18,11),layout='constrained',sharex=True)
@@ -1151,15 +1190,15 @@ def plot_permutation_comparison(runs_dir):
         for col,kind in enumerate(PERMUTATION_TYPES):
             ax=axes[row,col]; run=read_run(root/validation_run_name(perm,kind))
             if baseline is not None:
-                ax.hist(baseline[1],bins=np.linspace(-1,1,31),density=True,histtype='step',lw=2,label='Unpermuted')
+                ax.hist(baseline[1],bins=np.linspace(-1,1,31),density=True,histtype='step',lw=2,label=f'Unpermuted (n={len(baseline[1])})')
             if run is None:
                 ax.text(.5,.5,'Run not available',transform=ax.transAxes,ha='center')
             else:
                 if baseline is not None:
-                    for key in ('seed','repeats','n_iterations','n_components','meg_kind','split_unit','block_scaling','ridge'):
+                    for key in ('seed','repeats','n_components','meg_kind','split_unit','block_scaling','ridge'):
                         if run[0][key]!=baseline[0][key]:
                             raise ValueError(f'Incompatible baseline and {perm}/{kind}: {key}')
-                ax.hist(run[1],bins=np.linspace(-1,1,31),density=True,alpha=.6,label=f'{perm} permuted')
+                ax.hist(run[1],bins=np.linspace(-1,1,31),density=True,alpha=.6,label=f'{perm} permuted (n={len(run[1])})')
             ax.set(title=f'{perm.upper()} · {kind}',xlabel='Iteration mean held-out Pearson r',ylabel='Density',xlim=(-1,1))
             if baseline is not None or run is not None:ax.legend(fontsize=8)
     fig.suptitle('Permutation effects: distributions across iterations (mean over folds and paired components)')

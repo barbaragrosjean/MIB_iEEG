@@ -57,6 +57,52 @@ class RepeatedEvaluationTests(unittest.TestCase):
                 self.assertTrue(result['iteration_stability'].empty)
             plt.close(plot_iteration_summary(root))
 
+    def test_interrupted_runs(self):
+        from unittest.mock import patch
+        from contextlib import redirect_stdout
+        from io import StringIO
+        import plssvd_eval_utils as module
+        original = module._validate_iteration
+        calls = []
+        def interrupted(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 3:
+                Path(args[3]).mkdir()  # incomplete next iteration
+                raise RuntimeError('Simulated cluster interruption')
+            return original(*args, **kwargs)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)/'none'
+            with patch.object(module, '_validate_iteration', side_effect=interrupted):
+                with self.assertRaisesRegex(RuntimeError, 'Simulated'):
+                    validate_plssvd(synthetic_trials(), 'full_concatenated',
+                                   ValidationOptions(n_iterations=4,n_components=2), root)
+            self.assertFalse((root/'COMPLETE.json').exists())
+            self.assertFalse((root/'iteration_metrics.csv').exists())
+            output = StringIO()
+            with redirect_stdout(output):
+                result = load_plssvd_results(root)
+            self.assertIn('Loaded 2/4', output.getvalue())
+            self.assertEqual(result['available_iterations'], [0,1])
+            self.assertTrue(result['is_partial'])
+            self.assertEqual(len(result['iteration_summary']), 10)
+            self.assertTrue((result['iteration_metric_summary']['count'] == 2).all())
+            expected = result['iteration_fold_metrics'].groupby(['iteration','partition']).mean_r.mean()
+            np.testing.assert_allclose(result['iteration_metrics'].mean_r, expected)
+            plt.close(plot_iteration_summary(root))
+            fig = plot_permutation_comparison(root.parent)
+            self.assertIn('n=2', fig.axes[0].get_legend_handles_labels()[1][0])
+            plt.close(fig)
+            # Available IDs need not be contiguous or start at zero.
+            (root/'iteration_000'/'COMPLETE.json').unlink()
+            single = load_plssvd_results(root)
+            self.assertEqual(single['available_iterations'], [1])
+            self.assertEqual(single['output_dir'], (root/'iteration_001').resolve())
+            self.assertTrue(single['iteration_metric_summary']['std'].isna().all())
+            plt.close(plot_iteration_summary(root))
+            (root/'iteration_001'/'COMPLETE.json').unlink()
+            with self.assertRaisesRegex(FileNotFoundError, 'No completed iterations'):
+                load_plssvd_results(root)
+
     def test_full_repeated_run_and_plots(self):
         trials=synthetic_trials()
         with tempfile.TemporaryDirectory() as directory:
