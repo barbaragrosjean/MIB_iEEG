@@ -4,7 +4,7 @@ All trainable normalisation, PLS weights and prediction maps are training-only.
 Component count is fixed in advance. The same cohort and anatomical assignment
 are evaluated on shuffled K-fold trial splits, without tuning.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import mkdtemp
 from contextlib import contextmanager
@@ -26,7 +26,10 @@ from cov_models_utils import _gram, _spectrum, _weights
 class ValidationOptions:
     repeats: int = 5
     n_components: int = 5
-    n_null: int = 199
+    n_iterations: int = 100
+    perm: str = None
+    perm_type: str = None
+    block_seconds: float = 0.36
     seed: int = 2026
     split_unit: str = 'trial'    # 'group' uses split_group from trial metadata
     block_scaling: str = 'none'
@@ -288,12 +291,15 @@ def _trial_mean(array,indices):
     return mean/len(indices)
 
 
-def _build_fold(trials,meg_kind,split_indices,root,seed,mmap_handles=None,condition_mode="stack"):
+def _build_fold(trials,meg_kind,split_indices,root,seed,mmap_handles=None,condition_mode="stack", permutation_options=None, permutation_seed=None):
+    permutation_rng = np.random.default_rng(permutation_seed)
     prepared={m:{} for m in ('ieeg','meg')};scalers={m:{} for m in ('ieeg','meg')}
     for modality,subjects in [('ieeg',trials.ieeg),('meg',trials.meg)]:
         for s in subjects:
             ix=split_indices[modality][s.subject]
             train=np.stack([_trial_mean(a,i) for a,i in zip(s.data,ix['train'])])
+            transform = _permutation_indices(train.shape[1:], trials.times, permutation_options, modality, permutation_rng)
+            train = _apply_permutation(train, transform)
             multiplier=1000. if modality=='ieeg' else 1.
             # Match original pipeline: MEG z-score based on TRAIN condition averages only.
             mu=train.mean(axis=(0,2),keepdims=True) if modality=='meg' else np.zeros((1,train.shape[1],1))
@@ -307,7 +313,7 @@ def _build_fold(trials,meg_kind,split_indices,root,seed,mmap_handles=None,condit
                 if mmap_handles is not None:
                     mmap_handles.append(out)
                 for c,(a,indices) in enumerate(zip(s.data,parts)):
-                    mean=train[c] if name=='train' else _trial_mean(a,indices)
+                    mean=train[c] if name=='train' else _apply_permutation(_trial_mean(a,indices), transform)
                     out[c]=((mean-mu[0])/sd[0])*multiplier
                 out.flush();prepared[modality][s.subject][name]=out
     metadata=pd.concat([s.metadata for s in trials.ieeg],ignore_index=True)
@@ -329,7 +335,7 @@ def _build_fold(trials,meg_kind,split_indices,root,seed,mmap_handles=None,condit
 
 
 @contextmanager
-def _temporary_fold(trials, meg_kind, split_indices, seed, scratch_dir=None, condition_mode="stack"):
+def _temporary_fold(trials, meg_kind, split_indices, seed, scratch_dir=None, condition_mode="stack", permutation_options=None, permutation_seed=None):
     """Own scratch mappings until computation finishes; close BEFORE unlinking.
 
     Only mappings created by _build_fold are closed, never the input trial cache.
@@ -344,7 +350,8 @@ def _temporary_fold(trials, meg_kind, split_indices, seed, scratch_dir=None, con
     scratch=Path(mkdtemp(prefix='fold_means_',dir=scratch_dir))
     handles=[]
     try:
-        yield _build_fold(trials,meg_kind,split_indices,scratch,seed,mmap_handles=handles,condition_mode=condition_mode)
+        yield _build_fold(trials,meg_kind,split_indices,scratch,seed,mmap_handles=handles,condition_mode=condition_mode,
+                          permutation_options=permutation_options, permutation_seed=permutation_seed)
     finally:
         # Views may still reference these arrays, but no fold operations are
         # allowed after this context exits. Own each underlying mapping once.
@@ -463,103 +470,6 @@ def _raw_weights(trials,fold,model,scalers,audit,kind,modality,k):
     return out
 
 
-def _test_trial_projections(trials,indices,weights):
-    out=[]
-    for s in trials.meg:
-        if not np.any(weights[s.subject]):continue
-        values=[];labels=[];blocks=[]
-        for c,(a,ix) in enumerate(zip(s.data,indices['meg'][s.subject]['test'])):
-            for i in ix:
-                values.append(a[i].T@weights[s.subject]);labels.append(c)
-                block=str(s.permutation_blocks[c][i])
-                if s.split_groups[c] is not None:block+='|'+str(s.split_groups[c][i])
-                blocks.append(block)
-        out.append((np.asarray(values),np.asarray(labels),np.asarray(blocks)))
-    return out
-
-
-def _permuted_contrast(projected,rng=None):
-    total=None;movable=False
-    for values,labels,blocks in projected:
-        lab=labels.copy()
-        for block in np.unique(blocks):
-            ix=np.flatnonzero(blocks==block)
-            if len(np.unique(lab[ix]))>1:movable=True
-            if rng is not None:lab[ix]=rng.permutation(lab[ix])
-        difference=values[lab==1].mean(0)-values[lab==0].mean(0)
-        total=difference if total is None else total+difference
-    return total,movable
-
-
-def _tail(observed,null):
-    null=np.asarray(null)
-    if not np.isfinite(observed) or not np.isfinite(null).all():return np.nan
-    return (1+np.sum(null>=observed))/(1+len(null))
-
-
-def _null_tests(trials,fold,model,scalers,audit,kind,indices,scores,patterns,k,options,rng):
-    x,y=scores['test']['ieeg'][:,:k],scores['test']['meg'][:,:k]
-    cx,cy=_contrast(x,len(trials.times)),_contrast(y,len(trials.times))
-    ix=fold['test']['meg'].electrode_to_feature
-    px,py=patterns['test']['ieeg'],patterns['test']['meg'][ix]
-    weights=_raw_weights(trials,fold,model,scalers,audit,kind,'meg',k)
-    projected=_test_trial_projections(trials,indices,weights)
-    direct,movable=_permuted_contrast(projected)
-    # Confirms that the trial-level null uses exactly the same aggregation and
-    # TRAINING-only normalisation/weights as the observed condition contrast.
-    np.testing.assert_allclose(direct,cy,rtol=2e-4,atol=2e-4*max(1.,float(np.max(np.abs(cy)))))
-    meta=fold['test']['ieeg'].metadata
-    spatial_groups=meta['subject'].astype(str).to_numpy()
-    if 'region' in meta:spatial_groups=spatial_groups+'|'+meta.region.fillna('unknown').astype(str).to_numpy()
-    groups=[np.flatnonzero(spatial_groups==g) for g in np.unique(spatial_groups)]
-    spatial_movable=any(len(g)>1 for g in groups)
-    observed={'temporal_shift':_association(x,y),
-              'condition_labels':_association(cx,cy,True),
-              'spatial_correspondence':_association(px,py,True)}
-    values={name:[] for name in observed}
-    for _ in range(options.n_null):
-        shift=int(rng.integers(1,len(trials.times)))
-        ys=np.roll(y.reshape(2,len(trials.times),k),shift,axis=1).reshape(y.shape)
-        values['temporal_shift'].append(_association(x,ys))
-        if movable:
-            perm,_=_permuted_contrast(projected,rng)
-            values['condition_labels'].append(_association(cx,perm,True))
-        if spatial_movable:
-            permutation=np.arange(len(py))
-            for group in groups:permutation[group]=rng.permutation(group)
-            values['spatial_correspondence'].append(_association(px,py[permutation],True))
-    rows=[]
-    for name,null in values.items():
-        rows.append(dict(test=name,observed=observed[name],tail_fraction=_tail(observed[name],null) if null else np.nan,
-            n_null=len(null),interpretation='held-out conditional label permutation' if name=='condition_labels' else 'surrogate / correspondence diagnostic',
-            note='' if null else 'No exchangeable groups, or null tests disabled.'))
-    return pd.DataFrame(rows),values
-
-
-def _average_null_tests(fold, scores, patterns, options, rng):
-    """Diagnostics for the condition-averaged response; no condition-label null."""
-    x, y = scores['test']['ieeg'], scores['test']['meg']
-    ix = fold['test']['meg'].electrode_to_feature
-    px, py = patterns['test']['ieeg'], patterns['test']['meg'][ix]
-    meta = fold['test']['ieeg'].metadata
-    labels = meta['subject'].astype(str).to_numpy()
-    if 'region' in meta:
-        labels = labels + '|' + meta.region.fillna('unknown').astype(str).to_numpy()
-    groups = [np.flatnonzero(labels == g) for g in np.unique(labels)]
-    values = dict(temporal_shift=[], spatial_correspondence=[])
-    observed = dict(temporal_shift=_association(x,y), spatial_correspondence=_association(px,py,True))
-    for _ in range(options.n_null):
-        values['temporal_shift'].append(_association(x,np.roll(y,int(rng.integers(1,len(y))),axis=0)))
-        if any(len(g)>1 for g in groups):
-            perm = np.arange(len(py))
-            for g in groups: perm[g] = rng.permutation(g)
-            values['spatial_correspondence'].append(_association(px,py[perm],True))
-    return pd.DataFrame([dict(test=name, observed=observed[name],
-        tail_fraction=_tail(observed[name],null) if null else np.nan, n_null=len(null),
-        interpretation='surrogate / correspondence diagnostic',
-        note='' if null else 'No exchangeable spatial groups.') for name,null in values.items()]), values
-
-
 def _reconstruction_fraction(dataset, scores, model, modality):
     """Own-modality orthogonal reconstruction, relative to TRAIN feature means."""
     error = baseline = 0.
@@ -621,7 +531,7 @@ def _across_split_stability(all_scores, k):
             pd.DataFrame(pairs, columns=['fold_a','fold_b','partition','modality','n_components','component_a','component_b','signed_r','abs_r','sign_b']))
 
 
-def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval_kfold',scratch_dir=None):
+def _validate_iteration(trials,meg_kind,options=None,output_dir='out/plssvd_eval_kfold',scratch_dir=None, matching_seed=None, permutation_seed=None):
     """Fixed-k shuffled K-fold evaluation; cohort and matching never change.
 
     All folds (including fold 0) split trials. No tuning, subject subsampling,
@@ -630,7 +540,7 @@ def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval_kfo
     with equal weight after trial averaging, before fitting and evaluation.
     """
     options = options or ValidationOptions()
-    for name, minimum in [('n_components',1), ('repeats',2), ('n_null',0)]:
+    for name, minimum in [('n_components',1), ('repeats',2)]:
         value = getattr(options, name)
         if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < minimum:
             raise ValueError(f'{name} must be an integer >= {minimum}.')
@@ -652,8 +562,9 @@ def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval_kfo
         scope='new trials from the same participants; not held-out subjects, times or locations')
     (out/'validation_options.json').write_text(json.dumps(settings, indent=2))
     k = options.n_components
-    matching_seq, split_seq, null_seq = np.random.SeedSequence(options.seed).spawn(3)
-    matching_seed = int(np.random.default_rng(matching_seq).integers(2**31-1))
+    matching_seq, split_seq, _ = np.random.SeedSequence(options.seed).spawn(3)
+    if matching_seed is None:
+        matching_seed = int(np.random.default_rng(matching_seq).integers(2**31-1))
     summaries, components, split_rows, participants, fold_metrics, all_scores = [], [], [], [], [], []
     null_summary = pd.DataFrame(columns=['test','observed','tail_fraction','n_null','interpretation','note'])
     null_values = {}; primary_scores = {}
@@ -672,7 +583,8 @@ def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval_kfo
                             split_rows.append(dict(repeat=repeat, modality=modality, subject=subject.subject,
                                 condition=trials.conditions[ci], trial_index=int(trial), partition=part,
                                 split_group=subject.split_groups[ci][trial] if subject.split_groups[ci] is not None else ''))
-        with _temporary_fold(trials, meg_kind, indices, matching_seed, scratch_dir, condition_mode="average") as prepared:
+        with _temporary_fold(trials, meg_kind, indices, matching_seed, scratch_dir, condition_mode="average",
+                             permutation_options=options, permutation_seed=permutation_seed) as prepared:
             fold, scalers, audit, pairing = prepared
             model = _fit(fold['train'], k, options)
             if model['k_max'] != k:
@@ -685,7 +597,6 @@ def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval_kfo
             for part in ('train','test'):
                 evaluations[part], covariances[part] = _evaluate_fixed_model(fold[part], scores[part], model, predictors)
                 fold_metrics.append(dict(repeat=repeat, partition=part, n_components=k, **evaluations[part]))
-            patterns = {'test': {m: _patterns(ds, scores['test'][m]) for m, ds in fold['test'].items()}}
             train_r = _r(scores['train']['ieeg'], scores['train']['meg'])
             test_r = _r(scores['test']['ieeg'], scores['test']['meg'])
             row = dict(repeat=repeat, n_components=k, n_ieeg=len(trials.ieeg), n_meg=len(trials.meg),
@@ -703,8 +614,6 @@ def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval_kfo
             all_scores.append({part: {m: scores[part][m].copy() for m in ('ieeg','meg')} for part in ('train','test')})
             if repeat == 0:
                 primary_scores = {part: {m: v.copy() for m,v in values.items()} for part,values in scores.items()}
-                if options.n_null:
-                    null_summary, null_values = _average_null_tests(fold, scores, patterns, options, np.random.default_rng(null_seq))
             audit.to_csv(out/f'matching_{repeat:03d}.csv', index=False)
             (out/f'pairing_{repeat:03d}.json').write_text(json.dumps(pairing, indent=2))
             for m in ('ieeg','meg'): fold['train'][m].metadata.to_csv(out/f'{m}_features_{repeat:03d}.csv', index=False)
@@ -728,9 +637,6 @@ def validate_plssvd(trials,meg_kind,options=None,output_dir='out/plssvd_eval_kfo
         validation_options=settings)
     for name in ('summary','components','fold_metrics','metric_summary','fold_stability','fold_component_pairs','split_audit','participants'):
         result[name].to_csv(out/f'{name}.csv', index=False)
-    if options.n_null:
-        null_summary.to_csv(out/'primary_null_tests.csv', index=False)
-        np.savez_compressed(out/'primary_null_distributions.npz', **null_values)
     np.savez_compressed(out/'trial_axes.npz', times=trials.times, conditions=trials.conditions)
     (out/'COMPLETE.json').write_text(json.dumps(dict(schema_version=3, repeats=options.repeats, n_components=k)))
     return result
@@ -747,6 +653,23 @@ def load_plssvd_results(output_dir, cache_dir=None):
     """
     root=Path(output_dir).expanduser().resolve()
     options=json.loads((root/'validation_options.json').read_text())
+    if options.get('schema_version') == 4:
+        if not (root/'COMPLETE.json').is_file():
+            raise FileNotFoundError('Repeated evaluation is incomplete: COMPLETE.json is absent.')
+        for iteration in range(options['n_iterations']):
+            if not (root/f'iteration_{iteration:03d}'/'COMPLETE.json').is_file():
+                raise FileNotFoundError(f'Missing completed iteration {iteration}.')
+        result = load_plssvd_results(root/'iteration_000', cache_dir)
+        result['iteration_stability'] = pd.read_csv(root/'iteration_stability.csv')
+        result['iteration_options'] = options
+        result['iterations_output_dir'] = root
+        for name in ('summary','components','fold_metrics','fold_stability','metrics','metric_summary'):
+            filename = name if name in ('summary','components','fold_metrics','fold_stability') else 'iteration_'+name
+            result['iteration_'+name] = pd.read_csv(root/f'{filename}.csv')
+        for name in ('trial_counts','electrode_metadata'):
+            if (root/f'{name}.csv').exists():
+                result[name] = pd.read_csv(root/f'{name}.csv')
+        return result
     fixed = options.get('schema_version', 1) >= 2
     if fixed and not (root/'COMPLETE.json').is_file():
         raise FileNotFoundError('Fixed-k evaluation is incomplete: COMPLETE.json is absent.')
@@ -893,6 +816,7 @@ def _plot_fixed_evaluation(result, finish):
     for ax, (part, matrix) in zip(axes, matrices.items()):
         im = ax.imshow(matrix, cmap='RdBu_r', vmin=-limit, vmax=limit)
         k = len(matrix)
+        _annotate_matrix(ax, matrix, fmt='.1f')
         ax.set(title=f'First split: {part}', xlabel='MEG component', ylabel='iEEG component',
                xticks=range(k), xticklabels=range(1,k+1), yticks=range(k), yticklabels=range(1,k+1))
         fig.colorbar(im, ax=ax, label='Native score cross-covariance')
@@ -987,3 +911,256 @@ def plot_test_score_correlations(output_dir, n_components=25, absolute=True):
     fig.supxlabel('Correlations across test time points; equal fold weights. No component rematching across folds.',fontsize=9)
     for ext in ('png','pdf'):fig.savefig(stem.with_suffix('.'+ext),dpi=180,bbox_inches='tight')
     return fig,table
+
+
+PERMUTATION_TYPES = ('time_cirular_shift', 'time_block', 'time_point', 'space')
+
+
+def _checked_options(options):
+    perm = None if options.perm in (None, 'none') else options.perm
+    kind = None if options.perm_type in (None, 'none') else options.perm_type
+    if kind == 'time_circular_shift':
+        kind = 'time_cirular_shift'
+    if perm not in (None, 'ieeg', 'meg', 'both') or kind not in (None,) + PERMUTATION_TYPES:
+        raise ValueError('Unknown perm or perm_type.')
+    if (perm is None) != (kind is None):
+        raise ValueError('Set both perm and perm_type, or leave both as none.')
+    for name, minimum in [('n_iterations', 1), ('repeats', 2), ('n_components', 1)]:
+        value = getattr(options, name)
+        if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < minimum:
+            raise ValueError(f'{name} must be an integer >= {minimum}.')
+    if not np.isfinite(options.block_seconds) or options.block_seconds <= 0:
+        raise ValueError('block_seconds must be positive and finite.')
+    return replace(options, perm=perm, perm_type=kind)
+
+
+def _permutation_indices(shape, times, options, modality, rng):
+    """One transform per participant/iteration, shared across conditions/folds/partitions.
+
+    Time transforms independently shuffle each channel's time axis. Space
+    shuffles channels independently at each time point (a single fixed channel
+    relabeling would be invariant under an unconstrained PLSSVD refit).
+    Both modalities receive independent draws. Coordinates stay fixed.
+    """
+    if options is None or options.perm not in (modality, 'both'):
+        return None
+    channels, n_times = shape
+    rows = np.broadcast_to(np.arange(channels)[:, None], shape).copy()
+    cols = np.broadcast_to(np.arange(n_times), shape).copy()
+    kind = options.perm_type
+    if kind == 'space':
+        if channels < 2:
+            raise ValueError('Space permutation requires at least two channels per participant.')
+        for t in range(n_times):
+            rows[:, t] = rng.permutation(channels)
+    else:
+        if n_times < 2:
+            raise ValueError('Time permutation requires at least two time points.')
+        if kind == 'time_block':
+            dt = np.diff(times)
+            if not np.allclose(dt, dt[0], rtol=1e-4, atol=1e-9):
+                raise ValueError('Time blocks require regularly sampled times in seconds.')
+            size = max(1, int(round(options.block_seconds / dt[0])))
+            blocks = [np.arange(start, min(start+size, n_times)) for start in range(0, n_times, size)]
+            if len(blocks) < 2:
+                raise ValueError('Block duration must be shorter than the epoch duration.')
+        for c in range(channels):
+            if kind == 'time_cirular_shift':
+                cols[c] = np.roll(np.arange(n_times), int(rng.integers(1, n_times)))
+            elif kind == 'time_point':
+                cols[c] = rng.permutation(n_times)
+            elif kind == 'time_block':
+                cols[c] = np.concatenate([blocks[i] for i in rng.permutation(len(blocks))])
+            else:
+                raise ValueError(f'Unknown permutation: {kind}')
+    return rows, cols
+
+
+def _apply_permutation(array, indices):
+    return array if indices is None else array[..., indices[0], indices[1]]
+
+
+def validation_run_name(perm=None, perm_type=None):
+    options = _checked_options(ValidationOptions(perm=perm, perm_type=perm_type))
+    return 'none' if options.perm is None else f'{options.perm}__{options.perm_type}'
+
+
+def validate_plssvd(trials, meg_kind, options=None, output_dir='out/plssvd_eval_kfold', scratch_dir=None):
+    """Repeat the entire shuffled K-fold experiment; default 100 iterations.
+
+    ``repeats`` is the historical name for the number of folds. Split RNGs are
+    identical across permutation configurations with the same seed. Matching
+    stays fixed, while splits and permutation transforms change each iteration.
+    Each iteration is saved separately, including full models and split audits.
+    """
+    options = _checked_options(options or ValidationOptions())
+    out = Path(output_dir)
+    if (out/'validation_options.json').exists() or any(out.glob('iteration_*')):
+        raise FileExistsError('Choose a new output directory; evaluations are not overwritten.')
+    out.mkdir(parents=True, exist_ok=True)
+    settings = dict(options.__dict__, schema_version=4, meg_kind=meg_kind,
+                    condition_mode='average', iteration_layout='iteration_000/model_000.npz')
+    (out/'validation_options.json').write_text(json.dumps(settings, indent=2))
+    matching_seq, split_seq, perm_seq = np.random.SeedSequence(options.seed).spawn(3)
+    matching_seed = int(np.random.default_rng(matching_seq).integers(2**31-1))
+    split_seeds = split_seq.spawn(options.n_iterations)
+    permutation_seeds = perm_seq.spawn(options.n_iterations)
+    tables = {name: [] for name in ('summary', 'components', 'fold_metrics', 'fold_stability')}
+    iteration_stability = []
+    reference_scores = None
+    for iteration in range(options.n_iterations):
+        seed = int(np.random.default_rng(split_seeds[iteration]).integers(2**31-1))
+        perm_seed = int(np.random.default_rng(permutation_seeds[iteration]).integers(2**31-1))
+        print(f'Iteration {iteration+1}/{options.n_iterations}', flush=True)
+        current = _validate_iteration(trials, meg_kind, replace(options, seed=seed, n_iterations=1),
+                                     out/f'iteration_{iteration:03d}', scratch_dir,
+                                     matching_seed=matching_seed, permutation_seed=perm_seed)
+        if reference_scores is None:
+            reference_scores = current['primary_scores']
+        else:
+            stability, _ = _across_split_stability([reference_scores, current['primary_scores']], options.n_components)
+            iteration_stability.append(stability.assign(reference_iteration=0, iteration=iteration))
+        for name in tables:
+            tables[name].append(current[name].assign(iteration=iteration))
+    stability_columns = ['fold_a','fold_b','partition','modality','n_components','matched_abs_r','status','reference_iteration','iteration']
+    (pd.concat(iteration_stability, ignore_index=True) if iteration_stability else pd.DataFrame(columns=stability_columns)).to_csv(
+        out/'iteration_stability.csv', index=False)
+    for name, frames in tables.items():
+        pd.concat(frames, ignore_index=True).to_csv(out/f'{name}.csv', index=False)
+    metrics = pd.concat(tables['fold_metrics'], ignore_index=True)
+    columns = [c for c in metrics.select_dtypes(include='number') if c not in ('repeat','iteration','n_components')]
+    iteration_metrics = metrics.groupby(['iteration','partition'])[columns].mean().reset_index()
+    iteration_metrics.to_csv(out/'iteration_metrics.csv', index=False)
+    iteration_metrics.melt(id_vars=['iteration','partition'], var_name='metric').groupby(
+        ['partition','metric']).value.agg(['count','mean','std','min','max']).reset_index().to_csv(
+            out/'iteration_metric_summary.csv', index=False)
+    np.savez_compressed(out/'trial_axes.npz', times=trials.times, conditions=trials.conditions)
+    (out/'COMPLETE.json').write_text(json.dumps(dict(schema_version=4, n_iterations=options.n_iterations)))
+    return load_plssvd_results(out)
+
+
+def _annotate_matrix(ax, matrix, std=None, fmt='.2f'):
+    for (i, j), value in np.ndenumerate(matrix):
+        label = format(value, fmt)
+        if std is not None and np.isfinite(std[i,j]):
+            label += '\n±' + format(std[i,j], fmt)
+        rgba = ax.images[0].cmap(ax.images[0].norm(value))
+        luminance = .299*rgba[0] + .587*rgba[1] + .114*rgba[2]
+        ax.text(j, i, label, ha='center', va='center', fontsize=max(4, 9-len(matrix)//4),
+                color='white' if luminance < .5 else 'black')
+
+
+def plot_iteration_summary(output_dir):
+    """Reference-style overview; SD is across iteration means, never pooled folds.
+
+    Native component order is preserved. Time courses use fold 0 per iteration,
+    with a shared sign for each pair determined from its training iEEG peak.
+    No held-out alignment is used; near-degenerate components can still mix.
+    """
+    from compare_models import correlation_matrix
+    root = Path(output_dir)
+    result = load_plssvd_results(root)
+    config = result['iteration_options']
+    n, k, folds = config['n_iterations'], config['n_components'], config['repeats']
+    cov = {p: [] for p in ('train','test')}
+    curves = {(p,m): [] for p in ('train','test') for m in ('ieeg','meg')}
+    correlations = []
+    for iteration in range(n):
+        fold_correlations = []
+        for fold in range(folds):
+            with np.load(root/f'iteration_{iteration:03d}'/f'model_{fold:03d}.npz') as saved:
+                fold_correlations.append(np.abs(correlation_matrix(saved['test_ieeg'], saved['test_meg'])))
+                if fold == 0:
+                    train = saved['train_ieeg']
+                    signs = np.sign(train[np.argmax(np.abs(train), axis=0), np.arange(k)])
+                    signs[signs == 0] = 1
+                    for part in ('train','test'):
+                        cov[part].append(saved[part+'_score_crosscovariance']*signs[:,None]*signs[None,:])
+                        for modality in ('ieeg','meg'):
+                            sd = saved['train_'+modality].std(axis=0)
+                            curves[part,modality].append(saved[part+'_'+modality]*signs/np.where(sd>0,sd,1))
+        correlations.append(np.nanmean(fold_correlations, axis=0))
+    def stats(values):
+        array = np.asarray(values)
+        return np.nanmean(array, axis=0), (np.nanstd(array, axis=0, ddof=1) if n>1 else None)
+    fig = plt.figure(figsize=(20,12), layout='constrained')
+    grid = fig.add_gridspec(3, 2, width_ratios=[1, 1.8], height_ratios=[1, 1, .8])
+    cov_grid = grid[0,0].subgridspec(1,2)
+    limit = max(np.max(np.abs(stats(cov[p])[0])) for p in cov) or 1.
+    for col,part in enumerate(('train','test')):
+        ax=fig.add_subplot(cov_grid[0,col]); mean,sd=stats(cov[part])
+        im=ax.imshow(mean,cmap='RdBu_r',vmin=-limit,vmax=limit)
+        _annotate_matrix(ax,mean,sd,fmt='.1f')
+        ax.set(title=f'Fold 1 {part}: mean ± SD',xlabel='MEG component',ylabel='iEEG component',
+               xticks=range(k),xticklabels=range(1,k+1),yticks=range(k),yticklabels=range(1,k+1))
+        fig.colorbar(im,ax=ax,label='Score cross-covariance',shrink=.7)
+    ax=fig.add_subplot(grid[1:,0]); mean,sd=stats(correlations)
+    im=ax.imshow(mean,vmin=0,vmax=1,cmap='viridis');_annotate_matrix(ax,mean,sd)
+    ax.set(title='Held-out |Pearson r|: mean ± SD of fold means',xlabel='MEG component',ylabel='iEEG component',
+           xticks=range(k),xticklabels=range(1,k+1),yticks=range(k),yticklabels=range(1,k+1))
+    fig.colorbar(im,ax=ax,shrink=.7)
+    time_grid=grid[:2,1].subgridspec(min(k,3),1)
+    for pc in range(min(k,3)):
+        ax=fig.add_subplot(time_grid[pc,0])
+        for modality,color in [('ieeg','navy'),('meg','darkorange')]:
+            for part,style in [('train','--'),('test','-')]:
+                mean,sd=stats(curves[part,modality])
+                ax.plot(result['times'],mean[:,pc],color=color,ls=style,label=f'{modality} {part}')
+                if sd is not None:
+                    ax.fill_between(result['times'],mean[:,pc]-sd[:,pc],mean[:,pc]+sd[:,pc],color=color,alpha=.12)
+        ax.set(title=f'Component {pc+1}: fold 1 mean ± SD',xlabel='Time (s)',ylabel='Score / training SD')
+        if pc==0:ax.legend(ncol=4,fontsize=8)
+    metric_grid=grid[2,1].subgridspec(1,3)
+    table=result['iteration_fold_metrics']
+    for col,(metric,title) in enumerate([('crosscov_energy_fraction','Cross-covariance energy retained'),
+                                       ('mean_paired_covariance','Paired score covariance'),('mean_r','Paired Pearson r')]):
+        ax=fig.add_subplot(metric_grid[0,col])
+        for part in ('train','test'):
+            grouped=table[table.partition==part].groupby('repeat')[metric]
+            ax.errorbar(np.arange(folds)+1,grouped.mean(),yerr=grouped.std() if n>1 else None,
+                        marker='o',capsize=3,label=part)
+        ax.set(title=title,xlabel='Fold',ylabel='Mean ± SD');ax.legend()
+    fig.suptitle(f'{n} iterations × {folds} folds · {validation_run_name(config["perm"], config["perm_type"])}\n'
+                 'Descriptive SD; same trials reused. Native component order, training-only sign orientation.')
+    for extension in ('png','pdf'):
+        fig.savefig(root/f'iteration_summary.{extension}',dpi=180)
+    np.savez_compressed(root/'iteration_correlation_summary.npz',iteration_means=correlations,
+                        mean=stats(correlations)[0],std=stats(correlations)[1] if n>1 else np.full((k,k),np.nan))
+    return fig
+
+
+def plot_permutation_comparison(runs_dir):
+    """3 × 4 panels of iteration-level mean held-out signed correlations.
+
+    Each observation averages all folds and paired components in one iteration.
+    Baseline overlays use the same seeds/settings; missing runs are explicit.
+    These refitted surrogates describe sensitivity, not calibrated p-values.
+    """
+    root=Path(runs_dir)
+    def read_run(path):
+        if not (path/'COMPLETE.json').exists():
+            return None
+        config=json.loads((path/'validation_options.json').read_text())
+        if config.get('schema_version') != 4:
+            raise ValueError(f'{path}: requires repeated evaluation schema 4.')
+        frame=pd.read_csv(path/'iteration_metrics.csv')
+        return config,frame.loc[frame.partition=='test','mean_r'].dropna().to_numpy()
+    baseline=read_run(root/'none')
+    fig,axes=plt.subplots(3,4,figsize=(18,11),layout='constrained',sharex=True)
+    for row,perm in enumerate(('ieeg','meg','both')):
+        for col,kind in enumerate(PERMUTATION_TYPES):
+            ax=axes[row,col]; run=read_run(root/validation_run_name(perm,kind))
+            if baseline is not None:
+                ax.hist(baseline[1],bins=np.linspace(-1,1,31),density=True,histtype='step',lw=2,label='Unpermuted')
+            if run is None:
+                ax.text(.5,.5,'Run not available',transform=ax.transAxes,ha='center')
+            else:
+                if baseline is not None:
+                    for key in ('seed','repeats','n_iterations','n_components','meg_kind','split_unit','block_scaling','ridge'):
+                        if run[0][key]!=baseline[0][key]:
+                            raise ValueError(f'Incompatible baseline and {perm}/{kind}: {key}')
+                ax.hist(run[1],bins=np.linspace(-1,1,31),density=True,alpha=.6,label=f'{perm} permuted')
+            ax.set(title=f'{perm.upper()} · {kind}',xlabel='Iteration mean held-out Pearson r',ylabel='Density',xlim=(-1,1))
+            if baseline is not None or run is not None:ax.legend(fontsize=8)
+    fig.suptitle('Permutation effects: distributions across iterations (mean over folds and paired components)')
+    return fig
