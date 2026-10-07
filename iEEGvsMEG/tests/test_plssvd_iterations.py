@@ -7,9 +7,15 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from plssvd_eval_utils import (TrialSubject, TrialData, ValidationOptions, validate_plssvd,
+from plssvd_eval_utils import (TrialSubject, TrialData, ValidationOptions, fit_plssvd,
     load_plssvd_results, plot_iteration_summary, plot_permutation_comparison,
     plot_plssvd_validation, _checked_options, _permutation_indices, _apply_permutation)
+
+
+def validate_plssvd(*args, **kwargs):
+    # Tests evaluate explicitly after the fit stage has returned.
+    fit = fit_plssvd(*args, **kwargs)
+    return load_plssvd_results(fit['output_dir'])
 
 
 def synthetic_trials():
@@ -112,7 +118,7 @@ class RepeatedEvaluationTests(unittest.TestCase):
             self.assertEqual(len(baseline['summary']),5)
             self.assertEqual(len(baseline['iteration_summary']),10)
             self.assertEqual(len(baseline['iteration_metrics']),4)
-            audits=[pd.read_csv(root/'none'/f'iteration_{i:03d}'/'split_audit.csv') for i in range(2)]
+            audits=[pd.read_csv(root/'none'/f'iteration_{i:03d}'/'split_audit.csv.gz') for i in range(2)]
             for audit in audits:
                 counts=audit.query("partition == 'test'").groupby(['modality','subject','condition','trial_index']).size()
                 self.assertTrue((counts==1).all())
@@ -123,7 +129,7 @@ class RepeatedEvaluationTests(unittest.TestCase):
                 ValidationOptions(repeats=5,n_iterations=2,n_components=2,perm='both',perm_type='time_point'),
                 root/'both__time_point')
             for i in range(2):
-                pd.testing.assert_frame_equal(audits[i],pd.read_csv(root/'both__time_point'/f'iteration_{i:03d}'/'split_audit.csv'))
+                pd.testing.assert_frame_equal(audits[i],pd.read_csv(root/'both__time_point'/f'iteration_{i:03d}'/'split_audit.csv.gz'))
             self.assertFalse(np.allclose(baseline['iteration_metrics'].mean_r,perm['iteration_metrics'].mean_r))
             self.assertFalse((root/'none'/'iteration_000'/'primary_null_tests.csv').exists())
             plot_plssvd_validation(baseline,show=False)
