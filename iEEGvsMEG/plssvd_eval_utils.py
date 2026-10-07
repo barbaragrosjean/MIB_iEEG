@@ -25,7 +25,7 @@ from cov_models_utils import _gram, _spectrum, _weights
 @dataclass
 class ValidationOptions:
     repeats: int = 5
-    n_components: int = 5
+    n_components: int = 100  # maximum fitted rank; notebook selects a prefix later
     n_iterations: int = 100
     perm: str = None
     perm_type: str = None
@@ -532,7 +532,7 @@ def _across_split_stability(all_scores, k):
 
 
 def _validate_iteration(trials,meg_kind,options=None,output_dir='out/plssvd_eval_kfold',scratch_dir=None, matching_seed=None, permutation_seed=None):
-    """Fixed-k shuffled K-fold evaluation; cohort and matching never change.
+    """Fit maximum-k shuffled K-fold models; cohort and matching never change.
 
     All folds (including fold 0) split trials. No tuning, subject subsampling,
     test-dependent component count, or test-dependent sign/component rematching.
@@ -553,7 +553,7 @@ def _validate_iteration(trials,meg_kind,options=None,output_dir='out/plssvd_eval
     out = Path(output_dir); out.mkdir(parents=True, exist_ok=True)
     if (out/'validation_options.json').exists() or any(out.glob('model_*.npz')):
         raise FileExistsError('Choose a new evaluation output directory; existing results are not overwritten.')
-    settings = dict(**options.__dict__, schema_version=3, meg_kind=meg_kind,
+    settings = dict(**options.__dict__, schema_version=5, meg_kind=meg_kind,
         design='fixed-k shuffled disjoint test folds; condition average; no tuning',
         condition_mode='average',
         partitions=['train','test'],
@@ -565,9 +565,8 @@ def _validate_iteration(trials,meg_kind,options=None,output_dir='out/plssvd_eval
     matching_seq, split_seq, _ = np.random.SeedSequence(options.seed).spawn(3)
     if matching_seed is None:
         matching_seed = int(np.random.default_rng(matching_seq).integers(2**31-1))
-    summaries, components, split_rows, participants, fold_metrics, all_scores = [], [], [], [], [], []
-    null_summary = pd.DataFrame(columns=['test','observed','tail_fraction','n_null','interpretation','note'])
-    null_values = {}; primary_scores = {}
+    split_rows = []
+    from plssvd_evaluation import collect_statistics
     rng = np.random.default_rng(split_seq)
     assignments = {m: {s.subject: _subject_folds(s, rng, options.split_unit, options.repeats)
                        for s in getattr(trials, m)} for m in ('ieeg','meg')}
@@ -576,7 +575,6 @@ def _validate_iteration(trials,meg_kind,options=None,output_dir='out/plssvd_eval
                    for m, subjects in assignments.items()}
         for modality in ('ieeg','meg'):
             for subject in getattr(trials, modality):
-                participants.append(dict(repeat=repeat, modality=modality, subject=subject.subject))
                 for part in ('train','test'):
                     for ci, ix in enumerate(indices[modality][subject.subject][part]):
                         for trial in ix:
@@ -591,59 +589,26 @@ def _validate_iteration(trials,meg_kind,options=None,output_dir='out/plssvd_eval
                 raise ValueError(f'Fold {repeat}: training rank supports only {model["k_max"]} components, '
                                  f'but fixed n_components={k}. Choose a supported fixed count; no automatic selection.')
             scores = {part: {m: _project(ds, model, m) for m, ds in datasets.items()} for part, datasets in fold.items()}
-            predictors = {m: _predictor(scores['train']['meg' if m == 'ieeg' else 'ieeg'],
-                          fold['train'][m], model[m+'_mean'], options.ridge) for m in ('ieeg','meg')}
-            evaluations, covariances = {}, {}
-            for part in ('train','test'):
-                evaluations[part], covariances[part] = _evaluate_fixed_model(fold[part], scores[part], model, predictors)
-                fold_metrics.append(dict(repeat=repeat, partition=part, n_components=k, **evaluations[part]))
-            train_r = _r(scores['train']['ieeg'], scores['train']['meg'])
-            test_r = _r(scores['test']['ieeg'], scores['test']['meg'])
-            row = dict(repeat=repeat, n_components=k, n_ieeg=len(trials.ieeg), n_meg=len(trials.meg),
-                n_meg_contributing=audit.meg_subject.nunique() if meg_kind in ('paired_coverage','random_control') else len(trials.meg),
-                train_mean_r=float(np.mean(train_r)), test_mean_r=float(np.mean(test_r)),
-                predict_ieeg_q2=evaluations['test']['predict_ieeg_q2'], predict_meg_q2=evaluations['test']['predict_meg_q2'],
-                **{part+'_'+key: value for part, vals in evaluations.items() for key, value in vals.items()
-                   if key != 'mean_r'})
-            train_cov = evaluations['train']['mean_paired_covariance']
-            row['paired_covariance_retention'] = evaluations['test']['mean_paired_covariance']/train_cov if train_cov > 0 else np.nan
-            summaries.append(row)
-            for pc in range(k):
-                components.append(dict(repeat=repeat, component=pc+1, train_r=train_r[pc], test_r=test_r[pc],
-                    train_covariance=covariances['train'][pc,pc], test_covariance=covariances['test'][pc,pc]))
-            all_scores.append({part: {m: scores[part][m].copy() for m in ('ieeg','meg')} for part in ('train','test')})
-            if repeat == 0:
-                primary_scores = {part: {m: v.copy() for m,v in values.items()} for part,values in scores.items()}
-            audit.to_csv(out/f'matching_{repeat:03d}.csv', index=False)
-            (out/f'pairing_{repeat:03d}.json').write_text(json.dumps(pairing, indent=2))
-            for m in ('ieeg','meg'): fold['train'][m].metadata.to_csv(out/f'{m}_features_{repeat:03d}.csv', index=False)
-            np.savez_compressed(out/f'model_{repeat:03d}.npz', **model,
-                predict_ieeg=predictors['ieeg'], predict_meg=predictors['meg'],
-                **{f'{part}_{m}': value for part, vals in scores.items() for m, value in vals.items()},
-                **{part+'_score_crosscovariance': value for part, value in covariances.items()})
+            # Large fit parameters and compact evaluation inputs are separate:
+            # notebook evaluation never needs to decompress feature weights.
+            np.savez_compressed(out/f'model_{repeat:03d}.npz', **model)
+            np.savez_compressed(out/f'scores_{repeat:03d}.npz', **collect_statistics(fold, scores, model))
+            if repeat == 0 and not (out.parent/'matching.csv').exists():
+                audit.to_csv(out.parent/'matching.csv', index=False)
+                (out.parent/'pairing.json').write_text(json.dumps(pairing, indent=2))
+                for m in ('ieeg','meg'):
+                    fold['train'][m].metadata.to_csv(out.parent/f'{m}_features.csv',index=False)
             np.savez_compressed(out/f'preprocessing_{repeat:03d}.npz', **{
                 f'{m}_{subject}_{label}': value for m, subjects in scalers.items() for subject, params in subjects.items()
                 for label, value in zip(['mean','std','multiplier'], params)})
-        print(f'Split {repeat+1}/{options.repeats}: fixed k={k}; test mean r={row["test_mean_r"]:.3f}; '
-              f'test crosscov energy fraction={row["test_crosscov_energy_fraction"]:.3f}', flush=True)
-    stability, stability_pairs = _across_split_stability(all_scores, k)
-    fold_metrics = pd.DataFrame(fold_metrics)
-    long = fold_metrics.melt(id_vars=['repeat','partition','n_components'], var_name='metric', value_name='value')
-    metric_summary = long.groupby(['partition','metric'], sort=False)['value'].agg(['count','mean','std','median','min','max']).reset_index()
-    result = dict(summary=pd.DataFrame(summaries), components=pd.DataFrame(components), fold_metrics=fold_metrics,
-        metric_summary=metric_summary, fold_stability=stability, fold_component_pairs=stability_pairs,
-        split_audit=pd.DataFrame(split_rows), participants=pd.DataFrame(participants), null_tests=null_summary,
-        null_distributions=null_values, primary_scores=primary_scores, times=trials.times, conditions=trials.conditions,
-        validation_options=settings)
-    for name in ('summary','components','fold_metrics','metric_summary','fold_stability','fold_component_pairs','split_audit','participants'):
-        result[name].to_csv(out/f'{name}.csv', index=False)
-    np.savez_compressed(out/'trial_axes.npz', times=trials.times, conditions=trials.conditions)
-    (out/'COMPLETE.json').write_text(json.dumps(dict(schema_version=3, repeats=options.repeats, n_components=k)))
-    return result
+        print(f'Split {repeat+1}/{options.repeats}: saved fit with {k} components', flush=True)
+    pd.DataFrame(split_rows).to_csv(out/'split_audit.csv.gz', index=False)
+    (out/'COMPLETE.json').write_text(json.dumps(dict(schema_version=5,repeats=options.repeats,n_components=k)))
+    return out
 
 
-def load_plssvd_results(output_dir, cache_dir=None):
-    """Reload a completed plssvd_eval.py run without reading raw trials.
+def load_plssvd_results(output_dir, cache_dir=None, n_components=None):
+    """Evaluate saved fits at n_components (default: fitted maximum), without raw trials.
 
     Repeated runs use all completed child iterations, even if interrupted.
     Unfinished children are excluded; aggregate tables are rebuilt in memory.
@@ -655,9 +620,15 @@ def load_plssvd_results(output_dir, cache_dir=None):
     """
     root=Path(output_dir).expanduser().resolve()
     options=json.loads((root/'validation_options.json').read_text())
-    if options.get('schema_version') == 4:
-        # The parent completion marker and aggregate CSVs are only written at
-        # the very end. Rebuild from completed children, never from stale totals.
+    from plssvd_evaluation import selected_count, evaluate_iteration
+    k = selected_count(n_components, options['n_components'])
+    if options.get('schema_version') == 5:
+        if not (root/'COMPLETE.json').is_file():
+            raise FileNotFoundError('Fit iteration is incomplete.')
+        return evaluate_iteration(root, options, k)
+    if options.get('schema_version') in (4,6):
+        # Load only completed children. New fits contain no metric CSVs; legacy
+        # aggregate tables may be absent or stale after an interruption.
         iterations = [i for i in range(options['n_iterations'])
                       if (root/f'iteration_{i:03d}'/'COMPLETE.json').is_file()]
         if not iterations:
@@ -671,12 +642,12 @@ def load_plssvd_results(output_dir, cache_dir=None):
                               if not (child/f'model_{f:03d}.npz').is_file()]
             if missing_models:
                 raise FileNotFoundError(f'{child}: marked complete but missing fold models {missing_models}.')
-            current = load_plssvd_results(child, cache_dir)
+            current = load_plssvd_results(child, cache_dir, n_components=k)
             if result is None:
                 result = current
             else:
                 stability, _ = _across_split_stability(
-                    [result['primary_scores'], current['primary_scores']], options['n_components'])
+                    [result['primary_scores'], current['primary_scores']], k)
                 stability_rows.append(stability.assign(reference_iteration=iterations[0], iteration=iteration))
             for name in tables:
                 tables[name].append(current[name].assign(iteration=iteration))
@@ -694,7 +665,8 @@ def load_plssvd_results(output_dir, cache_dir=None):
                              'matched_abs_r','status','reference_iteration','iteration']
         result['iteration_stability'] = (pd.concat(stability_rows, ignore_index=True)
             if stability_rows else pd.DataFrame(columns=stability_columns))
-        result.update(iteration_options=options, iterations_output_dir=root,
+        result.update(iteration_options=dict(options,n_components=k), fit_options=options,
+                      n_components_evaluated=k,n_components_fitted=options['n_components'],iterations_output_dir=root,
                       available_iterations=iterations, n_iterations_loaded=len(iterations),
                       n_iterations_requested=options['n_iterations'],
                       is_partial=len(iterations) < options['n_iterations'])
@@ -703,8 +675,11 @@ def load_plssvd_results(output_dir, cache_dir=None):
                 result[name] = pd.read_csv(root/f'{name}.csv')
         print(f"Loaded {len(iterations)}/{options['n_iterations']} completed iterations; "
               f"first-iteration figures use iteration {iterations[0]+1}. "
-              "Unfinished iterations are excluded.")
+              f"Evaluating {k}/{options['n_components']} fitted components. Unfinished iterations are excluded.")
         return result
+    if k != options['n_components']:
+        raise ValueError('Legacy fits lack sufficient statistics for selected-k prediction/reconstruction. '
+                         'Load at the original component count, or create a new compact fit run.')
     fixed = options.get('schema_version', 1) >= 2
     if fixed and not (root/'COMPLETE.json').is_file():
         raise FileNotFoundError('Fixed-k evaluation is incomplete: COMPLETE.json is absent.')
@@ -891,6 +866,11 @@ def _plot_fixed_evaluation(result, finish):
     finish(fig, 'fold_temporal_stability')
 
 
+def _saved_scores(root, fold):
+    path = Path(root)/f'scores_{fold:03d}.npz'
+    return np.load(path if path.exists() else Path(root)/f'model_{fold:03d}.npz', allow_pickle=False)
+
+
 def plot_test_score_correlations(output_dir, n_components=25, absolute=True):
     """Mean test Pearson matrix across folds, in native singular-value order.
 
@@ -913,7 +893,7 @@ def plot_test_score_correlations(output_dir, n_components=25, absolute=True):
                          '(each training fold must support that rank).')
     matrices = []
     for fold in range(options['repeats']):
-        with np.load(root/f'model_{fold:03d}.npz',allow_pickle=False) as saved:
+        with _saved_scores(root, fold) as saved:
             x = saved['test_ieeg'][:, :n_components].copy()
             y = saved['test_meg'][:, :n_components].copy()
             if min(x.shape[1], y.shape[1]) < n_components:
@@ -964,6 +944,8 @@ def _checked_options(options):
         value = getattr(options, name)
         if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < minimum:
             raise ValueError(f'{name} must be an integer >= {minimum}.')
+    if not np.isfinite(options.ridge) or options.ridge <= 0:
+        raise ValueError('ridge must be positive and finite.')
     if not np.isfinite(options.block_seconds) or options.block_seconds <= 0:
         raise ValueError('block_seconds must be positive and finite.')
     return replace(options, perm=perm, perm_type=kind)
@@ -1020,58 +1002,40 @@ def validation_run_name(perm=None, perm_type=None):
     return 'none' if options.perm is None else f'{options.perm}__{options.perm_type}'
 
 
-def validate_plssvd(trials, meg_kind, options=None, output_dir='out/plssvd_eval_kfold', scratch_dir=None):
-    """Repeat the entire shuffled K-fold experiment; default 100 iterations.
+def fit_plssvd(trials, meg_kind, options=None, output_dir='out/plssvd_eval_kfold', scratch_dir=None):
+    """Fit maximum-rank models across shuffled K-fold iterations; no evaluation.
 
-    ``repeats`` is the historical name for the number of folds. Split RNGs are
-    identical across permutation configurations with the same seed. Matching
-    stays fixed, while splits and permutation transforms change each iteration.
-    Each iteration is saved separately, including full models and split audits.
+    Save weights/preprocessing, scores, compact sufficient statistics, and split
+    audits. Call load_plssvd_results(..., n_components=k) later to evaluate any
+    leading k <= fitted maximum without raw trials or refitting. Completed
+    iterations are available even if a later iteration is interrupted.
     """
     options = _checked_options(options or ValidationOptions())
     out = Path(output_dir)
     if (out/'validation_options.json').exists() or any(out.glob('iteration_*')):
-        raise FileExistsError('Choose a new output directory; evaluations are not overwritten.')
+        raise FileExistsError('Choose a new output directory; fits are not overwritten.')
     out.mkdir(parents=True, exist_ok=True)
-    settings = dict(options.__dict__, schema_version=4, meg_kind=meg_kind,
+    settings = dict(options.__dict__, schema_version=6, meg_kind=meg_kind,
                     condition_mode='average', iteration_layout='iteration_000/model_000.npz')
     (out/'validation_options.json').write_text(json.dumps(settings, indent=2))
+    np.savez_compressed(out/'trial_axes.npz',times=trials.times,conditions=trials.conditions)
     matching_seq, split_seq, perm_seq = np.random.SeedSequence(options.seed).spawn(3)
     matching_seed = int(np.random.default_rng(matching_seq).integers(2**31-1))
     split_seeds = split_seq.spawn(options.n_iterations)
     permutation_seeds = perm_seq.spawn(options.n_iterations)
-    tables = {name: [] for name in ('summary', 'components', 'fold_metrics', 'fold_stability')}
-    iteration_stability = []
-    reference_scores = None
     for iteration in range(options.n_iterations):
         seed = int(np.random.default_rng(split_seeds[iteration]).integers(2**31-1))
         perm_seed = int(np.random.default_rng(permutation_seeds[iteration]).integers(2**31-1))
         print(f'Iteration {iteration+1}/{options.n_iterations}', flush=True)
-        current = _validate_iteration(trials, meg_kind, replace(options, seed=seed, n_iterations=1),
-                                     out/f'iteration_{iteration:03d}', scratch_dir,
-                                     matching_seed=matching_seed, permutation_seed=perm_seed)
-        if reference_scores is None:
-            reference_scores = current['primary_scores']
-        else:
-            stability, _ = _across_split_stability([reference_scores, current['primary_scores']], options.n_components)
-            iteration_stability.append(stability.assign(reference_iteration=0, iteration=iteration))
-        for name in tables:
-            tables[name].append(current[name].assign(iteration=iteration))
-    stability_columns = ['fold_a','fold_b','partition','modality','n_components','matched_abs_r','status','reference_iteration','iteration']
-    (pd.concat(iteration_stability, ignore_index=True) if iteration_stability else pd.DataFrame(columns=stability_columns)).to_csv(
-        out/'iteration_stability.csv', index=False)
-    for name, frames in tables.items():
-        pd.concat(frames, ignore_index=True).to_csv(out/f'{name}.csv', index=False)
-    metrics = pd.concat(tables['fold_metrics'], ignore_index=True)
-    columns = [c for c in metrics.select_dtypes(include='number') if c not in ('repeat','iteration','n_components')]
-    iteration_metrics = metrics.groupby(['iteration','partition'])[columns].mean().reset_index()
-    iteration_metrics.to_csv(out/'iteration_metrics.csv', index=False)
-    iteration_metrics.melt(id_vars=['iteration','partition'], var_name='metric').groupby(
-        ['partition','metric']).value.agg(['count','mean','std','min','max']).reset_index().to_csv(
-            out/'iteration_metric_summary.csv', index=False)
-    np.savez_compressed(out/'trial_axes.npz', times=trials.times, conditions=trials.conditions)
-    (out/'COMPLETE.json').write_text(json.dumps(dict(schema_version=4, n_iterations=options.n_iterations)))
-    return load_plssvd_results(out)
+        _validate_iteration(trials, meg_kind, replace(options,seed=seed,n_iterations=1),
+                            out/f'iteration_{iteration:03d}',scratch_dir,
+                            matching_seed=matching_seed,permutation_seed=perm_seed)
+    (out/'COMPLETE.json').write_text(json.dumps(dict(schema_version=6,n_iterations=options.n_iterations)))
+    return dict(output_dir=out,fit_options=settings)
+
+
+# Backward-compatible entry point name; this now saves fits only.
+validate_plssvd = fit_plssvd
 
 
 def _annotate_matrix(ax, matrix, std=None, fmt='.2f'):
@@ -1085,7 +1049,7 @@ def _annotate_matrix(ax, matrix, std=None, fmt='.2f'):
                 color='white' if luminance < .5 else 'black')
 
 
-def plot_iteration_summary(output_dir):
+def plot_iteration_summary(output_dir, n_components=None):
     """Reference-style overview; SD is across iteration means, never pooled folds.
 
     Native component order is preserved. Time courses use fold 0 per iteration,
@@ -1094,7 +1058,7 @@ def plot_iteration_summary(output_dir):
     """
     from compare_models import correlation_matrix
     root = Path(output_dir)
-    result = load_plssvd_results(root)
+    result = load_plssvd_results(root, n_components=n_components)
     config = result['iteration_options']
     n, k, folds = result['n_iterations_loaded'], config['n_components'], config['repeats']
     cov = {p: [] for p in ('train','test')}
@@ -1103,7 +1067,11 @@ def plot_iteration_summary(output_dir):
     for iteration in result['available_iterations']:
         fold_correlations = []
         for fold in range(folds):
-            with np.load(root/f'iteration_{iteration:03d}'/f'model_{fold:03d}.npz') as saved:
+            with _saved_scores(root/f'iteration_{iteration:03d}', fold) as stored:
+                saved = {f'{p}_{m}': stored[f'{p}_{m}'][:,:k] for p in ('train','test') for m in ('ieeg','meg')}
+                for p in ('train','test'):
+                    x,y = saved[p+'_ieeg'],saved[p+'_meg']
+                    saved[p+'_score_crosscovariance'] = (x-x.mean(0)).T@(y-y.mean(0))/(len(x)-1)
                 fold_correlations.append(np.abs(correlation_matrix(saved['test_ieeg'], saved['test_meg'])))
                 if fold == 0:
                     train = saved['train_ieeg']
@@ -1155,17 +1123,17 @@ def plot_iteration_summary(output_dir):
             ax.errorbar(np.arange(folds)+1,grouped.mean(),yerr=grouped.std() if n>1 else None,
                         marker='o',capsize=3,label=part)
         ax.set(title=title,xlabel='Fold',ylabel='Mean ± SD');ax.legend()
-    fig.suptitle(f'{n}/{config["n_iterations"]} completed iterations × {folds} folds · {validation_run_name(config["perm"], config["perm_type"])}\n'
+    fig.suptitle(f'{n}/{config["n_iterations"]} completed iterations × {folds} folds · k={k} · {validation_run_name(config["perm"], config["perm_type"])}\n'
                  'Descriptive SD; same trials reused. Native component order, training-only sign orientation.')
     for extension in ('png','pdf'):
-        fig.savefig(root/f'iteration_summary.{extension}',dpi=180)
-    np.savez_compressed(root/'iteration_correlation_summary.npz',iteration_means=correlations,
+        fig.savefig(root/f'iteration_summary_k{k}.{extension}',dpi=180)
+    np.savez_compressed(root/f'iteration_correlation_summary_k{k}.npz',iteration_means=correlations,
                         iteration_ids=result['available_iterations'],
                         mean=stats(correlations)[0],std=stats(correlations)[1] if n>1 else np.full((k,k),np.nan))
     return fig
 
 
-def plot_permutation_comparison(runs_dir):
+def plot_permutation_comparison(runs_dir, n_components=None):
     """3 × 4 panels of iteration-level mean held-out signed correlations.
 
     Each observation averages all folds and paired components in one iteration.
@@ -1177,13 +1145,14 @@ def plot_permutation_comparison(runs_dir):
         if not (path/'validation_options.json').exists():
             return None
         config=json.loads((path/'validation_options.json').read_text())
-        if config.get('schema_version') != 4:
-            raise ValueError(f'{path}: requires repeated evaluation schema 4.')
+        if config.get('schema_version') not in (4,6):
+            raise ValueError(f'{path}: requires repeated fits.')
         if not any((path/f'iteration_{i:03d}'/'COMPLETE.json').is_file()
                    for i in range(config['n_iterations'])):
             return None
-        frame=load_plssvd_results(path)['iteration_metrics']
-        return config,frame.loc[frame.partition=='test','mean_r'].dropna().to_numpy()
+        evaluated=load_plssvd_results(path,n_components=n_components)
+        frame=evaluated['iteration_metrics']
+        return evaluated['iteration_options'],frame.loc[frame.partition=='test','mean_r'].dropna().to_numpy()
     baseline=read_run(root/'none')
     fig,axes=plt.subplots(3,4,figsize=(18,11),layout='constrained',sharex=True)
     for row,perm in enumerate(('ieeg','meg','both')):
@@ -1201,5 +1170,6 @@ def plot_permutation_comparison(runs_dir):
                 ax.hist(run[1],bins=np.linspace(-1,1,31),density=True,alpha=.6,label=f'{perm} permuted (n={len(run[1])})')
             ax.set(title=f'{perm.upper()} · {kind}',xlabel='Iteration mean held-out Pearson r',ylabel='Density',xlim=(-1,1))
             if baseline is not None or run is not None:ax.legend(fontsize=8)
-    fig.suptitle('Permutation effects: distributions across iterations (mean over folds and paired components)')
+    fig.suptitle(f'Permutation effects · k={n_components if n_components is not None else "all fitted"}: '
+                 'distributions across iterations (mean over folds and paired components)')
     return fig

@@ -40,7 +40,8 @@ def parse_args():
                         'time_block','time_point','space','none'], default=None)
     parser.add_argument('--block-seconds', type=float, default=0.36)
     parser.add_argument('--seed', type=int, default=2026)
-    parser.add_argument('--n-components', type=int, default=5, help='Fixed PLSSVD dimension; no tuning.')
+    parser.add_argument('--max-components', '--n-components', dest='n_components', type=int, default=100,
+                        help='Maximum fitted dimension; select fewer later in the notebook (default: 100).')
     parser.add_argument('--split-unit', choices=['trial', 'group'], default='trial')
     parser.add_argument('--max-gram-gib', type=float, default=2.0)
     return parser.parse_args()
@@ -52,13 +53,10 @@ def main():
     for directory in (root, root.parent, root.parent / 'LB'):
         sys.path.insert(0, str(directory))
 
-    import matplotlib
-    matplotlib.use('Agg') 
-    import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd
     from src.setting import GetInfo, PROJECT_PATH
-    from plssvd_eval_utils import ValidationOptions, prepare_trial_cache, validate_plssvd, plot_plssvd_validation, plot_iteration_summary, validation_run_name
+    from plssvd_eval_utils import ValidationOptions, prepare_trial_cache, fit_plssvd, validation_run_name
 
     meg_dir = args.meg_dir or root / 'MEG' / 'dataMEG'
     ieeg_dir = args.ieeg_dir or root / 'ieeg_shortWOBS_fs250'
@@ -67,7 +65,6 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     if (output_dir / 'validation_options.json').exists() or any(output_dir.glob('model_*.npz')):
         raise FileExistsError('Choose a new --output-dir; existing evaluations are not overwritten.')
-    plt.rcParams.update({'figure.dpi': 110, 'axes.spines.top': False, 'axes.spines.right': False})
     options = ValidationOptions(repeats=args.repeats, n_components=args.n_components,
                                 n_iterations=args.n_iterations, perm=args.perm, perm_type=args.perm_type,
                                 block_seconds=args.block_seconds, seed=args.seed,
@@ -109,13 +106,8 @@ def main():
     print(trial_counts.to_string(index=False), flush=True)
     np.savez_compressed(output_dir / 'trial_axes.npz', times=trials.times, conditions=trials.conditions)
 
-    # Saves tables, partition/matching audits, model weights, scores, prediction
-    # maps and preprocessing parameters for every iteration.
-    result = validate_plssvd(trials, args.meg_kind, options, output_dir=output_dir, scratch_dir=args.scratch_dir)
-    for name in ('summary', 'metric_summary', 'fold_stability', 'components', 'iteration_metric_summary'):
-        print(f'\n{name}\n{result[name].round(3).to_string(index=False)}', flush=True)
-    plot_plssvd_validation(result, output_dir=output_dir / "iteration_000", show=False)
-    plt.close(plot_iteration_summary(output_dir))
+    # Fit artifacts only. All metrics and figures are computed later in the notebook.
+    fit_plssvd(trials, args.meg_kind, options, output_dir=output_dir, scratch_dir=args.scratch_dir)
 
     print(f'Outputs saved to: {output_dir.resolve()}', flush=True)
 
