@@ -1,3 +1,23 @@
+## Full-data PCA comparison in the notebook
+
+The final section of `plssvd_eval.ipynb` fits separate PCA models to the full
+condition-averaged iEEG and concatenated MEG data from `out/trial_cache`.
+Run its first cell once to create the fixed PCA reference. Run the following
+cell to compare it with the selected run's saved training and test PLSSVD scores.
+Select the run using `PERM` and `PERM_TYPE`, and the component count using
+`N_COMPONENTS`. `PCA_ABSOLUTE` selects absolute or signed Pearson correlations.
+
+The figure has four rows (iEEG train/test, MEG train/test) and one column per
+fold. Each matrix contains every PLSSVD–PCA component pair, with mean and sample
+SD across completed iterations, separately for each fold. The available
+iteration count is printed; SD is undefined with only one iteration. The figure
+and numerical summaries are saved under the selected run's
+`full_data_pca_comparison` directory.
+
+This section requires the original trial cache and saved PLSSVD scores, but
+does not require `plssvd_fit_pca.py` or recompute PLSSVD fits or metrics. The PCA
+reference always uses unpermuted data. Because it includes all trials, this is
+a descriptive comparison, not a held-out assessment of PCA generalization.
 
 ## Optional PCA-only backfill
 
