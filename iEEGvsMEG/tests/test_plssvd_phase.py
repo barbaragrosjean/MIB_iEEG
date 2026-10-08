@@ -13,9 +13,24 @@ from plssvd_eval_utils import (ValidationOptions, _permutation_indices, _apply_p
     _temporary_fold, _subject_folds, fit_plssvd)
 from plssvd_postprocess import evaluate_run, prepare_comparison
 from plssvd_figures import plot_phase_null_comparison, load_comparison
+from plssvd_phase_null import resolve_max_components
 
 
 class PhaseTests(unittest.TestCase):
+    def test_baseline_component_count_resolution(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.assertEqual(resolve_max_components(root, None, [10]), 100)
+            self.assertEqual(resolve_max_components(root, 20, [10]), 20)
+            (root/'none').mkdir()
+            (root/'none'/'validation_options.json').write_text(json.dumps({'n_components': 20}))
+            self.assertEqual(resolve_max_components(root, None, [10]), 20)
+            self.assertEqual(resolve_max_components(root, 20, [10]), 20)
+            with self.assertRaisesRegex(ValueError, 'Omit --max-components'):
+                resolve_max_components(root, 100, [10])
+            with self.assertRaisesRegex(ValueError, 'fitted component count'):
+                resolve_max_components(root, None, [21])
+
     def test_preserves_covariance_spectra_means_even_and_odd(self):
         for n in (23,24):
             x=np.random.default_rng(1).normal(size=(2,5,n))

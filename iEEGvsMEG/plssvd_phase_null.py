@@ -13,6 +13,23 @@ import json
 from dataclasses import asdict, replace
 
 
+def resolve_max_components(runs, requested, components):
+    """Use the baseline fit size unless the caller explicitly overrides it."""
+    baseline = Path(runs)/'none'/'validation_options.json'
+    saved = json.loads(baseline.read_text()) if baseline.exists() else None
+    fitted = saved['n_components'] if saved is not None else 100
+    resolved = fitted if requested is None else requested
+    if saved is not None and resolved != fitted:
+        raise ValueError(f'Existing baseline was fitted with {fitted} components, but '
+                         f'--max-components is {resolved}. Omit --max-components to reuse '
+                         'the baseline, or use a new --runs-dir for a different fit.')
+    if not components or min(components) < 1 or max(components) > resolved:
+        raise ValueError(f'--components must be between 1 and the fitted component count '
+                         f'({resolved}). To evaluate more components, use a new --runs-dir '
+                         'and a larger --max-components.')
+    return resolved
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parent)
@@ -23,7 +40,8 @@ def main():
     parser.add_argument('--perm', choices=['meg','ieeg','both','all'], default='meg')
     parser.add_argument('--n-iterations', type=int, default=100)
     parser.add_argument('--n-splits', type=int, default=5)
-    parser.add_argument('--max-components', type=int, default=100)
+    parser.add_argument('--max-components', type=int, default=None,
+                        help='Components to fit: inherit the existing baseline, otherwise 100.')
     parser.add_argument('--components', type=int, nargs='+', default=[5], help='Prespecified component counts for evaluation.')
     parser.add_argument('--seed', type=int, default=2026)
     parser.add_argument('--split-unit', choices=['trial','group'], default='trial')
@@ -34,11 +52,14 @@ def main():
     from plssvd_eval_utils import ValidationOptions, load_trial_cache, fit_plssvd, validation_run_name, _checked_options
     from plssvd_postprocess import evaluate_run, prepare_comparison
     from plssvd_figures import plot_phase_null_comparison
-    if not args.components or min(args.components) < 1 or max(args.components) > args.max_components:
-        parser.error('--components must be between 1 and --max-components.')
     root = args.root.expanduser().resolve()
     cache = args.cache_dir or root/'out'/'trial_cache'
     runs = args.runs_dir or root/'out'/'plssvd_eval'/args.meg_kind
+    try:
+        args.max_components = resolve_max_components(runs, args.max_components, args.components)
+    except ValueError as exc:
+        parser.error(str(exc))
+    print(f'Fitted components: {args.max_components}; evaluation components: {args.components}', flush=True)
     options = _checked_options(ValidationOptions(n_components=args.max_components, repeats=args.n_splits,
         n_iterations=args.n_iterations, seed=args.seed, split_unit=args.split_unit, max_gram_gib=args.max_gram_gib))
     modes = ['meg','ieeg','both'] if args.perm == 'all' else [args.perm]
