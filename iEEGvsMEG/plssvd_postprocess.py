@@ -411,7 +411,7 @@ def main():
     parser.add_argument('--runs-dir',type=Path,required=True)
     parser.add_argument('--components',type=int,nargs='+',required=True)
     parser.add_argument('--perm',choices=['none','ieeg','meg','both'],default='none')
-    parser.add_argument('--perm-type',choices=['none','time_cirular_shift','time_circular_shift','time_point','time_block','space'],default='none')
+    parser.add_argument('--perm-type',choices=['none','time_cirular_shift','time_circular_shift','time_point','time_block','space','phase'],default='none')
     parser.add_argument('--all-runs',action='store_true')
     parser.add_argument('--publish-only',action='store_true',help='Publish already evaluated iterations; do not evaluate additional folds.')
     parser.add_argument('--cache-dir',type=Path,help='Optional original trial cache for missing PCA and full spectra.')

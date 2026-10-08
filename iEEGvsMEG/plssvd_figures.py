@@ -100,7 +100,7 @@ def plot_prepared_permutations(runs_dir, n_components):
         except FileNotFoundError:return None
         table=pd.read_csv(folder/'iteration_metrics.csv')
         return table.query("partition == 'test'").mean_r.to_numpy(),json.loads((folder/'manifest.json').read_text())
-    baseline=read('none');fig,axes=plt.subplots(3,4,figsize=(18,11),layout='constrained',sharex=True)
+    baseline=read('none');fig,axes=plt.subplots(3,len(PERMUTATION_TYPES),figsize=(4.5*len(PERMUTATION_TYPES),11),layout='constrained',sharex=True)
     for row,perm in enumerate(('ieeg','meg','both')):
         for col,kind in enumerate(PERMUTATION_TYPES):
             ax=axes[row,col];values=read(validation_run_name(perm,kind))
@@ -166,3 +166,48 @@ def plot_prepared_pca(data, absolute=True, comparison=False):
     return plot_plssvd_pca_comparison(dict(summary=pd.DataFrame(rows),delta_summary=pd.DataFrame(deltas),
         n_components=meta['n_components'],iterations=meta['iterations'],absolute=absolute,
         permutation=meta.get('permutation','none')))
+
+
+def plot_phase_null_comparison(runs_dir, n_components, modes=('meg','ieeg','both')):
+    """Matched-iteration held-out distributions from prepared snapshots only.
+
+    Each value averages the folds of one iteration. Baseline spread reflects
+    repeated trial splits; surrogate spread also varies phase. These overlapping
+    iterations are not independent observations; no inferential p-value is shown.
+    """
+    modes = tuple(modes)
+    if not modes or any(m not in ('meg','ieeg','both') for m in modes):
+        raise ValueError('modes must contain meg, ieeg or both.')
+    panels = [('mean_paired_covariance','Mean paired covariance'),
+              ('mean_r','Mean signed Pearson correlation'),
+              ('ieeg_reconstruction_fraction','iEEG reconstruction fraction'),
+              ('meg_reconstruction_fraction','MEG reconstruction fraction')]
+    fig, axes = plt.subplots(len(modes), len(panels), figsize=(18,3.4*len(modes)), squeeze=False, layout='constrained')
+    for row, mode in enumerate(modes):
+        try:
+            data = load_comparison(runs_dir, mode+'__phase', n_components)
+        except FileNotFoundError:
+            for ax, (_, title) in zip(axes[row], panels):
+                ax.text(.5,.5,'Phase comparison not prepared',ha='center',transform=ax.transAxes)
+                ax.set_title(f'{mode}: {title}')
+            continue
+        frame = data['metrics'].query("partition == 'test'")
+        for ax, (metric, title) in zip(axes[row], panels):
+            values = {label: frame.loc[frame.run == label, metric].dropna().to_numpy()
+                      for label in ('Unpermuted','Permuted')}
+            values = {label: a[np.isfinite(a)] for label,a in values.items()}
+            combined = np.concatenate(list(values.values()))
+            if not len(combined):
+                ax.text(.5,.5,'No finite values',ha='center',transform=ax.transAxes)
+                continue
+            bins = np.histogram_bin_edges(combined, bins=min(25,max(5,int(np.sqrt(len(combined))))))
+            for label, color in [('Unpermuted','tab:blue'),('Permuted','tab:orange')]:
+                a = values[label]
+                if len(a):
+                    ax.hist(a,bins=bins,histtype='step',linewidth=2,color=color,
+                            label=f'{"Baseline" if label == "Unpermuted" else "Phase null"} (n={len(a)})')
+                    ax.axvline(np.median(a),color=color,linestyle=':',alpha=.7)
+            ax.set(title=f'{mode.upper()} randomized: {title}',xlabel='Held-out fold mean per iteration',ylabel='Iterations')
+            ax.legend(fontsize=8)
+    fig.suptitle(f'Coherent phase surrogates vs baseline · k={n_components}\nMatched trial splits; dotted lines: medians; descriptive distributions, not independent replicates')
+    return fig

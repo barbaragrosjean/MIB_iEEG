@@ -293,12 +293,21 @@ def _trial_mean(array,indices):
 
 def _build_fold(trials,meg_kind,split_indices,root,seed,mmap_handles=None,condition_mode="stack", permutation_options=None, permutation_seed=None):
     permutation_rng = np.random.default_rng(permutation_seed)
+    phase_rngs = dict(zip(('ieeg', 'meg'), [np.random.default_rng(child)
+        for child in np.random.SeedSequence(permutation_seed).spawn(2)]))
+    phase_transforms = {}
     prepared={m:{} for m in ('ieeg','meg')};scalers={m:{} for m in ('ieeg','meg')}
     for modality,subjects in [('ieeg',trials.ieeg),('meg',trials.meg)]:
         for s in subjects:
             ix=split_indices[modality][s.subject]
             train=np.stack([_trial_mean(a,i) for a,i in zip(s.data,ix['train'])])
-            transform = _permutation_indices(train.shape[1:], trials.times, permutation_options, modality, permutation_rng)
+            if permutation_options is not None and permutation_options.perm_type == 'phase':
+                if modality not in phase_transforms:
+                    phase_transforms[modality] = _permutation_indices(
+                        train.shape[1:], trials.times, permutation_options, modality, phase_rngs[modality])
+                transform = phase_transforms[modality]
+            else:
+                transform = _permutation_indices(train.shape[1:], trials.times, permutation_options, modality, permutation_rng)
             train = _apply_permutation(train, transform)
             multiplier=1000. if modality=='ieeg' else 1.
             # Match original pipeline: MEG z-score based on TRAIN condition averages only.
@@ -928,7 +937,7 @@ def plot_test_score_correlations(output_dir, n_components=25, absolute=True):
     return fig,table
 
 
-PERMUTATION_TYPES = ('time_cirular_shift', 'time_block', 'time_point', 'space')
+PERMUTATION_TYPES = ('time_cirular_shift', 'time_block', 'time_point', 'space', 'phase')
 
 
 def _checked_options(options):
@@ -958,10 +967,20 @@ def _permutation_indices(shape, times, options, modality, rng):
     shuffles channels independently at each time point (a single fixed channel
     relabeling would be invariant under an unconstrained PLSSVD refit).
     Both modalities receive independent draws. Coordinates stay fixed.
+    Phase surrogates instead use a common Fourier phase vector across all
+    channels AND participants of a modality, shared across conditions/folds.
     """
     if options is None or options.perm not in (modality, 'both'):
         return None
     channels, n_times = shape
+    if options.perm_type == 'phase':
+        if n_times < 3 or len(times) != n_times or not np.allclose(np.diff(times), np.diff(times)[0], rtol=1e-4, atol=1e-9):
+            raise ValueError('Phase surrogates require >=3 regularly sampled time points.')
+        phase = rng.uniform(-np.pi, np.pi, n_times // 2 + 1)
+        phase[0] = 0.  # Preserve the mean.
+        if n_times % 2 == 0:
+            phase[-1] = 0.  # Real Nyquist coefficient, unchanged.
+        return {'phase_multiplier': np.exp(1j * phase), 'n_times': n_times}
     rows = np.broadcast_to(np.arange(channels)[:, None], shape).copy()
     cols = np.broadcast_to(np.arange(n_times), shape).copy()
     kind = options.perm_type
@@ -994,7 +1013,14 @@ def _permutation_indices(shape, times, options, modality, rng):
 
 
 def _apply_permutation(array, indices):
-    return array if indices is None else array[..., indices[0], indices[1]]
+    if indices is None:
+        return array
+    if isinstance(indices, dict) and 'phase_multiplier' in indices:
+        if array.shape[-1] != indices['n_times']:
+            raise ValueError('Phase surrogate time axis mismatch.')
+        spectrum = np.fft.rfft(array, axis=-1)
+        return np.fft.irfft(spectrum * indices['phase_multiplier'], n=indices['n_times'], axis=-1)
+    return array[..., indices[0], indices[1]]
 
 
 def validation_run_name(perm=None, perm_type=None):
@@ -1154,7 +1180,7 @@ def plot_permutation_comparison(runs_dir, n_components=None):
         frame=evaluated['iteration_metrics']
         return evaluated['iteration_options'],frame.loc[frame.partition=='test','mean_r'].dropna().to_numpy()
     baseline=read_run(root/'none')
-    fig,axes=plt.subplots(3,4,figsize=(18,11),layout='constrained',sharex=True)
+    fig,axes=plt.subplots(3,len(PERMUTATION_TYPES),figsize=(4.5*len(PERMUTATION_TYPES),11),layout='constrained',sharex=True)
     for row,perm in enumerate(('ieeg','meg','both')):
         for col,kind in enumerate(PERMUTATION_TYPES):
             ax=axes[row,col]; run=read_run(root/validation_run_name(perm,kind))

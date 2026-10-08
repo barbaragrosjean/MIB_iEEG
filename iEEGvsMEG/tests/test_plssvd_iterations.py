@@ -9,7 +9,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from plssvd_eval_utils import (TrialSubject, TrialData, ValidationOptions, fit_plssvd,
     load_plssvd_results, plot_iteration_summary, plot_permutation_comparison,
-    plot_plssvd_validation, _checked_options, _permutation_indices, _apply_permutation)
+    plot_plssvd_validation, PERMUTATION_TYPES, _checked_options, _permutation_indices, _apply_permutation)
 
 
 def validate_plssvd(*args, **kwargs):
@@ -134,7 +134,7 @@ class RepeatedEvaluationTests(unittest.TestCase):
             self.assertFalse((root/'none'/'iteration_000'/'primary_null_tests.csv').exists())
             plot_plssvd_validation(baseline,show=False)
             fig=plot_iteration_summary(root/'none');fig.savefig('/tmp/plssvd_iteration_preview.png');plt.close(fig)
-            fig=plot_permutation_comparison(root);self.assertEqual(len(fig.axes),12);plt.close(fig)
+            fig=plot_permutation_comparison(root);self.assertEqual(len(fig.axes),3*len(PERMUTATION_TYPES));plt.close(fig)
             loaded=load_plssvd_results(root/'none')
             self.assertEqual(loaded['iteration_options']['n_iterations'],2)
             with self.assertRaises(FileExistsError):validate_plssvd(trials,'full_concatenated',options,root/'none')
