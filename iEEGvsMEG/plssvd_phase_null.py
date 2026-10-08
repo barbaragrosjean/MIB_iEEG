@@ -4,13 +4,31 @@
 python -u plssvd_phase_null.py --perm all --components 5 10
 Uses an existing complete out/trial_cache. Output layout matches plssvd_eval.py:
 out/plssvd_eval/MEG_KIND/{none,meg__phase,ieeg__phase,both__phase}.
-A missing baseline is fitted with identical settings. Completed runs are reused;
-partial runs require a new --runs-dir (fits are not silently overwritten).
+A missing baseline is fitted with identical settings. Completed iterations are
+reused, including from interrupted runs; incomplete iterations are excluded.
 """
 from pathlib import Path
 import argparse
 import json
 from dataclasses import asdict, replace
+
+
+def reusable_iterations(folder, saved, meg_kind):
+    """Use the same per-iteration completion rule as evaluate_run."""
+    folder = Path(folder)
+    if saved.get('meg_kind') != meg_kind:
+        raise ValueError(f'{folder}: saved meg_kind={saved.get("meg_kind")!r}, '
+                         f'requested {meg_kind!r}. Select the matching --meg-kind '
+                         'or use a new --runs-dir.')
+    if saved.get('schema_version') not in (4, 6):
+        raise ValueError(f'{folder}: unsupported fit schema {saved.get("schema_version")!r}; '
+                         'use a new --runs-dir to fit the current repeated-iteration format.')
+    ids = [i for i in range(saved['n_iterations'])
+           if (folder/f'iteration_{i:03d}'/'COMPLETE.json').is_file()]
+    if not ids:
+        raise ValueError(f'{folder}: no completed iterations were found. Complete the '
+                         'original fit or use a new --runs-dir; existing files are preserved.')
+    return ids
 
 
 def resolve_max_components(runs, requested, components):
@@ -72,9 +90,11 @@ def main():
             for key in ('n_components','repeats','n_iterations','seed','split_unit','block_scaling','ridge','perm','perm_type'):
                 if saved.get(key) != asdict(settings)[key]:
                     raise ValueError(f'{folder}: incompatible {key}; match the existing run settings or use a new --runs-dir.')
-            if saved.get('meg_kind') != args.meg_kind or not (folder/'COMPLETE.json').exists():
-                raise ValueError(f'{folder}: incompatible or incomplete run; choose a new --runs-dir.')
-            print(f'Reusing completed fit: {folder}', flush=True)
+            ids = reusable_iterations(folder, saved, args.meg_kind)
+            print(f'Reusing {len(ids)}/{saved["n_iterations"]} completed iterations: {folder}', flush=True)
+            if len(ids) < saved['n_iterations']:
+                print('Incomplete iterations are excluded; comparisons use shared completed '
+                      'iteration IDs only. This command does not resume interrupted fits.', flush=True)
         else:
             if trials is None:
                 trials = load_trial_cache(cache)

@@ -13,10 +13,26 @@ from plssvd_eval_utils import (ValidationOptions, _permutation_indices, _apply_p
     _temporary_fold, _subject_folds, fit_plssvd)
 from plssvd_postprocess import evaluate_run, prepare_comparison
 from plssvd_figures import plot_phase_null_comparison, load_comparison
-from plssvd_phase_null import resolve_max_components
+from plssvd_phase_null import resolve_max_components, reusable_iterations
 
 
 class PhaseTests(unittest.TestCase):
+    def test_reuse_without_run_completion_marker(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            saved = dict(meg_kind='full_concatenated', schema_version=6, n_iterations=2)
+            with self.assertRaisesRegex(ValueError, 'no completed iterations'):
+                reusable_iterations(root, saved, 'full_concatenated')
+            child = root/'iteration_000'
+            child.mkdir()
+            (child/'COMPLETE.json').write_text('{}')
+            (root/'iteration_001').mkdir()  # Interrupted iteration is excluded.
+            self.assertEqual(reusable_iterations(root, saved, 'full_concatenated'), [0])
+            with self.assertRaisesRegex(ValueError, 'saved meg_kind'):
+                reusable_iterations(root, saved, 'full_average')
+            with self.assertRaisesRegex(ValueError, 'unsupported fit schema'):
+                reusable_iterations(root, dict(saved, schema_version=5), 'full_concatenated')
+
     def test_baseline_component_count_resolution(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
@@ -85,6 +101,10 @@ class PhaseTests(unittest.TestCase):
                 name='none' if mode is None else mode+'__phase'
                 options=ValidationOptions(n_components=2,n_iterations=1,repeats=2,perm=mode,perm_type='phase' if mode else None)
                 fit_plssvd(synthetic_trials(),'full_concatenated',options,root/name)
+                # A missing run-level marker must not hide completed iterations.
+                (root/name/'COMPLETE.json').unlink()
+                saved = json.loads((root/name/'validation_options.json').read_text())
+                self.assertEqual(reusable_iterations(root/name, saved, 'full_concatenated'), [0])
                 evaluate_run(root/name,[1,2])
                 if mode:
                     prepare_comparison(root,name,2)
