@@ -45,7 +45,7 @@ def _check_matching(baseline, selected, ids):
             raise ValueError(f'Cannot pair runs: different {filename}.')
 
 
-def _backfill_spectra(root, iteration, trials, scratch_dir=None, include_pca=False, fold_indices=None):
+def _backfill_spectra(root, iteration, trials, scratch_dir=None, include_pca=False, fold_indices=None, compute_spectra=True):
     """Recreate folds for spectra/optional training PCA; never refit PLSSVD."""
     from plssvd_eval_utils import ValidationOptions, _temporary_fold, _project, _saved_scores
     from cov_models_utils import _gram
@@ -68,7 +68,7 @@ def _backfill_spectra(root, iteration, trials, scratch_dir=None, include_pca=Fal
     for fold in (range(config['repeats']) if fold_indices is None else fold_indices):
         sidecar=child/f'temporal_spectra_{fold:03d}.npz'
         pca_sidecar=child/f'pca_scores_{fold:03d}.npz'
-        if sidecar.exists() and (not include_pca or pca_sidecar.exists()):continue
+        if (not compute_spectra or sidecar.exists()) and (not include_pca or pca_sidecar.exists()):continue
         indices={}
         for modality in ('ieeg','meg'):
             indices[modality]={}
@@ -93,20 +93,29 @@ def _backfill_spectra(root, iteration, trials, scratch_dir=None, include_pca=Fal
                         actual=_project(datasets[part][modality],model,modality)
                         if not np.allclose(actual,expected,rtol=1e-4,atol=1e-5*max(1.,np.max(np.abs(expected)))):
                             raise ValueError('Reconstructed scores differ from saved scores; check the original trial cache and settings.')
-                for part in ('train','test'):
+                for part in (('train','test') if compute_spectra else ('train',)):
                     for modality in ('ieeg','meg'):
                         gram=_gram(datasets[part][modality])*float(model[modality+'_scale'])**2
-                        from plssvd_pca import temporal_singular_values
-                        spectra[f'{part}_{modality}_temporal_singular_values']=temporal_singular_values(
-                            gram,datasets[part][modality].n_features)
+                        if compute_spectra:
+                            from plssvd_pca import temporal_singular_values
+                            spectra[f'{part}_{modality}_temporal_singular_values']=temporal_singular_values(
+                                gram,datasets[part][modality].n_features)
                         if part == 'train' and include_pca:
                             from plssvd_pca import independent_pca_scores
                             pca=independent_pca_scores(datasets['train'][modality],datasets['test'][modality],
                                 config['n_components'],model[modality+'_scale'],train_gram=gram)
                             pca_scores[f'train_{modality}_pca']=pca['train']
                             pca_scores[f'test_{modality}_pca']=pca['test']
-        if not sidecar.exists():np.savez_compressed(sidecar,**spectra)
-        if include_pca:np.savez_compressed(pca_sidecar,**pca_scores)
+        if compute_spectra and not sidecar.exists():np.savez_compressed(sidecar,**spectra)
+        if include_pca:
+            # Atomic publication makes a stopped PCA backfill safe to resume.
+            from uuid import uuid4
+            pending=pca_sidecar.with_name(pca_sidecar.name+'.'+uuid4().hex+'.tmp')
+            try:
+                with pending.open('wb') as stream:np.savez_compressed(stream,**pca_scores)
+                pending.replace(pca_sidecar)
+            finally:
+                if pending.exists():pending.unlink()
 
 
 def _spectral_rows(root, ids, folds, k, full):
