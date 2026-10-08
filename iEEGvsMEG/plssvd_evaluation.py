@@ -49,6 +49,18 @@ def collect_statistics(fold, scores, model):
         gx = _gram(fold[part]['ieeg']) * model['ieeg_scale']**2
         gy = _gram(fold[part]['meg']) * model['meg_scale']**2
         output[part+'_total_crosscov_energy'] = np.sum(gx*gy)/(n-1)**2
+        for modality, gram in [('ieeg',gx),('meg',gy)]:
+            if part == 'train':
+                from plssvd_pca import independent_pca_scores
+                pca = independent_pca_scores(fold['train'][modality],fold['test'][modality],k,
+                                             model[modality+'_scale'],train_gram=gram)
+                output[f'train_{modality}_pca'] = pca['train']
+                output[f'test_{modality}_pca'] = pca['test']
+                output[f'{part}_{modality}_temporal_singular_values'] = pca['singular_values']
+            else:
+                from plssvd_pca import temporal_singular_values
+                output[f'{part}_{modality}_temporal_singular_values'] = temporal_singular_values(
+                    gram,fold[part][modality].n_features)
     return output
 
 

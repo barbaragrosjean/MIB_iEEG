@@ -65,3 +65,46 @@ or modified automatically.
 
 Changing k after examining held-out results is exploratory model comparison;
 it does not create an independent estimate of the performance of the selected k.
+
+## Selected permutation diagnostics
+
+The final notebook section uses the same `PERM`, `PERM_TYPE`, and `N_COMPONENTS`
+settings as the earlier sections. It compares the selected run with `none`,
+restricting both to their shared completed iteration IDs and verifying actual
+trial assignments. It displays component-wise train/test correlations and
+covariances, paired held-out metrics, within-iteration differences, and temporal
+spectra. Figures and numerical tables are exported to `diagnostics_kK` inside the
+selected run. Fold means precede across-iteration means and SDs.
+
+Future fits also save full temporal input spectra in the score artifacts. Existing
+runs can recover these from the original trial cache without refitting PLSSVD;
+small `temporal_spectra_XXX.npz` sidecars are saved after checking reconstructed
+scores against the fitted scores. This reconstruction can be computationally
+expensive. If the original cache is unavailable, the section explicitly shows
+selected-score spectra for both runs instead. This fallback does not measure
+full input dimensionality. The spectrum table includes singular values, normalized
+squared singular values, and participation-ratio effective rank.
+
+## Independent PCA comparison
+
+The final PLSSVD/PCA section fits PCA independently to the training iEEG and
+training MEG matrices, then correlates each modality's held-out PLSSVD scores
+with its own held-out PCA scores across time. PCA uses the same preprocessing
+and permutation as that run, without whitening or test-based component alignment.
+The plotted rows are PLSSVD components and columns are PCA components ordered by
+training variance. Equal indices need not correspond to the same direction.
+
+`PERM`, `PERM_TYPE`, and `N_COMPONENTS` select the analysis. `PCA_ABSOLUTE=True`
+shows mean absolute Pearson correlations; False shows signed correlations with
+signs determined independently from each model's training scores. The matrices
+show fold-averaged iteration means and across-iteration SDs. Selected permutations
+are compared with baseline on matched iterations, including difference panels;
+selecting no permutation shows baseline alone. Tables also retain fold-level
+signed Pearson correlations and valid fold/iteration counts.
+
+Future fit jobs save training/test PCA scores in `scores_XXX.npz`, for every
+fitted component. Existing fits require the original trial cache to reconstruct
+their folds and fit PCA once. This writes `pca_scores_XXX.npz` sidecars and never
+refits PLSSVD. Without that cache or saved PCA scores, the comparison fails with
+an explicit message: independent PCA scores cannot be inferred from PLSSVD scores
+or singular values alone. Subsequent component-count changes reuse saved scores.

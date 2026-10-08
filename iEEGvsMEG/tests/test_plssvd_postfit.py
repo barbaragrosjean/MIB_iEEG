@@ -30,6 +30,13 @@ class PostFitTests(unittest.TestCase):
             maximum=_fit(fold['train'],5,options)
             scores={p:{m:_project(ds,maximum,m) for m,ds in modalities.items()} for p,modalities in fold.items()}
             saved=collect_statistics(fold,scores,maximum)
+            for part in fold:
+                for modality in ('ieeg','meg'):
+                    x=np.concatenate(list(fold[part][modality].blocks()),axis=1)
+                    direct_spectrum=np.linalg.svd((x-x.mean(0))*maximum[modality+'_scale'],compute_uv=False)
+                    np.testing.assert_allclose(saved[f'{part}_{modality}_temporal_singular_values'][:len(direct_spectrum)],
+                                               direct_spectrum,rtol=1e-8,atol=1e-8)
+
             for k in (1,2,5):
                 model=_fit(fold['train'],k,options)
                 direct={p:{m:_project(ds,model,m) for m,ds in modalities.items()} for p,modalities in fold.items()}
