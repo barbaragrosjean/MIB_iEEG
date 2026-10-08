@@ -106,7 +106,7 @@ def main():
     print(trial_counts.to_string(index=False), flush=True)
     np.savez_compressed(output_dir / 'trial_axes.npz', times=trials.times, conditions=trials.conditions)
 
-    # Fit artifacts only. All metrics and figures are computed later in the notebook.
+    # Fit artifacts only. Run plssvd_postprocess.py separately; the notebook only plots.
     fit_plssvd(trials, args.meg_kind, options, output_dir=output_dir, scratch_dir=args.scratch_dir)
 
     print(f'Outputs saved to: {output_dir.resolve()}', flush=True)

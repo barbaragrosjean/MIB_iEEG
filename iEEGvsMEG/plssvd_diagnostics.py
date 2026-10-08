@@ -45,7 +45,7 @@ def _check_matching(baseline, selected, ids):
             raise ValueError(f'Cannot pair runs: different {filename}.')
 
 
-def _backfill_spectra(root, iteration, trials, scratch_dir=None, include_pca=False):
+def _backfill_spectra(root, iteration, trials, scratch_dir=None, include_pca=False, fold_indices=None):
     """Recreate folds for spectra/optional training PCA; never refit PLSSVD."""
     from plssvd_eval_utils import ValidationOptions, _temporary_fold, _project, _saved_scores
     from cov_models_utils import _gram
@@ -65,7 +65,7 @@ def _backfill_spectra(root, iteration, trials, scratch_dir=None, include_pca=Fal
     with np.load(saved_axes) as axes:
         if not np.array_equal(axes['times'],trials.times) or tuple(axes['conditions']) != tuple(trials.conditions):
             raise ValueError('Trial cache axes differ from the saved run.')
-    for fold in range(config['repeats']):
+    for fold in (range(config['repeats']) if fold_indices is None else fold_indices):
         sidecar=child/f'temporal_spectra_{fold:03d}.npz'
         pca_sidecar=child/f'pca_scores_{fold:03d}.npz'
         if sidecar.exists() and (not include_pca or pca_sidecar.exists()):continue
@@ -85,7 +85,7 @@ def _backfill_spectra(root, iteration, trials, scratch_dir=None, include_pca=Fal
                 model = {key:saved_model[key] for key in ('ieeg_mean','meg_mean','ieeg_scale','meg_scale')}
                 model['k_max'] = min(3,int(saved_model['k_max']))
                 for modality in ('ieeg','meg'):
-                    model[modality+'_weights'] = saved_model[modality+'_weights'][:,:model['k_max']]
+                    model[modality+'_weights'] = saved_model[modality+'_weights'][:,:model['k_max']].copy()
             with _saved_scores(child,fold) as saved_scores:
                 for part in ('train','test'):
                     for modality in ('ieeg','meg'):
@@ -256,11 +256,23 @@ def plot_permutation_diagnostics(data):
             ax=axes[row,col]
             for label,color in colors.items():
                 for part,style in [('train','--'),('test','-')]:
-                    frame=data['spectra'].query('run == @label and modality == @modality and partition == @part')
-                    _line_sd(ax,frame,'rank',metric,f'{label} {part}',color,style)
+                    if 'spectrum_summaries' in data:
+                        values=data['spectrum_summaries'].get((label,part,modality,metric))
+                        if values is not None:
+                            mean,sd=values;rank=np.arange(len(mean))+1
+                            ax.plot(rank,mean,ls=style,color=color,label=f'{label} {part}')
+                            if np.isfinite(sd).any():ax.fill_between(rank,mean-sd,mean+sd,color=color,alpha=.15)
+                    else:
+                        frame=data['spectra'].query('run == @label and modality == @modality and partition == @part')
+                        _line_sd(ax,frame,'rank',metric,f'{label} {part}',color,style)
             ax.set(title=modality.upper(),xlabel='Temporal singular-value rank',
                    ylabel='Singular value' if metric=='singular_value' else 'Fraction of squared singular values')
-            ax.set_yscale('symlog',linthresh=1e-8);ax.legend(fontsize=8)
-    source='Full input' if data['full_spectra'] else 'Projected PLS scores ONLY (full input unavailable)'
+            ax.set_yscale('symlog',linthresh=1e-8)
+            if ax.lines:ax.legend(fontsize=8)
+            else:ax.text(.5,.5,'Full spectra not prepared; run the evaluation job with --cache-dir.',
+                         transform=ax.transAxes,ha='center',wrap=True)
+    source=('Full input' if data['full_spectra'] else
+            'Full spectra not prepared' if 'spectrum_summaries' in data else
+            'Projected PLS scores ONLY (full input unavailable)')
     fig.suptitle(source+' temporal spectra · mean ± SD\n'+suffix);figures['spectra']=fig
     return figures

@@ -1,110 +1,140 @@
-# PLSSVD: fit once, evaluate later
+# PLSSVD: fit, evaluate, plot
 
-## Cluster fitting
+The notebook now draws figures from prepared evaluation snapshots. It does not
+load fitted weights, reconstruct trial averages, fit PCA, calculate prediction
+metrics, or invoke evaluation automatically. Existing fit directories are reused.
+
+## 1. Fit once on the cluster
 
 ```bash
-python plssvd_eval.py --max-components 100 --n-iterations 100 --n-splits 5
+python -u plssvd_eval.py --max-components 100 --n-iterations 100 --n-splits 5
 ```
 
-`--n-components` remains an alias for `--max-components`. Both default to 100.
-Every training fold must support this rank; the job fails explicitly if it does not.
-Use a new output directory when changing fit settings. Existing fits are never overwritten.
-Permutation selection is unchanged: `--perm ieeg|meg|both|none` and
-`--perm-type time_cirular_shift|time_block|time_point|space|none`.
-Both default to no permutation; time blocks default to 0.36 seconds.
+Skip this stage if the fits already exist. `--n-components` remains an alias for
+`--max-components`. Every training fold must support the fitted rank. Fit files
+are never overwritten. Participant matching and preprocessing are unchanged.
 
-The fitting job does not evaluate metrics or create figures. `fit_plssvd(...)`
-is the Python entry point; `validate_plssvd` is retained as an alias and now
-returns fit metadata, not evaluation tables.
+## 2. Prepare evaluations on the cluster
 
-## Notebook evaluation
+For baseline and one selected permutation:
 
-Set `N_COMPONENTS` near the beginning of `plssvd_eval.ipynb`, then rerun the
-loading and plotting cells. Any integer from 1 to the fitted maximum works;
-`None` uses the full fitted rank.
-
-```python
-result = load_plssvd_results(OUTPUT_DIR, n_components=10)
-plot_plssvd_validation(result)  # first available iteration
-plot_iteration_summary(OUTPUT_DIR, n_components=10)
-plot_permutation_comparison(RUNS_DIR, n_components=10)
+```bash
+python -u plssvd_postprocess.py \
+  --runs-dir out/plssvd_eval/full_concatenated \
+  --components 5 10 25 \
+  --perm meg --perm-type time_point
 ```
 
-The loader reports completed/requested iterations and selected/fitted components.
-It excludes unfinished iterations and supports interrupted jobs with at least
-one completed iteration. Summaries are computed in memory. Figure filenames
-include k so results for different selections do not overwrite each other.
-The selected count applies to correlations, covariance, reconstruction,
-prediction, stability, time courses, and the permutation comparison.
+For every existing run:
 
-## Saved data
+```bash
+python -u plssvd_postprocess.py \
+  --runs-dir out/plssvd_eval/full_concatenated \
+  --components 5 10 25 --all-runs
+```
 
-- Per run: settings, time/condition axes, fixed matching, pairing and feature metadata.
-- Per iteration: settings, compressed trial split audit, completion marker.
-- Per fold: model weights/means/scales; training preprocessing; component scores
-  and compact sufficient statistics in a separate `scores_XXX.npz` file.
+Older fits may lack saved PCA scores or full input spectra. To recover them once,
+add these options to the evaluation command:
 
-No feature-sized prediction maps or redundant metric CSVs are written by fitting.
-Evaluation reads the scores/statistics rather than decompressing the large weight
-arrays. Raw trials are not needed. Keep the run directory structure when copying.
+```bash
+--cache-dir /path/to/out/trial_cache --scratch-dir /path/to/local/scratch
+```
 
-For prediction, training score-target products are reduced to small component-space
-matrices. These reproduce squared prediction errors at any leading k, with a
-training-only ridge predictor and k-specific ridge penalty. Reconstruction retains
-training-centered signal energy and the fitted weight Gram matrix. The full
-cross-covariance denominator remains independent of selected k. None of these
-statistics changes the fitted model or uses test data for calibration.
+This reconstructs one fold at a time and fits independent **training-only PCA**;
+it does not refit PLSSVD. Reconstructed scores are checked against saved scores.
+Without the cache, the worker still evaluates the available metrics and explicitly
+marks missing PCA/spectra. The notebook does not substitute projected spectra for
+missing full input spectra. A worker still needs sufficient RAM for one fold's
+PCA/Gram calculation; moving it outside the notebook does not eliminate that cost.
 
-## Existing output compatibility
+### Reuse and resume
 
-Older runs still load at their original component count, including interrupted
-repeated runs. They do not contain all statistics required to recompute prediction
-and reconstruction for a smaller k, so the loader rejects that request explicitly.
-New-format fits enable the full flexible workflow. Existing outputs are not migrated
-or modified automatically.
+- Each shared fold evaluation and each k-specific metric calculation is saved
+  atomically. Rerunning the same command skips valid completed work.
+- Component and PCA correlation matrices are calculated for all fitted components
+  once. Different k selections reuse their prefixes.
+- Reconstruction and ridge-prediction metrics are cached separately for each k.
+  The k-specific predictor uses only compact training statistics, without refitting
+  PLSSVD or rereading raw trials.
+- Cache signatures include the evaluator version and source file paths, sizes,
+  and modification times. Changed inputs invalidate dependent evaluations.
+- Only complete fit iterations enter published figures. Partially evaluated
+  iterations retain their fold checkpoints but are excluded from summaries.
+- On a handled interruption (including a Python `MemoryError`), the worker attempts
+  to publish fully evaluated iterations before propagating the error. A forcibly
+  killed process retains atomic checkpoints and the previous published snapshot.
 
-Changing k after examining held-out results is exploratory model comparison;
-it does not create an independent estimate of the performance of the selected k.
+To publish fully evaluated iterations after a forced stop, without evaluating
+additional folds, repeat the relevant command with `--publish-only`. To continue
+work, repeat it without that option. Neither command reruns PLSSVD fitting.
 
-## Selected permutation diagnostics
+Published snapshots are immutable. The `CURRENT.json` pointer changes only after
+all files are written. Earlier snapshots are retained; their folders can be
+archived when no longer needed. This prevents a plotting session from observing
+partially overwritten summary files. Do not delete the shared fold checkpoints
+if you want subsequent evaluation jobs to reuse them.
 
-The final notebook section uses the same `PERM`, `PERM_TYPE`, and `N_COMPONENTS`
-settings as the earlier sections. It compares the selected run with `none`,
-restricting both to their shared completed iteration IDs and verifying actual
-trial assignments. It displays component-wise train/test correlations and
-covariances, paired held-out metrics, within-iteration differences, and temporal
-spectra. Figures and numerical tables are exported to `diagnostics_kK` inside the
-selected run. Fold means precede across-iteration means and SDs.
+## 3. Plot locally
 
-Future fits also save full temporal input spectra in the score artifacts. Existing
-runs can recover these from the original trial cache without refitting PLSSVD;
-small `temporal_spectra_XXX.npz` sidecars are saved after checking reconstructed
-scores against the fitted scores. This reconstruction can be computationally
-expensive. If the original cache is unavailable, the section explicitly shows
-selected-score spectra for both runs instead. This fallback does not measure
-full input dimensionality. The spectrum table includes singular values, normalized
-squared singular values, and participation-ratio effective rank.
+Copy each run's `evaluation` directory, keeping this layout:
 
-## Independent PCA comparison
+```text
+out/plssvd_eval/full_concatenated/
+  none/evaluation/...
+  meg__time_point/evaluation/...
+```
 
-The final PLSSVD/PCA section fits PCA independently to the training iEEG and
-training MEG matrices, then correlates each modality's held-out PLSSVD scores
-with its own held-out PCA scores across time. PCA uses the same preprocessing
-and permutation as that run, without whitening or test-based component alignment.
-The plotted rows are PLSSVD components and columns are PCA components ordered by
-training variance. Equal indices need not correspond to the same direction.
+The original fit files and trial cache are not required on the plotting machine.
+Open `plssvd_eval.ipynb` and set `PERM`, `PERM_TYPE`, and an explicitly prepared
+`N_COMPONENTS`. `PCA_ABSOLUTE` selects signed versus absolute PCA correlations.
+Changing plot settings never launches computation. An unprepared k produces an
+instruction to run the separate evaluation command.
 
-`PERM`, `PERM_TYPE`, and `N_COMPONENTS` select the analysis. `PCA_ABSOLUTE=True`
-shows mean absolute Pearson correlations; False shows signed correlations with
-signs determined independently from each model's training scores. The matrices
-show fold-averaged iteration means and across-iteration SDs. Selected permutations
-are compared with baseline on matched iterations, including difference panels;
-selecting no permutation shows baseline alone. Tables also retain fold-level
-signed Pearson correlations and valid fold/iteration counts.
+The notebook preserves first-iteration plots, the mean/SD iteration overview,
+the 3-by-4 permutation overview, matched diagnostics, and the PLSSVD/PCA matrices.
+The overview uses all prepared iterations per run. Matched diagnostics use only
+shared iteration IDs, verified against actual trial-assignment hashes, compatible
+settings, and fixed participant/source matching. When an underlying snapshot is
+updated, stale matched comparisons are rejected until the evaluation command
+republishes them.
 
-Future fit jobs save training/test PCA scores in `scores_XXX.npz`, for every
-fitted component. Existing fits require the original trial cache to reconstruct
-their folds and fit PCA once. This writes `pca_scores_XXX.npz` sidecars and never
-refits PLSSVD. Without that cache or saved PCA scores, the comparison fails with
-an explicit message: independent PCA scores cannot be inferred from PLSSVD scores
-or singular values alone. Subsequent component-count changes reuse saved scores.
+## Evaluation files
+
+Under each run:
+
+```text
+evaluation/
+  shared/iteration_000/fold_000.npz   # reusable all-rank summaries
+  k_010/
+    iteration_000/fold_000.npz        # k-specific metrics
+    CURRENT.json                     # atomically published snapshot pointer
+    snapshot_<id>/                    # compact arrays and metric tables
+    comparison/CURRENT.json          # selected run versus baseline
+    comparison/snapshot_<id>/
+```
+
+Only the pointed-to snapshots are read for figures. They contain means, sample SDs,
+component correlations, metric tables, and first-iteration score time courses.
+The evaluator processes source folds sequentially and uses online array summaries;
+no collection of model weights or all-iteration score cubes is loaded at once.
+
+The older computational helpers (`load_plssvd_results`, `permutation_diagnostics`,
+`plssvd_pca_comparison`) remain available for scripts and compatibility, but are
+not called by the notebook. For figures use `plssvd_figures.py`.
+
+## Interpretation and compatibility
+
+All metrics use held-out condition-averaged time courses. Prediction calibration
+and PCA use training data only. Fold means precede across-iteration SDs; repeated
+iterations reuse trials and are not independent population replicates.
+
+The PCA matrices compare PLSSVD with independently fitted PCA within each modality.
+They preserve native ranks rather than matching axes using test data. Absolute
+correlations avoid arbitrary signs; signed correlations orient axes using training
+scores. Full temporal spectra use partition-centered input data; numerical
+null-space eigenvalues are excluded using the PCA rank tolerance.
+
+Legacy fits lacking sufficient statistics support reconstruction/prediction only
+at the original fitted component count. New-format fits support all smaller k.
+Examining multiple k values on held-out results is exploratory analysis, not an
+independent evaluation of a model selected using those results.
