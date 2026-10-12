@@ -15,6 +15,39 @@ from pathlib import Path
 import argparse
 import json
 import sys
+import uuid
+
+
+def prepare_output_directory(output_dir, n_components):
+    """Replace an existing run only when increasing its fitted dimension.
+
+    Move the entire previous run aside so stale fits, evaluations and figures
+    cannot be mistaken for outputs of the new fit. Preserve it for recovery.
+    """
+    output_dir = Path(output_dir)
+    if isinstance(n_components, bool) or not isinstance(n_components, int) or n_components < 1:
+        raise ValueError('n_components must be a positive integer.')
+    if output_dir.exists() and any(output_dir.iterdir()):
+        config_path = output_dir / 'validation_options.json'
+        try:
+            previous = json.loads(config_path.read_text())['n_components']
+            if isinstance(previous, bool) or not isinstance(previous, int) or previous < 1:
+                raise ValueError('Invalid stored component count')
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise FileExistsError(
+                f'Output already exists at {output_dir}, but its fitted component count '
+                'cannot be verified. Choose a new --output-dir.') from exc
+        if n_components <= previous:
+            raise FileExistsError(
+                f'A run with {previous} components already exists at {output_dir}; '
+                f'requested {n_components}. Existing fits support evaluation with fewer '
+                'components. Replacement requires a higher --max-components value.')
+        backup = output_dir.parent / '.previous_runs' / f'{output_dir.name}_k{previous}_{uuid.uuid4().hex}'
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        output_dir.rename(backup)
+        print(f'Replacing {previous}-component run with {n_components} components. '
+              f'Previous run preserved at {backup}. Recompute postprocessing after fitting.', flush=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
 
 def parse_args():
@@ -59,20 +92,19 @@ def main():
     import numpy as np
     import pandas as pd
     from src.setting import GetInfo, PROJECT_PATH
-    from plssvd_eval_utils import ValidationOptions, prepare_trial_cache, fit_plssvd, validation_run_name
+    from plssvd_eval_utils import ValidationOptions, prepare_trial_cache, fit_plssvd, validation_run_name, _checked_options
 
     meg_dir = args.meg_dir or root / 'MEG' / 'dataMEG'
     ieeg_dir = args.ieeg_dir or root / 'ieeg_shortWOBS_fs250'
     cache_dir = args.cache_dir or root / 'out' / 'trial_cache'
     output_dir = args.output_dir or root / 'out' / 'plssvd_eval_equal_var' / args.meg_kind / validation_run_name(args.perm, args.perm_type)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if (output_dir / 'validation_options.json').exists() or any(output_dir.glob('model_*.npz')):
-        raise FileExistsError('Choose a new --output-dir; existing evaluations are not overwritten.')
     options = ValidationOptions(repeats=args.repeats, n_components=args.n_components,
                                 n_iterations=args.n_iterations, perm=args.perm, perm_type=args.perm_type,
                                 block_seconds=args.block_seconds, seed=args.seed,
                                 split_unit=args.split_unit,
                                 block_scaling='equal_variance', max_gram_gib=args.max_gram_gib) #TODO turn to 'equal_variance'
+    options = _checked_options(options)
+    prepare_output_directory(output_dir, args.n_components)
 
     meg_subjects = sorted(p.name.removesuffix('_source.p') for p in meg_dir.glob('*_source.p')
                           if p.name != 'SUBJ_0038_source.p')
