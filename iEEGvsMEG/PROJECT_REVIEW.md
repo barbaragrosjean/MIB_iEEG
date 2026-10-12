@@ -2,14 +2,14 @@
 
 ## Current status
 
-Reviewed against the local implementation on October 10, 2026. “Implemented” describes available code, not an established empirical finding. Saved notebook outputs exist, but standalone run tables and their provenance were not available for this review; numerical conclusions therefore remain unverified.
+Reviewed against the local implementation on October 12, 2026. “Implemented” describes available code, not an established empirical finding. Saved notebook outputs exist, but standalone run tables and their provenance were not available for this review; numerical conclusions therefore remain unverified.
 
 | Analysis | Implementation | Evaluation scope | Principal outputs | Results status |
 |---|---|---|---|---|
 | Coverage and composition sensitivity | `coverage_stability.py`, `coverage_matching.ipynb` | In-sample PCA correspondence, participant-count and pairing sensitivity | Metrics, component pairs, assignments and coverage figures | Requires verification of saved runs |
 | MEG channel-count sensitivity | `elect_number_effect.py` | Nested feature-count sweep against a fixed iEEG PCA reference | Channel-count curves, metrics and feature orders | Descriptive; numerical findings unverified |
 | PLSSVD validation | `plssvd_eval.py`, `plssvd_postprocess.py` | Repeated trial-held-out fits; default 100 iterations × 5 folds | Saved fits, evaluated component prefixes and figure snapshots | Generalization claims require matched run results |
-| Temporal surrogate validation | `plssvd_phase_null.py`, `plssvd_diagnostics.py` | Refit baseline/null models with matched splits | Covariance, correlation, reconstruction, prediction and spectral diagnostics | Diagnostic null comparisons; no phase-null p-value |
+| Temporal surrogate validation | `plssvd_eval.py`, `plssvd_postprocess.py`, `plssvd_diagnostics.py` | Refit baseline/null models with matched splits | Covariance, correlation, reconstruction, prediction and spectral diagnostics | Diagnostic null comparisons; no phase-null p-value |
 | Within-modality model comparison | `compare_models.py`, `cov_models.ipynb`, `compare_subspace.py` | PCA versus PLSSVD/joint PCA; descriptive and held-out comparisons | Temporal/spatial overlap and matched correlations | Numerical findings unverified |
 | Cross-modal geometry | `compare_subspace.py`, `spatial_clouds.py` | Held-out representations, transformations, clustering and unpaired spatial distributions | Overlap, alignment, ARI and cloud metrics | Exploratory; numerical findings unverified |
 | Modality-specific spatial organization | `modality_specificity.py`, `modality_specificity.ipynb` | Full-data native projection weights, spatial nulls and anatomical summaries | Distance curves, semivariograms, clusters, regional and hemisphere summaries | Descriptive fits; spatial inference conditional on exchangeability |
@@ -86,7 +86,7 @@ Sampling is global across features, not balanced by participant. Each repetition
 - No test A/B subdivisions. At least n_splits trials per condition are required. Group splitting keeps whole groups together and requires at least n_splits groups with each condition represented in every fold.
 - Average trials within each condition separately for train and test, then average conditions equally. Models receive time × features matrices, not individual trials or condition-stacked observations.
 - Concatenate all iEEG electrodes across subjects. MEG full_concatenated concatenates sources; full_average averages source indices across subjects; coverage_average averages matched coverage; paired_coverage/random_control retain their paired sampled-feature construction.
-- The PCA/sample-space factors operate on these averaged matrices. Fit up to `--max-components` (default 100), then evaluate a prespecified leading k without refitting PLSSVD. The phase launcher inherits an existing baseline’s fitted count when this option is omitted. Insufficient training rank raises an error.
+- The PCA/sample-space factors operate on these averaged matrices. Fit up to `--max-components` (default 100), then evaluate a prespecified leading k without refitting PLSSVD. `plssvd_eval.py` does not inherit the baseline’s fitted count; specify matching fit settings explicitly. Insufficient training rank raises an error.
 - Repeat the shuffled five-fold procedure for 100 iterations by default. All folds and iterations use the same cohort and participant/source assignment. There is no tuning; repeated trial splits are not independent biological samples.
 - Condition-label nulls and condition-contrast/test-half outputs are removed from this condition-averaged evaluation. Legacy compare_subspace remains separate and unchanged.
 
@@ -110,7 +110,7 @@ The denominator is evaluated through observation Gram matrices. The test latent 
 
 **Stability across splits.** `metric_summary.csv` gives count, mean, SD, median, minimum and maximum for each train/test metric. `fold_stability.csv` compares temporal scores from every pair of independently refitted splits, separately by modality and train/test partition, using one-to-one matched mean absolute Pearson r. `fold_component_pairs.csv` records those descriptive assignments. Matching handles sign/order variation only, not arbitrary rotations; it is not used to optimize the main test metrics. Test folds share no trials, but training folds overlap. Stability and performance spread remain descriptive, not independent replicates or confidence intervals. No test-half reliability is computed in this workflow.
 
-**Fit, evaluation and output separation.** Fits are saved under `out/plssvd_eval/{MEG_KIND}/{PERMUTATION}`, with `none` for baseline. Each `iteration_XXX` contains fold models, scores, sufficient statistics, preprocessing and split/matching audits. `plssvd_postprocess.py` evaluates requested component prefixes and prepares saved snapshots; `plssvd_figures.py` reads prepared results. Reconstruction and k-specific ridge prediction are evaluated from saved information rather than refitting the PLS axes. Missing PCA/spectral artifacts can require reconstruction from the original trial cache. Completed iterations can be evaluated even when a run-level completion marker is absent; incomplete iterations are excluded. The phase launcher reuses these iterations but does not resume interrupted fits.
+**Fit, evaluation and output separation.** Fits are saved under `out/plssvd_eval/{MEG_KIND}/{PERMUTATION}`, with `none` for baseline. Each `iteration_XXX` contains fold models, scores, sufficient statistics, preprocessing and split/matching audits. `plssvd_postprocess.py` evaluates requested component prefixes and prepares saved snapshots; `plssvd_figures.py` reads prepared results. Reconstruction and k-specific ridge prediction are evaluated from saved information rather than refitting the PLS axes. Missing PCA/spectral artifacts can require reconstruction from the original trial cache. Completed iterations can be evaluated even when a run-level completion marker is absent; incomplete iterations are excluded. Postprocessing reuses completed iterations but does not resume interrupted fits.
 
 Prepared tables include fold/component metrics, iteration means and descriptive stability summaries. Figures cover held-out reconstruction, prediction, covariance, correlations and stability. Selecting k after inspecting test results makes that selection exploratory.
 
@@ -127,15 +127,32 @@ For each Fourier frequency f and channel j in a randomized modality, the surroga
 
 One phase vector is shared across channels, participants, conditions and train/test folds within an iteration. DC and, for even-length signals, Nyquist coefficients are unchanged. Inverse real FFT returns the surrogate signal. Consequently power spectra and cross-spectra within that modality are preserved: the common phase cancels in the product of one channel’s Fourier coefficient and another’s complex conjugate. This also preserves circular second-order temporal structure and spatial covariance, but not event timing or every local temporal property of an evoked response.
 
-`--perm meg` randomizes only MEG; `--perm ieeg` only iEEG; `--perm both` uses **independent** phase vectors for the two modalities. `--perm all` runs all three. Using the same phase vector in both modalities would preserve their cross-spectrum and would not provide this null. New phase vectors are drawn across iterations, and PLSSVD is refitted for each surrogate with the baseline’s matching and trial-split design.
+`--perm meg` randomizes only MEG; `--perm ieeg` only iEEG; `--perm both` uses **independent** phase vectors for the two modalities. With `plssvd_eval.py`, run each mode separately; `--perm all` is not supported by that entry point. Using the same phase vector in both modalities would preserve their cross-spectrum and would not provide this null. New phase vectors are drawn across iterations, and PLSSVD is refitted for each surrogate with the baseline’s matching and trial-split design.
 
 ```bash
-python -u plssvd_phase_null.py --perm all --components 10
+python -u plssvd_eval.py --meg-kind full_concatenated \
+  --perm meg --perm-type phase --max-components 10 \
+  --n-splits 5 --n-iterations 100 --seed 2026
+
+python -u plssvd_postprocess.py \
+  --runs-dir out/plssvd_eval/full_concatenated --components 10 --all-runs
 ```
 
-Outputs are `none`, `meg__phase`, `ieeg__phase` and `both__phase` below `out/plssvd_eval/full_concatenated` by default. The final notebook cell and exported `phase_null_comparison_k*.png/.pdf` compare matched iteration means of held-out covariance, signed Pearson correlation and each modality’s reconstruction. Matching uses available shared iteration IDs. The component count is inherited from the saved baseline; other explicit/default settings must still match it.
+Use the baseline’s fitted component count, folds, iterations and seed; 10 components above is an example. Fit a missing baseline with the same settings while omitting `--perm` and `--perm-type`. Existing fit directories are not overwritten. Other surrogates use the same entry point with `time_circular_shift`, `time_block`, `time_point` or `space`.
+
+Outputs are `none`, `meg__phase`, `ieeg__phase` and `both__phase` below `out/plssvd_eval/full_concatenated` by default. `plssvd_eval.py` generates surrogates and saves fits; `plssvd_postprocess.py` evaluates existing fits and prepares matched comparisons, including phase. Postprocessing cannot generate missing surrogate fits.
+
+Both notebook sections now use `plssvd_figures.plot_null_comparison(RUNS_DIR, N_COMPONENTS, perm_type=...)`. The permutation section exposes `PERMUTATION_TYPE`; the coherent-phase section selects `phase`. Rows show MEG, iEEG and both randomized; columns show held-out covariance, signed Pearson correlation and each modality’s reconstruction. Histograms use matched iteration fold means, with median markers. Existing prepared comparisons remain compatible: rerun postprocessing only for missing/new component-count comparisons or stale snapshots, without refitting PLSSVD. Missing comparisons are explicitly labeled.
+
+`plssvd_phase_null.py` remains an optional convenience wrapper that runs all three phase modes and postprocessing. It is not required by the unified workflow. Unlike `plssvd_eval.py`, it can inherit the baseline’s component count and reuse completed fits. Before deleting it, remove its helper imports and wrapper-specific tests from `tests/test_plssvd_phase.py`; retain the core phase-randomization tests. The legacy plotting function `plot_phase_null_comparison` delegates to the shared plotting function for compatibility.
 
 **Interpretation.** A null correlation need not be zero: smooth, low-dimensional signals can remain alignable, and the model optimizes covariance again on every surrogate. Evidence against this surrogate model requires the observed metrics to exceed its corresponding distribution, not merely to be positive. Strong own-modality reconstruction alone is insufficient because the surrogate intentionally preserves within-modality covariance. Conditions are kept intact; this does not test a known-versus-unknown contrast. These plots do not report a calibrated permutation p-value. Reused trials, event-locked nonstationarity and the circular Fourier construction limit an exact exchangeability interpretation.
+
+### Stable excess-covariance component selection
+
+`plssvd_select_components.py` uses only the matched baseline and `both__phase` comparison. It defaults to evaluating 10 components. For each rank j, the threshold is the 95th percentile of null held-out fold-mean covariance, floored at zero. The support rate is the fraction of baseline iterations strictly exceeding that threshold. Retain the contiguous leading ranks with support at least 90%, stopping at the first failure; zero is a valid result. If every evaluated rank passes, the boundary is unresolved beyond that range. No test-based sign correction or component rematching is used.
+
+`--components`, `--null-quantile` and `--min-support` configure the rule. `--recompute` refreshes selection outputs; `--recompute-evaluation` refreshes prepared comparisons from saved fits, reusing valid evaluation caches, without generating new surrogate fits. Saved tables, provenance and PNG/PDF figures are in `component_selection/k_XXX`. The final notebook cell loads these files. Correlation by rank and reconstruction at the evaluated k are supporting diagnostics and do not affect selection. Repeated splits are dependent; the thresholds are descriptive robustness choices, not a calibrated p-value. Final performance after selecting k requires separate testing or outer cross-validation.
 
 ### 2.2. Other surrogates and spectral diagnostics
 
@@ -147,7 +164,14 @@ Existing temporal circular shifts, block permutations and point permutations use
 
 Training-only PCA sidecars support fold-specific comparisons conditional on training preprocessing. Separately, `plssvd_full_pca.py` fits unpermuted PCA to all cached trials and correlates its score time courses with saved PLS scores, reporting component-pair means and sample SD across iterations for each fold and partition. The latter is descriptive because its PCA reference includes test trials. Output is saved under the selected run’s `full_data_pca_comparison` directory.
 
-The current `plssvd_fit_pca.py` is a hard-coded full-data comparison script (`full_concatenated`, 10 components, `ieeg__time_point`), not the configurable PCA-only backfill CLI described in `PLSSVD_WORKFLOW.md`. That workflow documentation needs reconciliation before its example command is used.
+| File | Responsibility | Current behavior |
+|---|---|---|
+| `plssvd_full_pca.py` | Reusable analysis and plotting functions | `fit_full_data_pca` fits one unpermuted PCA per modality from all cached trials; `correlate_full_pca` compares against stored PLSSVD scores; `plot_full_pca_comparison` renders component-pair summaries. Requires `full_concatenated` MEG for this comparison. |
+| `plssvd_fit_pca.py` | Executable wrapper importing those functions | Hard-coded `full_concatenated`, 10 components, `ieeg__time_point`, and absolute Pearson correlations; uses the current working directory as root. Saves a PNG and an NPZ containing correlation means, sample SD, counts and iteration IDs. |
+
+Neither file refits PLSSVD. The wrapper fits the full-data PCA reference on each execution; it has no configurable command-line interface. Its settings must be edited before targeting another run. Because the PCA reference includes all trials, correlations with held-out PLSSVD scores are descriptive, not independent validation of PCA generalization. These files are separate from training-only fold PCA evaluation.
+
+The PCA-only backfill CLI documented in `PLSSVD_WORKFLOW.md` does not match the current `plssvd_fit_pca.py`. That workflow documentation needs reconciliation before its example command is used.
 
 **Remaining scope.** Define scientifically meaningful acceptance criteria and supply group/exchangeability metadata. Audit upstream preprocessing for leakage. A stable shared evoked response can reflect common stimulus timing rather than condition-specific information. Optional temporal-shift and spatial-row-shuffle results remain diagnostics unless their exchangeability assumptions are justified. Across-split score consistency does not establish independent spatial-weight stability, subject-level generalization or a calibrated noise ceiling.
 
@@ -290,7 +314,7 @@ The implemented analyses support separate statements about trial generalization,
 
 ### Additional implementation checks
 
-- The phase launcher now distinguishes dataset mismatch from unavailable completed iterations. It accepts per-iteration completion markers without a run-level marker and excludes unfinished iterations; it does not resume partial fits.
+- The optional phase wrapper distinguishes dataset mismatch from unavailable completed iterations. It accepts per-iteration completion markers without a run-level marker and excludes unfinished iterations; it does not resume partial fits.
 - Coordinate overrides in `compare_subspace` preserve feature order and record coordinate sources. The shared GetInfo correction still uses magnitude-dependent divisions before conversion to internal millimeters; an independent anatomical/unit audit remains necessary. Explicit metadata uses its declared units.
 - GetInfo callers use the configured project directory directly. Its electrode directory is appended internally; cluster filesystem paths still need validation.
 - The PCA-only backfill instructions in `PLSSVD_WORKFLOW.md` do not match the current `plssvd_fit_pca.py`; use the actual implementation as the reference until reconciled.
