@@ -4,6 +4,12 @@
 Run from a cluster checkout containing the project helpers and src.setting:
     python -u plssvd_eval.py --root /path/to/iEEGvsMEG
 
+Phase surrogates use the same fitting workflow as other permutations:
+    python -u plssvd_eval.py --perm meg --perm-type phase --max-components 10
+Use --perm ieeg or both for the other randomized modalities. In both mode,
+independent modality-wide phases preserve within-modality power/cross-spectra.
+Run plssvd_postprocess.py afterward to prepare evaluation and comparison plots.
+
 Defaults preserve the notebook analysis and exclude MEG SUBJ_0038. Outputs
 are saved under ROOT/out/plssvd_eval/MEG_KIND/PERMUTATION; trials use ROOT/out/trial_cache.
 Requires the notebook's Python dependencies, including mat73 for raw MEG.
@@ -37,7 +43,8 @@ def parse_args():
                         help='Number of independently shuffled K-fold evaluations (default: 100).')
     parser.add_argument('--perm', choices=['ieeg','meg','both','none'], default=None)
     parser.add_argument('--perm-type', choices=['time_cirular_shift','time_circular_shift',
-                        'time_block','time_point','space','phase','none'], default=None)
+                        'time_block','time_point','space','phase','none'], default=None,
+                        help='Surrogate transform; phase uses coherent Fourier phases within each modality.')
     parser.add_argument('--block-seconds', type=float, default=0.36)
     parser.add_argument('--seed', type=int, default=2026)
     parser.add_argument('--max-components', '--n-components', dest='n_components', type=int, default=100,
