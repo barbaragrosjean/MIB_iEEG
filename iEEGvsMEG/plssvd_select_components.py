@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select a stable leading PLSSVD prefix against both__phase; never refit models."""
+"""Select a stable leading PLSSVD prefix against a selected phase null; never refit models."""
 from pathlib import Path
 import argparse
 import json
@@ -7,10 +7,23 @@ import numpy as np
 import pandas as pd
 
 
-def select_components(components, n_components=10, null_quantile=.95, min_support=.90):
+def _phase_name(perm):
+    if perm not in ('ieeg', 'meg', 'both'):
+        raise ValueError('perm must be ieeg, meg or both.')
+    return perm+'__phase'
+
+
+def _selection_folder(runs_dir, n_components, perm):
+    # Preserve the existing both-phase output location.
+    root = Path(runs_dir)/'component_selection'
+    return (root if perm == 'both' else root/_phase_name(perm))/f'k_{n_components:03d}'
+
+
+def select_components(components, n_components=10, null_quantile=.95, min_support=.90, perm='both'):
     """Input: matched iteration fold means, native component order, signed covariance."""
     if n_components < 1 or not 0 < null_quantile < 1 or not 0 < min_support <= 1:
         raise ValueError('Require positive component count and thresholds in (0,1), with support <=1.')
+    name = _phase_name(perm)
     frame = components.query("partition == 'test'")
     matrices = {}
     for label in ('Unpermuted', 'Permuted'):
@@ -38,22 +51,23 @@ def select_components(components, n_components=10, null_quantile=.95, min_suppor
         observed_high=np.quantile(observed,.95,axis=0)))
     return table, dict(selected_k=int(retained.sum()), n_components=n_components,
         n_iterations=len(observed), iterations=[int(i) for i in observed.index],
-        null_quantile=null_quantile, min_support=min_support, permutation='both__phase',
+        null_quantile=null_quantile, min_support=min_support, permutation=name,
         boundary_supported=bool(retained.all()),
         interpretation='Descriptive robustness selection; not a significance test or independent test performance.')
 
 
 def prepare_selection(runs_dir, n_components=10, null_quantile=.95, min_support=.90,
-                      recompute=False, recompute_evaluation=False):
+                      recompute=False, recompute_evaluation=False, perm='both'):
     from plssvd_figures import load_comparison
     runs_dir = Path(runs_dir)
+    name = _phase_name(perm)
     if recompute_evaluation:
         from plssvd_postprocess import evaluate_run, prepare_comparison
-        for name in ('none', 'both__phase'):
-            evaluate_run(runs_dir/name, [n_components])
-        prepare_comparison(runs_dir, 'both__phase', n_components)
-    data = load_comparison(runs_dir, 'both__phase', n_components)
-    folder = runs_dir/'component_selection'/f'k_{n_components:03d}'
+        for run_name in ('none', name):
+            evaluate_run(runs_dir/run_name, [n_components])
+        prepare_comparison(runs_dir, name, n_components)
+    data = load_comparison(runs_dir, _phase_name(perm), n_components)
+    folder = _selection_folder(runs_dir, n_components, perm)
     settings = dict(source_signature=data['metadata']['signature'],
                     n_components=n_components, null_quantile=null_quantile, min_support=min_support)
     manifest = folder/'selection.json'
@@ -61,8 +75,8 @@ def prepare_selection(runs_dir, n_components=10, null_quantile=.95, min_support=
         saved = json.loads(manifest.read_text())
         if any(saved.get(key) != value for key,value in settings.items()):
             raise ValueError('Selection settings or source results changed. Use --recompute.')
-        return load_selection(runs_dir, n_components)
-    table, summary = select_components(data['components'], n_components, null_quantile, min_support)
+        return load_selection(runs_dir, n_components, perm=perm)
+    table, summary = select_components(data['components'], n_components, null_quantile, min_support, perm=perm)
     folder.mkdir(parents=True, exist_ok=True)
     # Write the manifest last so interrupted output is not treated as complete.
     if manifest.exists():
@@ -71,16 +85,19 @@ def prepare_selection(runs_dir, n_components=10, null_quantile=.95, min_support=
     data['components'].to_csv(folder/'components.csv', index=False)
     data['metrics'].to_csv(folder/'metrics.csv', index=False)
     manifest.write_text(json.dumps(dict(summary, **settings), indent=2))
-    return load_selection(runs_dir, n_components)
+    return load_selection(runs_dir, n_components, perm=perm)
 
 
-def load_selection(runs_dir, n_components=10):
+def load_selection(runs_dir, n_components=10, perm='both'):
     """Read saved selection only; no evaluations or model fitting."""
-    folder = Path(runs_dir)/'component_selection'/f'k_{n_components:03d}'
+    _phase_name(perm)
+    folder = _selection_folder(runs_dir, n_components, perm)
     summary = json.loads((folder/'selection.json').read_text())
+    if summary['permutation'] != _phase_name(perm):
+        raise ValueError('Saved selection uses a different phase null.')
     # Reject stale results using the standard prepared-comparison provenance check.
     from plssvd_figures import load_comparison
-    current = load_comparison(runs_dir, 'both__phase', n_components)
+    current = load_comparison(runs_dir, _phase_name(perm), n_components)
     if current['metadata']['signature'] != summary['source_signature']:
         raise ValueError('Selection is stale. Rerun plssvd_select_components.py --recompute.')
     return dict(folder=folder, summary=summary, **{name:pd.read_csv(folder/(name+'.csv'))
@@ -95,7 +112,7 @@ def plot_selection(result):
     ax = axes[0,0]
     ax.fill_between(x,table.observed_low,table.observed_high,alpha=.2,label='Baseline 5–95% split range')
     ax.plot(x,table.observed_median,'o-',label='Baseline median')
-    ax.plot(x,table.effective_threshold,'o--',label=f"Both-phase {summary['null_quantile']:.0%} threshold (floor 0)")
+    ax.plot(x,table.effective_threshold,'o--',label=f"{summary['permutation']} {summary['null_quantile']:.0%} threshold (floor 0)")
     ax.set(title='Selection: signed held-out covariance',xlabel='Component rank',ylabel='Covariance');ax.legend(fontsize=8)
     ax=axes[0,1]
     ax.bar(x,table.support,color=['tab:blue' if keep else 'gray' for keep in table.retained])
@@ -123,23 +140,24 @@ def plot_selection(result):
     ax.legend()
     suffix=' (all evaluated ranks supported; evaluate more to locate the boundary)' if summary['boundary_supported'] else ''
     fig.suptitle(f"Stable excess covariance: retain k={summary['selected_k']}{suffix}\n"
-                 f"{summary['n_iterations']} matched iterations · both__phase only · descriptive selection, not a p-value",fontsize=11)
+                 f"{summary['n_iterations']} matched iterations · {summary['permutation']} · descriptive selection, not a p-value",fontsize=11)
     return fig
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runs-dir',type=Path,default=Path(__file__).resolve().parent/'out/plssvd_eval/full_concatenated')
+    parser.add_argument('--perm', choices=['ieeg','meg','both'], default='both')
     parser.add_argument('--components',type=int,default=10)
     parser.add_argument('--null-quantile',type=float,default=.95)
     parser.add_argument('--min-support',type=float,default=.90)
     parser.add_argument('--recompute',action='store_true',help='Recompute selection tables from prepared comparisons.')
-    parser.add_argument('--recompute-evaluation',action='store_true',help='Refresh evaluation/comparison from existing baseline and both-phase fits; reuse valid cached evaluations. Never refit surrogates.')
+    parser.add_argument('--recompute-evaluation',action='store_true',help='Refresh evaluation/comparison from existing baseline and selected phase fits; reuse valid cached evaluations. Never refit surrogates.')
     args=parser.parse_args()
     import matplotlib
     matplotlib.use('Agg')
     result=prepare_selection(args.runs_dir,args.components,args.null_quantile,args.min_support,
-                             args.recompute or args.recompute_evaluation,args.recompute_evaluation)
+                             args.recompute or args.recompute_evaluation,args.recompute_evaluation,perm=args.perm)
     fig=plot_selection(result)
     for ext in ('png','pdf'):fig.savefig(result['folder']/('selection.'+ext),dpi=180)
     import matplotlib.pyplot as plt

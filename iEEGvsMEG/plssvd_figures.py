@@ -225,3 +225,62 @@ def plot_null_comparison(runs_dir, n_components, perm_type='phase', modes=('meg'
 def plot_phase_null_comparison(runs_dir, n_components, modes=('meg','ieeg','both')):
     """Backward-compatible phase-only entry point for cluster scripts."""
     return plot_null_comparison(runs_dir, n_components, perm_type='phase', modes=modes)
+
+
+def plot_null_timecourses(runs_dir, n_components=3, perm='both', prepared_components=10,
+                          partition='test'):
+    """Fold means then iteration mean/SD of training-oriented normalized scores.
+
+    Read saved fold scores and prepared comparison metadata only. Null phases vary across iterations, so
+    their mean can cancel; this is not evidence of low single-run amplitude.
+    """
+    if perm not in ('ieeg','meg','both') or partition not in ('train','test'):
+        raise ValueError('Choose perm ieeg/meg/both and partition train/test.')
+    if not 1 <= n_components <= prepared_components:
+        raise ValueError('Require 1 <= n_components <= prepared_components.')
+    root=Path(runs_dir)
+    comparison=load_comparison(root,perm+'__phase',prepared_components)
+    ids=comparison['metadata']['iterations']
+    from plssvd_postprocess import Moments
+    stats={}
+    times=None
+    for label,name in [('Baseline','none'),('Phase null',perm+'__phase')]:
+        snapshot=snapshot_path(root/name,prepared_components)
+        meta=json.loads((snapshot/'manifest.json').read_text())
+        with np.load(snapshot/'arrays.npz') as z:
+            axis=z['times']
+        if times is not None and not np.array_equal(times,axis):
+            raise ValueError('Baseline and null time axes differ.')
+        times=axis
+        moments={m:Moments() for m in ('ieeg','meg')}
+        for iteration in ids:
+            totals={}
+            for fold in range(meta['options']['repeats']):
+                from plssvd_eval_utils import _saved_scores
+                child=root/name/f'iteration_{iteration:03d}'
+                with _saved_scores(child,fold) as z:
+                    train_ieeg=z['train_ieeg'][:,:n_components]
+                    signs=np.sign(train_ieeg[np.argmax(abs(train_ieeg),axis=0),np.arange(n_components)])
+                    signs[signs==0]=1
+                    for modality in moments:
+                        sd=z[f'train_{modality}'][:,:n_components].std(0)
+                        values=z[f'{partition}_{modality}'][:,:n_components]*signs/np.where(sd>0,sd,1.)
+                        if values.shape!=(len(times),n_components) or not np.isfinite(values).all():
+                            raise ValueError(f'Invalid saved scores: {child}, fold {fold}')
+                        totals[modality]=totals.get(modality,0)+values
+            for modality in moments:
+                moments[modality].add(totals[modality]/meta['options']['repeats'])
+        for modality,stat in moments.items():stats[label,modality]=stat.arrays()[:2]
+    fig,axes=plt.subplots(n_components,2,figsize=(13,2.8*n_components),squeeze=False,layout='constrained')
+    for pc in range(n_components):
+        for col,modality in enumerate(('ieeg','meg')):
+            ax=axes[pc,col]
+            for label,color in [('Baseline','tab:blue'),('Phase null','tab:orange')]:
+                mean,sd=stats[label,modality]
+                ax.plot(times,mean[:,pc],color=color,label=label)
+                if len(ids)>1:ax.fill_between(times,mean[:,pc]-sd[:,pc],mean[:,pc]+sd[:,pc],color=color,alpha=.18)
+            ax.set(title=f'{modality} · component {pc+1}',xlabel='Time (s)',ylabel='Score / training SD')
+            if pc==0:ax.legend()
+    fig.suptitle(f'{perm} phase null vs baseline · {partition} · {len(ids)} matched iterations\n'
+                 'Fold means, then mean ± SD across iterations; training sign orientation; no component matching')
+    return fig

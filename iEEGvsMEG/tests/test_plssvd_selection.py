@@ -8,6 +8,14 @@ class SelectionTests(unittest.TestCase):
         return pd.DataFrame([dict(run=run,partition='test',iteration=i,component=j,
             covariance=(1. if run=='Permuted' else (2. if j != 3 or i<89 else .5)))
             for run in ('Unpermuted','Permuted') for i in range(100) for j in range(1,5)])
+    def test_phase_modes(self):
+        from plssvd_select_components import _selection_folder
+        for mode in ('ieeg','meg','both'):
+            _, summary = select_components(self.frame(),4,perm=mode)
+            self.assertEqual(summary['permutation'],mode+'__phase')
+        self.assertNotEqual(_selection_folder('/tmp',10,'ieeg'),_selection_folder('/tmp',10,'meg'))
+        with self.assertRaises(ValueError):select_components(self.frame(),4,perm='invalid')
+
     def test_prefix_and_boundary(self):
         table,summary=select_components(self.frame(),4)
         self.assertEqual(summary['selected_k'],2)
