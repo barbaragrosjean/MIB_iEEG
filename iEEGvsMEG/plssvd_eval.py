@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
-"""Batch version of plssvd_eval.ipynb (Python 3.9+).
+"""
 
-Run from a cluster checkout containing the project helpers and src.setting:
-    python -u plssvd_eval.py --root /path/to/iEEGvsMEG
+submit_to_cluster -n 2 -q long.q "python -u plssvd_eval.py --perm none --perm-type none --max-components 10" --project MINDLAB2021_MEG-TempSeqAges
 
-Phase surrogates use the same fitting workflow as other permutations:
-    python -u plssvd_eval.py --perm meg --perm-type phase --max-components 10
-Use --perm ieeg or both for the other randomized modalities. In both mode,
-independent modality-wide phases preserve within-modality power/cross-spectra.
+Use --perm ieeg or both for the other randomized modalities. 
+In both mode, independent modality-wide phases preserve within-modality power/cross-spectra.
 Run plssvd_postprocess.py afterward to prepare evaluation and comparison plots.
 
-Defaults preserve the notebook analysis and exclude MEG SUBJ_0038. Outputs
-are saved under ROOT/out/plssvd_eval/MEG_KIND/PERMUTATION; trials use ROOT/out/trial_cache.
-Requires the notebook's Python dependencies, including mat73 for raw MEG.
+Defaults preserve the notebook analysis and exclude MEG SUBJ_0038. 
+trials use ROOT/out/trial_cache.
 Tests concern new trials from the same participants, not new participants.
 """
 from pathlib import Path
@@ -68,7 +64,7 @@ def main():
     meg_dir = args.meg_dir or root / 'MEG' / 'dataMEG'
     ieeg_dir = args.ieeg_dir or root / 'ieeg_shortWOBS_fs250'
     cache_dir = args.cache_dir or root / 'out' / 'trial_cache'
-    output_dir = args.output_dir or root / 'out' / 'plssvd_eval' / args.meg_kind / validation_run_name(args.perm, args.perm_type)
+    output_dir = args.output_dir or root / 'out' / 'plssvd_eval_equal_var' / args.meg_kind / validation_run_name(args.perm, args.perm_type)
     output_dir.mkdir(parents=True, exist_ok=True)
     if (output_dir / 'validation_options.json').exists() or any(output_dir.glob('model_*.npz')):
         raise FileExistsError('Choose a new --output-dir; existing evaluations are not overwritten.')
@@ -76,7 +72,7 @@ def main():
                                 n_iterations=args.n_iterations, perm=args.perm, perm_type=args.perm_type,
                                 block_seconds=args.block_seconds, seed=args.seed,
                                 split_unit=args.split_unit,
-                                block_scaling='none', max_gram_gib=args.max_gram_gib)
+                                block_scaling='equal_variance', max_gram_gib=args.max_gram_gib) #TODO turn to 'equal_variance'
 
     meg_subjects = sorted(p.name.removesuffix('_source.p') for p in meg_dir.glob('*_source.p')
                           if p.name != 'SUBJ_0038_source.p')

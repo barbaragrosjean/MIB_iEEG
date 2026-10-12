@@ -1,8 +1,3 @@
-"""Post-fit PLSSVD metrics from compact sufficient statistics, without raw trials.
-
-Prediction uses training-only ridge calibration, recomputed for the selected k.
-No metric tables or feature-sized prediction maps are saved by the fit job.
-"""
 import numpy as np
 import pandas as pd
 

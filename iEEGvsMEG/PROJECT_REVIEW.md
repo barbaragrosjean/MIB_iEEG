@@ -1,8 +1,4 @@
-# iEEG–MEG latent-space comparison: methods and implementation review
-
-## Current status
-
-Reviewed against the local implementation on October 12, 2026. “Implemented” describes available code, not an established empirical finding. Saved notebook outputs exist, but standalone run tables and their provenance were not available for this review; numerical conclusions therefore remain unverified.
+# iEEG–MEG latent-space comparison: methods and implementation
 
 | Analysis | Implementation | Evaluation scope | Principal outputs | Results status |
 |---|---|---|---|---|
@@ -65,9 +61,6 @@ Compare each randomized PCA with the baseline-assignment PCA, compare all pairs 
 
 **Outputs.** Both runs save `config.json`, `metrics.csv`, `component_pairs.csv`, `participants.csv`, `scores.npz` and `COMPLETE.json`. The subject-count run also saves `availability.csv`. The pairing run adds `assignments.csv`, `source_mapping.csv`, `ieeg_features.csv`, `control_source_permutations.npz` and `paired_control_differences.csv`. The notebook saves separate PNG figures in `out/subject_count_stability` and `out/pairing_stability`. Use `load_stability_results` to reload either completed run; existing results retain their saved settings, and changing settings requires a new output directory.
 
-### Results and interpretation criteria
-
-No verified numerical result is added here. High retained-iEEG variance with lower overlap would indicate that correspondence is concentrated in the larger-variance retained directions. High overlap with lower matched component correlation would indicate similar subspaces expressed through different component mixtures. Stable pairing results would support robustness to participant assignment, not biological equivalence of paired individuals. Report cohort sizes, feature counts, selected k, repetitions and metric distributions together; increasing participant count also changes coverage in concatenated datasets.
 
 ### Channel-count sensitivity
 
@@ -303,13 +296,8 @@ The implemented analyses support separate statements about trial generalization,
 | Priority | Location | Finding and required action |
 |---|---|---|
 | High | Coverage/covariance notebook coordinate cells; `plssvd_eval.py: main` | Magnitude-based repeated coordinate division can alter individual axes before the explicit unit checker sees them. Establish the native `GetInfo` unit and apply one documented conversion; verify against known anatomical locations. Do not infer correctness from plausible ranges alone. |
-| High | Coverage/covariance loader calls | MEG epoch origin is set from the iEEG epoch origin. Supply independently verified MEG time metadata; matching constructed vectors alone does not verify acquisition alignment. |
-| Medium | Across stages | Current primary workflows use equal-condition averages. Older stacked fits may still be present; verify saved settings before comparison. Condition averaging cannot address condition differences. |
 | High | Across entry points | PLSSVD batch excludes `SUBJ_0038`; coverage/covariance discovery does not. Record one participant manifest and exclusion rationale. Comparison uses the cache cohort. |
-| Implemented | Model comparison | Descriptive and trial-held-out within-modality comparisons now exist; run the updated pipeline before interpreting project results. |
-| Medium | Scaling defaults | Covariance/validation use `none`; subspace comparison defaults to `equal_variance`. Record and harmonize this choice, especially for joint PCA. Scalar modality scaling alone does not change ideal PLSSVD directions, but changes joint PCA's balance. MEG channel z-scoring versus unstandardized iEEG also changes what “dominant variance” means. |
 | Medium | Correlation reporting | Coverage matrices are Spearman; matching summaries and validation use Pearson. Label both explicitly. A notebook TODO requests Spearman native matching, but it is not implemented; do not describe it as completed. |
-| Implemented | Coverage design | Separate actual subject-count (MEG and iEEG) and fixed-cohort pairing analyses are available; run them on the project recordings. |
 | Medium | Validation/results | Legacy compare_subspace test-half reliability fixes trained axes; PLSSVD evaluation reports cross-fold refitted temporal-score correlations without test halves. Independent spatial-weight/subspace stability remains separate. Do not average PC1 across repetitions as if component identity were guaranteed. |
 
 ### Additional implementation checks

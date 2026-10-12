@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Resumable PLSSVD evaluation. This script never refits PLSSVD.
+"""Resumable PLSSVD evaluation.
 
 python plssvd_postprocess.py --runs-dir out/plssvd_eval/full_concatenated \
     --components 5 10 25 --perm meg --perm-type time_point
+
 Add --cache-dir out/trial_cache to recover missing PCA/spectra from old fits.
 Use --all-runs to process all existing runs and prepare their matched comparisons.
 The notebook reads published evaluation snapshots only.

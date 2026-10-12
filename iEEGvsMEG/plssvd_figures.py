@@ -1,8 +1,3 @@
-"""Plot-only readers. Never open fitted models, trial caches, or fitting functions.
-
-Missing evaluation snapshots raise actionable errors; computation is always an
-explicit invocation of plssvd_postprocess.py outside the notebook.
-"""
 from pathlib import Path
 import json
 import numpy as np

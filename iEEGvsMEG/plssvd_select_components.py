@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Select a stable leading PLSSVD prefix against a selected phase null; never refit models."""
+
 from pathlib import Path
 import argparse
 import json
