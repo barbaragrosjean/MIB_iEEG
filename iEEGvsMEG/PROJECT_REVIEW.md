@@ -2,27 +2,32 @@
 
 ## Current status
 
-| Analysis | Implementation | Evaluation scope | Output |  Results | 
-|---|---|---|---|---| 
-| Coverage matching and composition sensitivity | Implemented in `coverage_stability.py` and `coverage_matching.ipynb` | Compute different MEG dataset organisation and test how much the information is shared with iEEG using PCA on both dataset individually |  
-| PLSSVD held-out evaluation | Implemented in `plssvd_eval` modules | Fixed **5 components by default**, shuffled folds with disjoint test trials and condition-averaged responses, all participants and matching fixed; no tuning |
-| PCA versus PLSSVD/joint PCA within each modality | Implemented in `compare_models.py`, `cov_models.ipynb` and the `compare_subspace` batch pipeline | Descriptive notebook comparisons and held-out comparisons with training-frozen component assignments/signs |
-| Cross-modality geometry and spatial clustering | Implemented in `compare_subspace` | Held-out trial representations at recurring times and locations; exploratory clustering |
+Reviewed against the local implementation on October 10, 2026. “Implemented” describes available code, not an established empirical finding. Saved notebook outputs exist, but standalone run tables and their provenance were not available for this review; numerical conclusions therefore remain unverified.
+
+| Analysis | Implementation | Evaluation scope | Principal outputs | Results status |
+|---|---|---|---|---|
+| Coverage and composition sensitivity | `coverage_stability.py`, `coverage_matching.ipynb` | In-sample PCA correspondence, participant-count and pairing sensitivity | Metrics, component pairs, assignments and coverage figures | Requires verification of saved runs |
+| MEG channel-count sensitivity | `elect_number_effect.py` | Nested feature-count sweep against a fixed iEEG PCA reference | Channel-count curves, metrics and feature orders | Descriptive; numerical findings unverified |
+| PLSSVD validation | `plssvd_eval.py`, `plssvd_postprocess.py` | Repeated trial-held-out fits; default 100 iterations × 5 folds | Saved fits, evaluated component prefixes and figure snapshots | Generalization claims require matched run results |
+| Temporal surrogate validation | `plssvd_phase_null.py`, `plssvd_diagnostics.py` | Refit baseline/null models with matched splits | Covariance, correlation, reconstruction, prediction and spectral diagnostics | Diagnostic null comparisons; no phase-null p-value |
+| Within-modality model comparison | `compare_models.py`, `cov_models.ipynb`, `compare_subspace.py` | PCA versus PLSSVD/joint PCA; descriptive and held-out comparisons | Temporal/spatial overlap and matched correlations | Numerical findings unverified |
+| Cross-modal geometry | `compare_subspace.py`, `spatial_clouds.py` | Held-out representations, transformations, clustering and unpaired spatial distributions | Overlap, alignment, ARI and cloud metrics | Exploratory; numerical findings unverified |
+| Modality-specific spatial organization | `modality_specificity.py`, `modality_specificity.ipynb` | Full-data native projection weights, spatial nulls and anatomical summaries | Distance curves, semivariograms, clusters, regional and hemisphere summaries | Descriptive fits; spatial inference conditional on exchangeability |
 
 ## Scientific aim and unit of comparison
 
-The project asks which task-related temporal and spatial structures are reproducible within iEEG and MEG, and which structures correspond across modalities. We explore the different ways of arenging MEG datatset before applying dimension reduction and different model with 2 different opbjectives, the fisr PCA only focus on covariance within each modality and the second PLSSVD focus on covariance tha tis shared bevtween modality. Componants are then use to evaluate how much we can get from both modality. We first compare the models within the same modality (Q: Does the componant that are mainly share are comparable with the one that represent most of the variance ?) Then we compare within the same model how well each modeality can explain the other, what si it shared. We decidede to work with dimensionality components as Latent spaces provide a way to compare structure despite different measurement processes. Still the information on which the dimensionnality reduction operate are different so in a secodn part of the project we will investigate that despite finding the comparable latent structures the two recordings are modality specific.
+The project asks which temporal and spatial structures are reproducible within iEEG and MEG and which correspond across modalities. Separate PCA identifies dominant within-modality variance; PLSSVD identifies axes that maximize cross-modal covariance; joint PCA identifies dominant variance in feature-concatenated data. Comparing these objectives tests whether shared structure coincides with each modality’s dominant structure. Complementary spatial analyses examine modality-specific organization without assuming identical sensors or measurement processes.
 
-The current analyses align **condition × time averages**, not simultaneously recorded or individually paired trials. 
+The datasets contain corresponding conditions and time axes, not simultaneously recorded or individually paired trials. The current primary model inputs are **time × features**: trials are averaged within each condition, then conditions receive equal weight in a combined response. This representation cannot establish a difference between known and unknown sequences.
 
-**Method and language:** \
+**Method and language.**
 Distinguish three objects throughout the text: projection **weights** define the latent axes; **scores** are projected time courses; **forward patterns** describe how observed features covary with the scores. Spatial weights and forward patterns are not interchangeable, especially for PLS. The current forward-pattern estimator is the multivariate regression `A = X_centered.T @ T_centered @ pinv(T_centered.T @ T_centered)`.
 
 ## 1. Coverage matching and group composition
 
 **Question.** How do anatomical coverage, participant averaging and feature concatenation alter MEG PCA structure and its correspondence with iEEG PCA?
 
-**Method used.** Independently fit centered PCA to pooled iEEG and to five MEG compositions, using the same condition/time rows. PCA is computed through the observation Gram matrix (XX.T inseqd of X.TX), avoiding a large feature covariance matrix.
+**Method used.** Independently fit centered PCA to pooled iEEG and to five MEG compositions, using the same condition/time rows. PCA is computed through the observation Gram matrix (`XX.T` rather than `X.T @ X`), avoiding a large feature covariance matrix.
 
 | Composition | Construction | Main comparison it supports |
 |---|---|---|
@@ -36,7 +41,7 @@ For pair association: Nearest-source mapping uses Euclidean coordinate distance.
 
 **Outputs.** Coverage plots, feature/variance summaries, PCA spectra, component maps and time courses; full component-by-component **Spearman** correlation matrices for time courses and anatomically mapped weights; and three temporal metrics at each prespecified common dimension k:
 
-1. **Retained iEEG variance captured:** `||Q_MEG.T @ T_iEEG,k||² / ||T_iEEG,k||²`, where Q is an orthonormal basis for the first k MEG score columns. This is the fraction of variance in the retained iEEG scores captured by the MEG temporal subspace. Given the k first iEEG componant we ask we the k MEG componant can recontruct and how well they can recontruct iEEG time courses using a linear combination of the time courses. Coefficient extracted are constent over time but different for each iEEg target: E_hat = MB amd wonder if E == E_hat. We can see this probelam as a a transformation from one basis to an other with Qm an orthogonal basis of M. E_hat = QmQm.TE this projects the iEEG time course (E) into the space of the MEG (M). The capture recontruct fraction is norm(E_hat) - norm(E) (Frobenius norm).
+1. **Retained iEEG variance captured:** `||Q_MEG.T @ T_iEEG,k||² / ||T_iEEG,k||²`, where Q is an orthonormal basis for the first k MEG score columns. This is the fraction of variance in the retained iEEG scores captured by the MEG temporal subspace. Let E and M denote the retained iEEG and MEG score matrices, and let Q_M be an orthonormal basis for M. The least-squares projection is E_hat = Q_M Q_M.T E. Its captured fraction is ||E_hat||_F² / ||E||_F² = 1 − ||E − E_hat||_F² / ||E||_F², not a difference between norms. This is an in-sample projection with coefficients constant over time.
 It is variance weighted : Suppose the three iEEG components contain 60%, 30% and 10% of the retained variance, and MEG reconstructs 90%, 50% and 20% of their respective variances:
 \[
 F=0.60(0.90)+0.30(0.50)+0.10(0.20)=0.71.
@@ -44,7 +49,7 @@ F=0.60(0.90)+0.30(0.50)+0.10(0.20)=0.71.
 2. **Temporal subspace overlap:** `||Q_MEG.T @ Q_iEEG||² / k`, the mean squared cosine of principal angles. We remove the amplitude and keep only the direction (orthonormal). H=Qm.TQe and then compute the overlap if 1 --> overlap if 0 --> orthogonal. 
 3. **Matched component correlation:** mean absolute **Pearson** correlation under optimal one-to-one Hungarian matching of the first k components.
 
-The first two are invariant to a change of basis within the retained subspace; the third handles sign/order ambiguity but not arbitrary rotations. 
+Subspace overlap is invariant to any full-rank change of basis within either retained space. Captured iEEG variance is invariant to the MEG basis and to orthogonal rotations of the iEEG scores, but not arbitrary rescaling of the target scores. Matched correlation handles sign/order ambiguity but not arbitrary rotations. 
 
 **Two separate sensitivity analyses.** The final notebook sections now use `coverage_stability.py`. Both use only the mean absolute Pearson correlation after one-to-one matching of the first k PCA time courses. Matching handles component order; absolute values handle sign flips. Per-component signed/absolute correlations are retained in `component_pairs.csv`.
 
@@ -60,22 +65,29 @@ Compare each randomized PCA with the baseline-assignment PCA, compare all pairs 
 
 **Outputs.** Both runs save `config.json`, `metrics.csv`, `component_pairs.csv`, `participants.csv`, `scores.npz` and `COMPLETE.json`. The subject-count run also saves `availability.csv`. The pairing run adds `assignments.csv`, `source_mapping.csv`, `ieeg_features.csv`, `control_source_permutations.npz` and `paired_control_differences.csv`. The notebook saves separate PNG figures in `out/subject_count_stability` and `out/pairing_stability`. Use `load_stability_results` to reload either completed run; existing results retain their saved settings, and changing settings requires a new output directory.
 
-### Results and interpretations
-TODO
+### Results and interpretation criteria
+
+No verified numerical result is added here. High retained-iEEG variance with lower overlap would indicate that correspondence is concentrated in the larger-variance retained directions. High overlap with lower matched component correlation would indicate similar subspaces expressed through different component mixtures. Stable pairing results would support robustness to participant assignment, not biological equivalence of paired individuals. Report cohort sizes, feature counts, selected k, repetitions and metric distributions together; increasing participant count also changes coverage in concatenated datasets.
+
+### Channel-count sensitivity
+
+`elect_number_effect.py` uses nested random **ascending** subsets of full-concatenated MEG features. The default step is 100 channels, up to the largest complete step no greater than min(20,000, available channels). Five-component MEG PCA is refitted at each count and compared with a fixed five-component full-iEEG temporal reference. Outputs include individual/cumulative explained variance, total remaining-feature variance, retained-iEEG variance captured, temporal overlap and matched absolute Pearson correlation.
+
+Sampling is global across features, not balanced by participant. Each repetition has one saved channel order whose prefixes define the subsets. Results describe sensitivity to channel count and changing coverage; they do not isolate participant effects or provide independent validation. `out/elect_number_effect` contains configuration, metrics, component pairs, feature metadata, saved orders and PNG/PDF plots. The notebook loads completed results; `--plot-only` provides the same behavior from the command line.
 
 
 ## 2. Alternative objectives and PLSSVD validation
-**Question1.** Does maximizing cross-modal covariance produce reproducible shared patterns, and how much modality-specific variance do those patterns retain?
+**Question.** Does maximizing cross-modal covariance produce reproducible shared patterns, and how much modality-specific variance do those patterns retain?
 
-**Model :** PLSSVD selects paired unit-norm weight vectors that maximize cross-covariance. The implementation uses full nonzero sample-space factors. PLSSVD itself is a covariance decomposition. The validation adds ridge regression from one modality's latent scores to the other modality's original features..
+**Model.** PLSSVD selects paired unit-norm weight vectors that maximize cross-covariance. The implementation uses full nonzero sample-space factors. PLSSVD itself is a covariance decomposition. The validation adds ridge regression from one modality's latent scores to the other modality's original features.
 
 **PLSSVD Validation:**
 - Shuffle once within subject and condition; divide trials into five nearly equal test folds. Each trial is held out exactly once; other folds provide training (approximately 80/20 per fold).
 - No test A/B subdivisions. At least n_splits trials per condition are required. Group splitting keeps whole groups together and requires at least n_splits groups with each condition represented in every fold.
 - Average trials within each condition separately for train and test, then average conditions equally. Models receive time × features matrices, not individual trials or condition-stacked observations.
 - Concatenate all iEEG electrodes across subjects. MEG full_concatenated concatenates sources; full_average averages source indices across subjects; coverage_average averages matched coverage; paired_coverage/random_control retain their paired sampled-feature construction.
-- The PCA/sample-space factors inside PLSSVD operate on these averaged matrices. Keep 5 configurable components; insufficient training rank raises an error.
-- All folds use the same cohort and participant/source assignment. No tuning. Fold 0 is special only for example plots and optional temporal/spatial null diagnostics.
+- The PCA/sample-space factors operate on these averaged matrices. Fit up to `--max-components` (default 100), then evaluate a prespecified leading k without refitting PLSSVD. The phase launcher inherits an existing baseline’s fitted count when this option is omitted. Insufficient training rank raises an error.
+- Repeat the shuffled five-fold procedure for 100 iterations by default. All folds and iterations use the same cohort and participant/source assignment. There is no tuning; repeated trial splits are not independent biological samples.
 - Condition-label nulls and condition-contrast/test-half outputs are removed from this condition-averaged evaluation. Legacy compare_subspace remains separate and unchanged.
 
 **Goodness of fit on each test set.** Three complementary questions are computed:
@@ -98,17 +110,54 @@ The denominator is evaluated through observation Gram matrices. The test latent 
 
 **Stability across splits.** `metric_summary.csv` gives count, mean, SD, median, minimum and maximum for each train/test metric. `fold_stability.csv` compares temporal scores from every pair of independently refitted splits, separately by modality and train/test partition, using one-to-one matched mean absolute Pearson r. `fold_component_pairs.csv` records those descriptive assignments. Matching handles sign/order variation only, not arbitrary rotations; it is not used to optimize the main test metrics. Test folds share no trials, but training folds overlap. Stability and performance spread remain descriptive, not independent replicates or confidence intervals. No test-half reliability is computed in this workflow.
 
-**Outputs and plots.** `summary.csv`, `components.csv`, `fold_metrics.csv`, `metric_summary.csv`, `fold_stability.csv`, `fold_component_pairs.csv`, participant/trial/matching audits, preprocessing, trained models, score covariance matrices and projected scores. The reader requires a completion marker for new-format runs. New figures are `heldout_model_goodness`, `heldout_crosscovariance`, `primary_crosscovariance`, `fold_performance_consistency` and `fold_temporal_stability` (PNG and PDF). Training/test time courses and optional split-0 null diagnostics remain available. There is no new `selection.csv`; older tuning-based outputs are readable through the loader but must not be interpreted as the fixed-k experiment.
+**Fit, evaluation and output separation.** Fits are saved under `out/plssvd_eval/{MEG_KIND}/{PERMUTATION}`, with `none` for baseline. Each `iteration_XXX` contains fold models, scores, sufficient statistics, preprocessing and split/matching audits. `plssvd_postprocess.py` evaluates requested component prefixes and prepares saved snapshots; `plssvd_figures.py` reads prepared results. Reconstruction and k-specific ridge prediction are evaluated from saved information rather than refitting the PLS axes. Missing PCA/spectral artifacts can require reconstruction from the original trial cache. Completed iterations can be evaluated even when a run-level completion marker is absent; incomplete iterations are excluded. The phase launcher reuses these iterations but does not resume interrupted fits.
+
+Prepared tables include fold/component metrics, iteration means and descriptive stability summaries. Figures cover held-out reconstruction, prediction, covariance, correlations and stability. Selecting k after inspecting test results makes that selection exploratory.
+
+### 2.1. Phase-randomization null
+
+**Question.** Does held-out cross-modal correspondence exceed that obtained after altering temporal phase relationships while preserving each modality’s internal second-order structure?
+
+For each Fourier frequency f and channel j in a randomized modality, the surrogate is
+
+\[
+\widetilde X_j(f)=X_j(f)e^{i\phi_f},\qquad
+\phi_f\sim\mathrm{Uniform}(-\pi,\pi).
+\]
+
+One phase vector is shared across channels, participants, conditions and train/test folds within an iteration. DC and, for even-length signals, Nyquist coefficients are unchanged. Inverse real FFT returns the surrogate signal. Consequently power spectra and cross-spectra within that modality are preserved: the common phase cancels in the product of one channel’s Fourier coefficient and another’s complex conjugate. This also preserves circular second-order temporal structure and spatial covariance, but not event timing or every local temporal property of an evoked response.
+
+`--perm meg` randomizes only MEG; `--perm ieeg` only iEEG; `--perm both` uses **independent** phase vectors for the two modalities. `--perm all` runs all three. Using the same phase vector in both modalities would preserve their cross-spectrum and would not provide this null. New phase vectors are drawn across iterations, and PLSSVD is refitted for each surrogate with the baseline’s matching and trial-split design.
+
+```bash
+python -u plssvd_phase_null.py --perm all --components 10
+```
+
+Outputs are `none`, `meg__phase`, `ieeg__phase` and `both__phase` below `out/plssvd_eval/full_concatenated` by default. The final notebook cell and exported `phase_null_comparison_k*.png/.pdf` compare matched iteration means of held-out covariance, signed Pearson correlation and each modality’s reconstruction. Matching uses available shared iteration IDs. The component count is inherited from the saved baseline; other explicit/default settings must still match it.
+
+**Interpretation.** A null correlation need not be zero: smooth, low-dimensional signals can remain alignable, and the model optimizes covariance again on every surrogate. Evidence against this surrogate model requires the observed metrics to exceed its corresponding distribution, not merely to be positive. Strong own-modality reconstruction alone is insufficient because the surrogate intentionally preserves within-modality covariance. Conditions are kept intact; this does not test a known-versus-unknown contrast. These plots do not report a calibrated permutation p-value. Reused trials, event-locked nonstationarity and the circular Fourier construction limit an exact exchangeability interpretation.
+
+### 2.2. Other surrogates and spectral diagnostics
+
+Existing temporal circular shifts, block permutations and point permutations use independent channel transforms shared across conditions and partitions within an iteration. Spatial permutations shuffle channels separately at each time point. They change different aspects of within-modality structure and should not be pooled into one null. A fixed channel relabeling alone would leave an unconstrained PLS refit equivalent.
+
+`plssvd_diagnostics.py` and prepared comparisons report signed component correlations/covariances, held-out reconstruction and prediction, and paired null-minus-baseline differences. Temporal singular-value spectra of the preprocessed inputs diagnose changes in dimensionality. For normalized spectral energies p_j = sigma_j² / sum_l sigma_l², the participation-ratio effective rank is 1 / sum_j p_j². Spectra use all temporal dimensions, not just the selected PLS prefix. These diagnostics help distinguish destroyed cross-modal alignment from altered marginal structure; they do not by themselves establish physiological specificity.
+
+### 2.3. PCA reference comparisons
+
+Training-only PCA sidecars support fold-specific comparisons conditional on training preprocessing. Separately, `plssvd_full_pca.py` fits unpermuted PCA to all cached trials and correlates its score time courses with saved PLS scores, reporting component-pair means and sample SD across iterations for each fold and partition. The latter is descriptive because its PCA reference includes test trials. Output is saved under the selected run’s `full_data_pca_comparison` directory.
+
+The current `plssvd_fit_pca.py` is a hard-coded full-data comparison script (`full_concatenated`, 10 components, `ieeg__time_point`), not the configurable PCA-only backfill CLI described in `PLSSVD_WORKFLOW.md`. That workflow documentation needs reconciliation before its example command is used.
 
 **Remaining scope.** Define scientifically meaningful acceptance criteria and supply group/exchangeability metadata. Audit upstream preprocessing for leakage. A stable shared evoked response can reflect common stimulus timing rather than condition-specific information. Optional temporal-shift and spatial-row-shuffle results remain diagnostics unless their exchangeability assumptions are justified. Across-split score consistency does not establish independent spatial-weight stability, subject-level generalization or a calibrated noise ceiling.
 
 
-## 3. Comapre models
+## 3. Compare models
 
-### 3.1. Run the 3 and observe the how the cov and corr behave
+### 3.1. Compare variance and covariance objectives
 **Question.** What information does each objective emphasize, and how much cross-modal correspondence accompanies it?
 
-notebook cov_model.ipynb
+Notebook: `cov_models.ipynb`.
 
 **Method used.** `cov_models_utils.py` fits separate PCA, joint PCA on feature-concatenated modalities, and exact PLSSVD on `X.T @ Y/(n−1)`. Separate PCA maximizes each modality's variance; joint PCA maximizes variance of the concatenated data; PLSSVD selects paired unit-norm weight vectors that maximize cross-covariance. The implementation uses full nonzero sample-space factors.
 
@@ -123,9 +172,9 @@ We compare temporal scores and spatial forward patterns over all native features
 
 High overlap with lower matched correlation means similar collective patterns represented by different mixtures.
 
-Allignement and matching: one-to-one Hungarian assignment and sign orientation are learned from **training temporal scores**, then reused for every representation and partition.
+Alignment and matching: one-to-one Hungarian assignment and sign orientation are learned from **training temporal scores**, then reused for every representation and partition.
 
-**Remaining scope.** Independently refitted component stability, participant-level inference, anatomical pattern displays and explicit component-acceptance criteria remain separate work. Test-half correspondence is conditional on the fitted axes. Near-degenerate components can rotate, making subspace metrics more stable than componentwise matching.
+**Remaining scope.** Independently refitted component stability, participant-level inference, anatomical pattern displays and explicit component-acceptance criteria remain separate work. Legacy test-half correspondence is conditional on the fitted axes; the current workflow uses disjoint test folds. Near-degenerate components can rotate, making subspace metrics more stable than componentwise matching.
 
 ## 4. Cross-modal geometry
 
@@ -133,7 +182,7 @@ Allignement and matching: one-to-one Hungarian assignment and sign orientation a
 
 **Data and models.** `compare_subspace.py` reuses the trial cache and fits separate PCA, PLSSVD and joint PCA. Within each subject, average trials separately by condition, then average conditions equally. Model inputs are time × features. 
 
-/!\ : Default whole-modality scaling remains `equal_variance` (configurable), unlike PLSSVD evaluation's `none`.
+**Scaling.** Default whole-modality scaling remains `equal_variance` (configurable), unlike PLSSVD evaluation's `none`.
 
 **All-data description.** Fit preprocessing, model weights, transformations and cluster centroids using every trial. Score on the same data. These rows are explicitly labelled `analysis=in_sample`, `partition=in_sample`, `repeat=-1`; they are not test results.
 
@@ -150,13 +199,88 @@ Allignement and matching: one-to-one Hungarian assignment and sign orientation a
 **Plots.** Dashed lines show the all-data descriptive values. Solid lines show test-fold medians, with minimum–maximum shading. Figures cover overlap versus k, transformation error by complexity/direction for a selected k, and spatial ARI versus predeclared cluster count. The notebook separately displays full-data tables before test results.
 
 
+### 4.1. Unpaired spatial distributions
+
+`spatial_clouds.py` complements mapped-row comparisons with all-native-feature forward-pattern distributions. Temporal overlap uses scores only and does not depend on spatial matching. Spatial overlap, transformations and ARI still use mapped rows; these are different estimands.
+
+Training temporal scores determine an orthogonal Procrustes alignment. Each modality’s spatial patterns are centered and RMS-normalized using training statistics. Training K-means prototypes (default 32) compress the spatial distribution; prototype mass equals the fraction of native features assigned to it. Training memberships aggregate corresponding test features without refitting.
+
+The saved `cloud_metrics.csv` reports Wasserstein W2, Gromov–Wasserstein squared internal-distance loss and Gaussian MMD². W2 compares aligned locations in component space; GW compares internal geometry; MMD compares kernel distributions using a training-derived bandwidth. All are feature-weighted compressed approximations, not participant-balanced estimates. The GW solver uses two local starts with convergence diagnostics, not a global-optimality guarantee. Shared-region comparison is deferred in `compare_subspace`; its regional output is no longer part of the current pipeline.
+
+Full-data k=3 cluster displays separately select the highest silhouette within each modality and the highest cross-modal ARI at a common candidate count; ties favor fewer clusters. These selections are descriptive and do not alter cross-validation. `full_data_clusters_3d/` contains plots and `display_selections.csv`. Cluster colors are matched in the ARI view, but component axes are not thereby aligned.
+
+## 5. Modality-specific spatial organization
+
+**Question.** How are the native projection weights distributed anatomically within each modality, even when temporal latent structure is similar?
+
+`modality_specificity.ipynb` uses a full-data, equal-condition-average fit of separate PCA, joint PCA or PLSSVD. Current notebook selectors are separate PCA, `paired_coverage`, five components and no whole-modality scaling. Outputs are saved to `out/modality_specificity/{MEG_KIND}/{MODEL}`. These analyses use **projection weights**, not forward patterns, and do not constitute held-out model validation.
+
+### 5.1. Weight magnitudes, coverage and brain displays
+
+For each modality and component, the descriptive threshold is
+
+\[
+\tau_c=\operatorname{mean}_i|w_{ic}|+\operatorname{SD}_i|w_{ic}|,
+\]
+
+using population SD. Coefficients below threshold are zeroed for display; model fitting is unchanged. Raw magnitudes depend on model normalization, feature count and preprocessing and cannot establish that one modality has greater physiological activity.
+
+Brain markers average retained magnitudes, including zeros, at co-located MEG features and within iEEG complete-linkage spatial groups. The default iEEG radius is estimated from native MEG nearest-neighbor grid spacing. Grouping is for visualization, not model fitting. The Glasser/HCP display uses Gaussian interpolation followed by surface projection; it is a continuous surface map, not a Glasser parcel average, and requires the corresponding mesh resources.
+
+Regional counts and mean absolute weights use the same coordinate-based atlas labeling for both modalities. Every native feature contributes once, including co-located features from different participants. Coverage counts should accompany regional weight plots. Missing regions remain distinct from observed zero values; neither unequal coverage nor participant sampling is corrected by regional averaging. This regional description exists in the modality-specificity notebook even though regional cross-modal comparisons are deferred in `compare_subspace`.
+
+### 5.2. Weight-profile similarity versus anatomical distance
+
+For signed, unthresholded first-k weight profiles w_i at MNI coordinates r_i, compute
+
+\[
+d_{ij}=\|r_i-r_j\|_2,\qquad
+D_{ij}=1-\frac{w_i^\top w_j}{\|w_i\|_2\|w_j\|_2}.
+\]
+
+Mean cosine distance is reported in anatomical-distance bins for all pooled pairs and for each participant separately. All distinct unordered pairs are included, including co-locations; zero-norm profiles are excluded and audited. The pooled curve includes between-participant pairs and is pair-weighted, not participant-balanced.
+
+The null shuffles whole weight profiles within each participant against fixed coordinates, retaining that participant’s empirical weight distribution. The implementation uses 199 permutations by default, pointwise 2.5–97.5% null envelopes and two-sided Monte Carlo tail probabilities with a +1 correction. Holm correction spans populated group/subject bins within each modality. These envelopes are not confidence intervals. Valid inference requires within-participant spatial exchangeability; source smoothing, anatomical heterogeneity and nonuniform coverage can violate it. A significant result indicates departure from random spatial assignment under this null, not unique neural specificity.
+
+Exact blockwise computation limits pairwise working memory, but runtime remains quadratic in channel count and linear in permutation count. `spatial_distance/{modality}` saves curves, null curves, channel audits, configuration and figures.
+
+### 5.3. Component-wise normalized semivariograms
+
+For component c and distance bin B, the estimator is
+
+\[
+\gamma_c(B)=\frac{1}{|B|}\sum_{(i,j)\in B}
+\frac{(w_{ic}-w_{jc})^2}{2s_c^2}.
+\]
+
+The population variance s_c² is computed over the relevant group or participant. Low values indicate nearby coefficients with similar signed values; a global component sign reversal leaves the statistic unchanged. Constant components yield undefined normalized values. The same within-participant coordinate null is used; Holm correction spans all populated bins, components and group/subject scopes within each modality. With 199 permutations, adjusted significance has limited resolution. Results and configuration are saved under `component_spatial/{modality}`.
+
+### 5.4. Clusters and centroid definitions
+
+Two distinct methods are available and should not be conflated:
+
+| Method | Inputs and grouping | Centroid | Scope |
+|---|---|---|---|
+| `weight_clusters` helper | Above-threshold coefficients, separated by component, sign and hemisphere; connected components within an MNI radius (default 10 mm), minimum three feature rows | MNI mean weighted by absolute coefficient; nearest recorded feature also retained | Available anatomical grouping helper; Euclidean adjacency is not cortical adjacency |
+| `kmeans_weight_space` notebook analysis | First three signed component weights; Euclidean K-means with 20 seeded initializations, default five clusters; optional thresholding | Fitted weight-space mean; separate unweighted MNI mean for display | Exploratory full-data grouping; coordinates do not enter K-means |
+
+The current notebook disables K-means thresholding, although the helper defaults to enabling it. All-zero selected profiles receive label −1 and are excluded from fitting. Cluster labels are arbitrary and are not matched across modalities. Spatial centroids can lie outside sampled tissue when membership is dispersed; RMS radius and participant contributions should accompany them. Similar within-cluster profiles are expected by construction and are not independent validation. Neither a fixed count of five nor a visually compact result establishes an optimal biological partition.
+
+`weight_space_kmeans/{original|thresholded}/{modality}` stores cluster summaries, memberships, thresholds, distance curves, configuration and figures. Regional polar charts then summarize absolute selected-input weights within these same clusters. Hemisphere centroids are computed separately for x<0 and x>0 without reclustering; x=0 features are counted separately. Missing hemispheres have undefined centroids. These additional outputs are under `regional_hemisphere_summary`.
+
+## 6. Evidence needed for substantive conclusions
+
+Before writing empirical conclusions, associate each figure/table with its saved configuration, participant manifest, preprocessing, component count and completed iteration IDs. Report baseline and matched surrogate metrics together, including the number of usable iterations. Do not infer population uncertainty from trial-split spread or treat the same component index across independently fitted models as established physiological identity.
+
+The implemented analyses support separate statements about trial generalization, robustness to coverage/composition, temporal correspondence and spatial organization. They do not yet establish generalization to new participants, a calibrated noise ceiling or a known-versus-unknown condition effect. Modality-specific spatial claims additionally require sensitivity checks for coverage, feature density, threshold, cluster count and source smoothing. No numerical biological conclusion is asserted in this review without verified result tables.
+
 ## Implementation and reporting gaps to resolve
 
 | Priority | Location | Finding and required action |
 |---|---|---|
 | High | Coverage/covariance notebook coordinate cells; `plssvd_eval.py: main` | Magnitude-based repeated coordinate division can alter individual axes before the explicit unit checker sees them. Establish the native `GetInfo` unit and apply one documented conversion; verify against known anatomical locations. Do not infer correctness from plausible ranges alone. |
 | High | Coverage/covariance loader calls | MEG epoch origin is set from the iEEG epoch origin. Supply independently verified MEG time metadata; matching constructed vectors alone does not verify acquisition alignment. |
-| High | Across stages | Coverage/covariance default to condition averaging; validation/comparison stack conditions. Choose a primary representation and rerun comparable stages consistently. Condition averaging cannot address condition differences. |
+| Medium | Across stages | Current primary workflows use equal-condition averages. Older stacked fits may still be present; verify saved settings before comparison. Condition averaging cannot address condition differences. |
 | High | Across entry points | PLSSVD batch excludes `SUBJ_0038`; coverage/covariance discovery does not. Record one participant manifest and exclusion rationale. Comparison uses the cache cohort. |
 | Implemented | Model comparison | Descriptive and trial-held-out within-modality comparisons now exist; run the updated pipeline before interpreting project results. |
 | Medium | Scaling defaults | Covariance/validation use `none`; subspace comparison defaults to `equal_variance`. Record and harmonize this choice, especially for joint PCA. Scalar modality scaling alone does not change ideal PLSSVD directions, but changes joint PCA's balance. MEG channel z-scoring versus unstandardized iEEG also changes what “dominant variance” means. |
@@ -164,28 +288,10 @@ Allignement and matching: one-to-one Hungarian assignment and sign orientation a
 | Implemented | Coverage design | Separate actual subject-count (MEG and iEEG) and fixed-cohort pairing analyses are available; run them on the project recordings. |
 | Medium | Validation/results | Legacy compare_subspace test-half reliability fixes trained axes; PLSSVD evaluation reports cross-fold refitted temporal-score correlations without test halves. Independent spatial-weight/subspace stability remains separate. Do not average PC1 across repetitions as if component identity were guaranteed. |
 
+### Additional implementation checks
 
-
-
-
-Within-modality display update: compare_models now always compares equal-condition-average temporal scores and corresponding forward patterns; condition-contrast comparisons are removed. Existing stacked fitted scores are averaged without refitting weights. The covariance notebook fits on condition averages. Its final cell exports detailed CSVs and one annotated two-panel similarity summary (iEEG/MEG; temporal/spatial overlap and matched absolute correlation), saved as PNG/PDF. PLSSVD batch output defaults to ROOT/out/plssvd_eval_{MEG_KIND}, with --output-dir still available.
-
-Full-data 3D visualization: `plot_full_data_clusters` reads saved k=3 full-data forward patterns, normalization, labels and centroids. It exports two iEEG/MEG figures per model: highest individual silhouette (counts may differ), and highest ARI at a common candidate count. Choices are descriptive and do not affect CV. Ties favor fewer clusters. Cluster colours are membership-matched only for the ARI view; component axes are not aligned. All panels use equal coordinate units and shared limits within each model. PNG/PDF outputs and `display_selections.csv` are saved under `full_data_clusters_3d/`. Synthetic checks cover count selection, label-permutation invariance, exports, and rejection of missing k=3 fits.
-
-Coverage channel-count sensitivity (`elect_number_effect.py`): fit five-component PCA on full-concatenated MEG, then remove 100 randomly chosen remaining channels per step until the next step would leave fewer than five. Each seeded path is nested; optional repetitions use independent removal orders. Reuse a fixed full-iEEG five-PC temporal reference. Save individual/cumulative MEG variance, total remaining-feature variance, retained-iEEG-PC variance captured, temporal overlap and matched absolute component correlation. Export metrics, component pairs, full feature metadata and per-path channel permutations (prefix of length n gives each subset). The notebook saves a four-panel channel-count figure. Sampling is global across channels, not subject-balanced; all metrics are descriptive in-sample. Existing completed results are explicitly loaded; new runs require a fresh output directory.
-
-Channel-count cluster execution: run `python -u elect_number_effect.py --root /path/to/iEEGvsMEG --step 100 --repeats 1`. Outputs default to ROOT/out/elect_number_effect, including saved input options and PNG/PDF. The coverage notebook now only calls `visualize_elect_number_effect` on completed files and never starts this PCA sweep. `--plot-only` provides the same result-only visualization from the command line. Data directories, electrode metadata/units, time axes and memory budget are configurable.
-
-Channel-count sweep update: now adds nested random channel batches from step to the largest complete step ≤ min(20,000, available channels). Default counts are 100, 200, …, 20,000 when enough channels exist. Existing saved results require a new run to reflect this capped ascending design.
-
-Project-path correction: all Python/notebook GetInfo callers, including OLD, now pass configured PROJECT_PATH directly without ROOT.parent or ../ prefixes. Explicit --project-path overrides are retained (and added to plssvd_eval.py). Relative configured paths retain their working-directory semantics; absolute paths remain absolute. GetInfo itself appends /misc/electrodes, so its project_path must name the parent project directory rather than misc. Cluster filesystem validation remains necessary.
-
-Requested GetInfo coordinate correction: the shared iEEG loader now applies two elementwise divisions by 1000 where abs(coord)>100, followed by a final /1000 to metres, before conversion to internal millimetres. PLSSVD and both coverage/covariance notebooks use the same helper. Explicit metadata retains its declared unit and bypasses this correction to prevent double conversion.
-
-Section 4 extension: retained spatial overlap, transformations and ARI use mapped rows (including participant pairing for full_concatenated); temporal overlap does not. Added individual-fold affine-error figure. New spatial_clouds.py compares all native-feature patterns through weighted training prototypes (default 32, configurable): Wasserstein W2, GW squared internal-distance loss with two local solver starts and convergence diagnostics, and Gaussian MMD² with training bandwidth. Procrustes alignment comes only from training temporal scores; spatial centering/RMS and prototype memberships are training-only. All features contribute with equal mass; results are compressed approximations, not participant-balanced or globally certified GW solutions. Shared-region analysis requires explicit common-atlas modality,feature_index,region labels and reports regional mean-pattern cosine/RMSE/counts; absent labels are explicitly unavailable. New tables cloud_metrics.csv and region_metrics.csv, saved cloud artifacts, and summary figures require new runs. Existing clusters remain intact.
-
-Verification of unpaired comparisons: six available tests pass; an end-to-end synthetic run exercised all three models, all-data and held-out paths, saved results and six figure exports. Tests verify identical/unequal-count distributions, rotation-invariant GW on a small example, regional summaries and training-parameter invariance under test-only perturbation. No real recordings or shared atlas were available locally.
-
-Temporal representations are now isolated in a scores-only function; a regression check confirms spatial map changes do not affect temporal overlap for full-concatenated inputs. Optional --ieeg-coords-dir and --meg-coords-dir load subject_coords.csv and subject_pos.csv without channel reordering, with explicit mm/m units and feature-count validation. These positions override the in-memory cache metadata only; signal sampling and the disk cache are unchanged. Coordinate sources are recorded. Region labels remain optional and are needed only for the common-region analysis.
-
-Current scope correction: common anatomical-region comparisons are deferred at the user’s request. Their computation, CLI option, output table and notebook figures have been removed; earlier regional implementation notes above are historical. MNI coordinate loading, temporal/spatial overlap, transformations, clustering, fold consistency, Wasserstein/GW/MMD remain. Existing saved regional files are not deleted but are no longer loaded.
+- The phase launcher now distinguishes dataset mismatch from unavailable completed iterations. It accepts per-iteration completion markers without a run-level marker and excludes unfinished iterations; it does not resume partial fits.
+- Coordinate overrides in `compare_subspace` preserve feature order and record coordinate sources. The shared GetInfo correction still uses magnitude-dependent divisions before conversion to internal millimeters; an independent anatomical/unit audit remains necessary. Explicit metadata uses its declared units.
+- GetInfo callers use the configured project directory directly. Its electrode directory is appended internally; cluster filesystem paths still need validation.
+- The PCA-only backfill instructions in `PLSSVD_WORKFLOW.md` do not match the current `plssvd_fit_pca.py`; use the actual implementation as the reference until reconciled.
+- Existing synthetic tests cover phase spectral/covariance preservation, completed-iteration reuse, model evaluation, spatial-cloud metrics and modality-specific analyses. Test presence is not evidence that the current recordings satisfy timing, anatomical or exchangeability assumptions; this documentation update does not claim a new full-data validation run.

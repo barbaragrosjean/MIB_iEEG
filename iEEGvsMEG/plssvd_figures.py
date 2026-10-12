@@ -168,13 +168,22 @@ def plot_prepared_pca(data, absolute=True, comparison=False):
         permutation=meta.get('permutation','none')))
 
 
-def plot_phase_null_comparison(runs_dir, n_components, modes=('meg','ieeg','both')):
+def plot_null_comparison(runs_dir, n_components, perm_type='phase', modes=('meg','ieeg','both')):
     """Matched-iteration held-out distributions from prepared snapshots only.
 
     Each value averages the folds of one iteration. Baseline spread reflects
-    repeated trial splits; surrogate spread also varies phase. These overlapping
+    repeated trial splits; surrogate spread also varies the selected permutation. These overlapping
     iterations are not independent observations; no inferential p-value is shown.
     """
+    from plssvd_eval_utils import PERMUTATION_TYPES
+    if perm_type == 'time_circular_shift':
+        perm_type = 'time_cirular_shift'  # Existing output-folder spelling.
+    if perm_type not in PERMUTATION_TYPES:
+        raise ValueError(f'Unknown permutation type: {perm_type!r}; choose from {PERMUTATION_TYPES}.')
+    labels = dict(phase='Coherent phase surrogates', time_cirular_shift='Circular time shifts',
+                  time_block='Time-block permutations', time_point='Time-point permutations',
+                  space='Spatial permutations')
+    null_label = 'Phase null' if perm_type == 'phase' else 'Permutation null'
     modes = tuple(modes)
     if not modes or any(m not in ('meg','ieeg','both') for m in modes):
         raise ValueError('modes must contain meg, ieeg or both.')
@@ -185,10 +194,10 @@ def plot_phase_null_comparison(runs_dir, n_components, modes=('meg','ieeg','both
     fig, axes = plt.subplots(len(modes), len(panels), figsize=(18,3.4*len(modes)), squeeze=False, layout='constrained')
     for row, mode in enumerate(modes):
         try:
-            data = load_comparison(runs_dir, mode+'__phase', n_components)
+            data = load_comparison(runs_dir, mode+'__'+perm_type, n_components)
         except FileNotFoundError:
             for ax, (_, title) in zip(axes[row], panels):
-                ax.text(.5,.5,'Phase comparison not prepared',ha='center',transform=ax.transAxes)
+                ax.text(.5,.5,f'{perm_type} comparison not prepared\nRun plssvd_postprocess.py for this mode and k',ha='center',transform=ax.transAxes)
                 ax.set_title(f'{mode}: {title}')
             continue
         frame = data['metrics'].query("partition == 'test'")
@@ -205,9 +214,14 @@ def plot_phase_null_comparison(runs_dir, n_components, modes=('meg','ieeg','both
                 a = values[label]
                 if len(a):
                     ax.hist(a,bins=bins,histtype='step',linewidth=2,color=color,
-                            label=f'{"Baseline" if label == "Unpermuted" else "Phase null"} (n={len(a)})')
+                            label=f'{"Baseline" if label == "Unpermuted" else null_label} (n={len(a)})')
                     ax.axvline(np.median(a),color=color,linestyle=':',alpha=.7)
             ax.set(title=f'{mode.upper()} randomized: {title}',xlabel='Held-out fold mean per iteration',ylabel='Iterations')
             ax.legend(fontsize=8)
-    fig.suptitle(f'Coherent phase surrogates vs baseline · k={n_components}\nMatched trial splits; dotted lines: medians; descriptive distributions, not independent replicates')
+    fig.suptitle(f'{labels[perm_type]} vs baseline · k={n_components}\nMatched trial splits; dotted lines: medians; descriptive distributions, not independent replicates')
     return fig
+
+
+def plot_phase_null_comparison(runs_dir, n_components, modes=('meg','ieeg','both')):
+    """Backward-compatible phase-only entry point for cluster scripts."""
+    return plot_null_comparison(runs_dir, n_components, perm_type='phase', modes=modes)
