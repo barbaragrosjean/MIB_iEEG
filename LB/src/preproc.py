@@ -331,11 +331,9 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
         del TFR
 
     epochs = epochs.crop(-0.5,4) 
-    epochs = epochs.resample(new_sfreq)
 
-    if save_epoch : 
-        with open(out_path + f'/{subj}_epochs.p', "wb") as f:
-            pickle.dump(epochs.get_data(), f)
+    if new_sfreq != 'none' :
+        epochs = epochs.resample(new_sfreq)
 
     # extracted and save info 
     info['chnames'] = epochs.info['ch_names']
@@ -347,6 +345,12 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
         json.dump(info, f)
 
     ch_coord_df.to_csv(out_path + f'/{subj}_coords.csv' )
+
+    if save_epoch : 
+        with open(out_path + f'/{subj}_epochs.p', "wb") as f:
+            pickle.dump(epochs.get_data(), f)
+    else :
+        return epochs.get_data()
 
 def TFRmEvents(subj, event_ids = [1, 2], test_id=False, freq_id=False, events_index=[],  baseline_corr=False, data_path = OUT_PATH + '/Data') : 
     
