@@ -606,7 +606,7 @@ def plot_voxel_weights(values, coordinates, *, voxel_size=20., size_base=2.,
 def plot_glasser_weights(values, coordinates, *, sigma=4., radius_sigma=3.,
                          min_support=.05, absolute=False, template=None, meshes=None,
                          view='lateral', threshold=None, cmap=None, title=None,
-                         figure=None, axes=None, show=True, vmin=None, vmax=None):
+                         figure=None, axes=None, show=True, vmin=None, vmax=None, hemisphere=None):
     """Gaussian-weighted electrode maps on the HCP inflated cortical surfaces.
 
     Reproduces OLD/LB_Summary.ipynb's 'Glasser' surface visualization: this is
@@ -621,11 +621,15 @@ def plot_glasser_weights(values, coordinates, *, sigma=4., radius_sigma=3.,
     Optional meshes has pial_left/right, inflated_left/right and sulc_left/right
     attributes (defaults to hcp_utils.mesh); template defaults to MNI152 2 mm.
     Supply local meshes/template to avoid any external data requirements.
+    hemisphere=None plots both; 'left' or 'right' plots only that surface.
     Returns (figure, dict) containing image, support mask and hemisphere textures.
     """
     import nibabel as nib
     from nilearn import datasets, surface
 
+    if hemisphere not in (None, 'left', 'right'):
+        raise ValueError('hemisphere must be None, left or right.')
+    hemispheres = ('left', 'right') if hemisphere is None else (hemisphere,)
     values, xyz = _brain_weights(values, coordinates, absolute)
     if not np.isfinite([sigma, radius_sigma, min_support]).all() or min(sigma, radius_sigma, min_support) <= 0:
         raise ValueError('sigma, radius_sigma and min_support must be positive finite values.')
@@ -677,17 +681,17 @@ def plot_glasser_weights(values, coordinates, *, sigma=4., radius_sigma=3.,
     image = nib.Nifti1Image(volume, template.affine)
     mask = nib.Nifti1Image(supported.astype(np.uint8), template.affine)
     textures = {hemi: surface.vol_to_surf(image, getattr(meshes, f'pial_{hemi}'), mask_img=mask)
-                for hemi in ('left', 'right')}
+                for hemi in hemispheres}
     limit = float(np.max(np.abs(values))) or 1.
     if axes is None:
         fig = figure if figure is not None else plt.figure(figsize=(12, 5))
-        axes = [fig.add_subplot(1, 2, i+1, projection='3d') for i in range(2)]
+        axes = [fig.add_subplot(1, len(hemispheres), i+1, projection='3d') for i in range(len(hemispheres))]
     else:
         axes = np.asarray(axes, dtype=object).ravel()
-        if len(axes) != 2:
-            raise ValueError('Provide two 3D axes, one per hemisphere.')
+        if len(axes) != len(hemispheres):
+            raise ValueError('Provide one 3D axis per selected hemisphere.')
         fig = figure if figure is not None else axes[0].figure
-    for ax, hemi in zip(axes, ('left', 'right')):
+    for ax, hemi in zip(axes, hemispheres):
         texture = textures[hemi]
         if not np.isfinite(texture).any():
             ax.set_axis_off()

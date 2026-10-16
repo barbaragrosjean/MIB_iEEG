@@ -91,9 +91,12 @@ def spatial_metadata(metadata):
 
 def spatial_weight_distance(weights, metadata, *, bin_edges=None, n_permutations=199,
                             seed=2026, block_size=512, progress=None, metric="cosine"):
-    """Exact all-pair cosine-distance curves, group and individual subjects.
+    """Exact all-pair absolute-cosine dissimilarity, group and individual subjects.
 
-    Uses signed, unthresholded profiles from ONE group fit. Each unordered
+    Uses 1 - abs(cosine) on signed, unthresholded profiles from ONE group fit.
+    Independent whole-profile polarity reversals leave distances unchanged.
+    Range is [0, 1]; one-component nonzero profiles all have distance zero.
+    Each unordered
     pair occurs once, including distinct features at identical coordinates.
     Null shuffles profiles within subjects against fixed coordinates, exactly
     equivalent to shuffling coordinates within subjects. No pair subsampling.
@@ -156,7 +159,7 @@ def spatial_weight_distance(weights, metadata, *, bin_edges=None, n_permutations
             counts += np.bincount(within_key, minlength=counts.size).reshape(counts.shape)
             for repeat, p in enumerate(permutations):
                 if metric == "cosine":
-                    distances = np.clip(1 - w[p[ii]] @ w[p[jj]].T, 0, 2)[a, b]
+                    distances = np.clip(1 - np.abs(w[p[ii]] @ w[p[jj]].T), 0, 1)[a, b]
                 else:
                     distances = .5 * (w[p[ii[a]], 0] - w[p[jj[b]], 0])**2
                 sums[repeat, 0] += np.bincount(bins, weights=distances, minlength=nb)
@@ -216,11 +219,11 @@ def plot_spatial_weight_distance(result, title=''):
             ax.plot(frame.distance_mid_mm, frame.cosine_distance, 'o-', label='Observed', markersize=3)
             significant = frame.p_holm < .05
             ax.scatter(frame.loc[significant,'distance_mid_mm'], frame.loc[significant,'cosine_distance'], marker='*', s=90, color='crimson', label='Holm p < .05')
-            ax.set(title=subject, xlabel='MNI distance (mm)', ylabel='Cosine distance', ylim=(-.05,2.05))
+            ax.set(title=subject, xlabel='MNI distance (mm)', ylabel='Absolute-cosine distance (1 − |cos θ|)', ylim=(-.05,1.05))
         for ax in list(axes.flat)[len(groups):]:
             ax.set_visible(False)
         axes.flat[0].legend(fontsize=7)
-        fig.suptitle(f'{title} · {scope} · signed group-model weights')
+        fig.suptitle(f'{title} · {scope} · polarity-invariant profile distance')
         figures.append(fig)
     return figures
 
@@ -381,9 +384,10 @@ def plot_weight_cluster_centroids(result, title='', *, metadata, figsize=(20, 12
 
 
 def kmeans_weight_space(weights, metadata, *, n_clusters=5, seed=2026,
-                        bin_edges=None, block_size=512, use_thresholded=True):
+                        bin_edges=None, block_size=512, use_thresholded=True, use_absolute=False):
     """Group K-means in signed first-three-component weights, optionally thresholded.
 
+    use_absolute=True takes componentwise magnitudes before fitting.
     No spatial coordinates enter the fit. All-zero selected-input rows are labelled
     -1 and excluded (cosine distance is undefined). K-means uses Euclidean
     distance, no additional feature standardization, and 20 initializations.
@@ -407,6 +411,10 @@ def kmeans_weight_space(weights, metadata, *, n_clusters=5, seed=2026,
     if not isinstance(use_thresholded, (bool, np.bool_)):
         raise ValueError("use_thresholded must be True or False.")
     selected_weights = thresholded if use_thresholded else w[:,:3]
+    if not isinstance(use_absolute, (bool, np.bool_)):
+        raise ValueError('use_absolute must be True or False.')
+    if use_absolute:
+        selected_weights = np.abs(selected_weights)
     active = np.linalg.norm(selected_weights,axis=1)>0
     if len(np.unique(selected_weights[active],axis=0)) < n_clusters:
         raise ValueError('Fewer distinct nonzero selected-input profiles than clusters; reduce n_clusters.')
@@ -422,6 +430,7 @@ def kmeans_weight_space(weights, metadata, *, n_clusters=5, seed=2026,
     members['feature_row'] = np.arange(len(w))
     members['cluster_id'] = labels
     members['use_thresholded'] = bool(use_thresholded)
+    members['use_absolute'] = bool(use_absolute)
     for c in range(3):
         members[f'weight_{c+1}'] = w[:,c]
         members[f'thresholded_weight_{c+1}'] = thresholded[:,c]
@@ -447,7 +456,7 @@ def kmeans_weight_space(weights, metadata, *, n_clusters=5, seed=2026,
                 if not len(a): continue
                 d = cdist(xyz[rows[ii]],xyz[rows[jj]])[a,b]
                 bins = np.minimum(np.searchsorted(edges,d,side='right')-1,len(edges)-2)
-                cosine = np.clip(1-unit[ii]@unit[jj].T,0,2)[a,b]
+                cosine = np.clip(1-np.abs(unit[ii]@unit[jj].T),0,1)[a,b]
                 count += np.bincount(bins,minlength=len(count))
                 total += np.bincount(bins,weights=cosine,minlength=len(count))
         for j in range(len(count)):
@@ -464,7 +473,8 @@ def plot_kmeans_weight_space(result, title=''):
     from matplotlib.colors import to_hex
     members, clusters = result['memberships'], result['clusters']
     mode = 'Thresholded' if bool(members.use_thresholded.iloc[0]) else 'Original'
-    title = f'{title} · {mode.lower()} weights'
+    polarity = 'absolute' if 'use_absolute' in members and bool(members.use_absolute.iloc[0]) else 'signed'
+    title = f'{title} · {mode.lower()} {polarity} weights'
     colors = {int(row.cluster_id):plt.get_cmap('turbo')(j/max(len(clusters)-1,1))
               for j,row in enumerate(clusters.itertuples())}
     figures = []
@@ -500,18 +510,18 @@ def plot_kmeans_weight_space(result, title=''):
         data = members[members.cluster_id==row.cluster_id]
         for c,ax in enumerate(axes[i]):
             # Identical edges for native and thresholded values within each panel.
-            bins = np.histogram_bin_edges(data[f'weight_{c+1}'],bins=35)
+            bins = np.histogram_bin_edges(np.r_[data[f'weight_{c+1}'], data[f'input_weight_{c+1}']],bins=35)
             bins = np.unique(np.r_[bins,0.])
             ax.hist(data[f'weight_{c+1}'],bins=bins,density=True,histtype='step',color='black',label='Original')
-            ax.hist(data[f'input_weight_{c+1}'],bins=bins,density=True,alpha=.55,color=colors[row.cluster_id],label=f'K-means input: {mode.lower()}')
-            ax.set(title=f'C{row.cluster_id} · component {c+1}',xlabel='Signed weight',ylabel='Density')
+            ax.hist(data[f'input_weight_{c+1}'],bins=bins,density=True,alpha=.55,color=colors[row.cluster_id],label=f'K-means input: {mode.lower()} {polarity}')
+            ax.set(title=f'C{row.cluster_id} · component {c+1}',xlabel='Weight (original signed / selected input)',ylabel='Density')
     axes[0,0].legend(fontsize=8)
     fig.suptitle(f'{title} · within-cluster weight distributions'); figures.append(fig)
     fig,axes = plt.subplots(1,2,figsize=(15,5),constrained_layout=True)
     for label,frame in result['distance_curves'].groupby('cluster_id',sort=True):
         axes[0].plot(frame.distance_mid_mm,frame.cosine_distance,'o-',color=colors[label],label=f'C{label}')
         axes[1].plot(frame.distance_mid_mm,frame.n_pairs,'o-',color=colors[label],label=f'C{label}')
-    axes[0].set(xlabel='MNI pair distance (mm)',ylabel=f'Mean cosine distance ({mode.lower()} 3D weights)',ylim=(-.05,2.05))
+    axes[0].set(xlabel='MNI pair distance (mm)',ylabel=f'Mean 1 − |cos θ| ({mode.lower()} 3D weights)',ylim=(-.05,1.05))
     axes[1].set(xlabel='MNI pair distance (mm)',ylabel='Number of unordered pairs',yscale='symlog')
     axes[0].legend(); fig.suptitle(f'{title} · within-cluster pairs (all clusters overlaid)')
     figures.append(fig)
@@ -660,11 +670,24 @@ def plot_regional_weight_polar(table):
     return fig
 
 
+def fold_coordinates(coordinates, target_hemisphere='left'):
+    """Reflect MNI x across the midline; preserve rows and leave input unchanged."""
+    if target_hemisphere not in ('left', 'right'):
+        raise ValueError('target_hemisphere must be left or right.')
+    xyz = np.array(coordinates, dtype=float, copy=True)
+    if xyz.ndim != 2 or xyz.shape[1] != 3 or not np.isfinite(xyz).all():
+        raise ValueError('Coordinates must be finite N x 3 MNI coordinates.')
+    xyz[:, 0] = (-1 if target_hemisphere == 'left' else 1)*np.abs(xyz[:, 0])
+    return xyz
+
+
 def plot_modality_glasser(datasets, values, *, ieeg_radius_mm=0., sigma=4., view='lateral',
-                          vmin=None, vmax=None, **kwargs):
+                          vmin=None, vmax=None, fold_hemispheres=False, target_hemisphere='left', **kwargs):
     """Legacy HCP surface interpolation via plotting.plot_surf_stat_map.
 
     These are continuous maps on HCP surfaces, not averages over Glasser parcels.
+    fold_hemispheres=True reflects all coordinates into target_hemisphere before
+    spatial averaging/interpolation and displays only that hemisphere.
     vmin/vmax are shared across all modality/component panels when provided;
     None retains automatic per-panel limits. They do not threshold the data.
     """
@@ -672,23 +695,30 @@ def plot_modality_glasser(datasets, values, *, ieeg_radius_mm=0., sigma=4., view
     figures = []
     for modality,dataset in datasets.items():
         xyz = dataset.metadata[['x','y','z']].to_numpy(float)
+        if fold_hemispheres:
+            xyz = fold_coordinates(xyz, target_hemisphere)
         pos, averaged, _ = average_spatial_groups(values[modality],xyz,
             radius_mm=ieeg_radius_mm if modality.lower()=='ieeg' else 0.)
         for c in range(averaged.shape[1]):
-            fig = plt.figure(figsize=(16,6))
+            fig = plt.figure(figsize=(8 if fold_hemispheres else 16,6))
             figure,_ = plot_glasser_weights(averaged[:,c],pos,absolute=True,sigma=sigma,
-                view=view,figure=fig,show=False,title=f'{modality} · component {c+1}',
+                view=view,figure=fig,show=False,title=f'{modality} · component {c+1}' +
+                (f' · both hemispheres folded to {target_hemisphere}' if fold_hemispheres else ''),
+                hemisphere=target_hemisphere if fold_hemispheres else None,
                 vmin=vmin,vmax=vmax,**kwargs)
             figures.append((modality,c+1,figure))
     return figures
 
 
-def summarize_kmeans_regions_hemispheres(result, labelled_metadata):
+def summarize_kmeans_regions_hemispheres(result, labelled_metadata, *,
+                                       fold_hemispheres=False, target_hemisphere='left'):
     """Summarize existing K-means labels without refitting or relabelling.
 
     Polar means use absolute selected-input weights (three components). Spatial
     hemisphere centroids are unweighted means of native feature coordinates.
-    Exact x==0 features are counted as midline and excluded from left/right.
+    Folding reflects coordinates before centroids, preserving original regional
+    labels and counting every feature once (including midline). It does not refit
+    K-means. Without folding, x==0 is excluded from left/right centroids.
     Empty hemispheres have count zero and NaN coordinates, never a fake centroid.
     """
     members = result['memberships'].copy()
@@ -700,16 +730,22 @@ def summarize_kmeans_regions_hemispheres(result, labelled_metadata):
         raise ValueError('Shared region metadata coordinates/order differ from K-means inputs.')
     members['region_shared'] = meta.region_shared.to_numpy()
     members['hemisphere'] = np.where(members.x < 0,'left',np.where(members.x > 0,'right','midline'))
+    members['original_hemisphere'] = members['hemisphere']
+    members['fold_hemispheres'] = bool(fold_hemispheres)
+    if fold_hemispheres:
+        members['original_x'] = members.x
+        members[['x','y','z']] = fold_coordinates(members[['x','y','z']], target_hemisphere)
+        members['hemisphere'] = target_hemisphere
     region_rows, center_rows, audit_rows = [], [], []
     for cluster_id, frame in members[members.cluster_id >= 0].groupby('cluster_id',sort=True):
         audit_rows.append(dict(cluster_id=cluster_id,n_total=len(frame),
-            n_left=int((frame.hemisphere=='left').sum()),n_right=int((frame.hemisphere=='right').sum()),
-            n_midline=int((frame.hemisphere=='midline').sum())))
+            n_left=int((frame.original_hemisphere=='left').sum()),n_right=int((frame.original_hemisphere=='right').sum()),
+            n_midline=int((frame.original_hemisphere=='midline').sum())))
         for region, group in frame.groupby('region_shared',sort=False):
             for component in (1,2,3):
                 region_rows.append(dict(cluster_id=cluster_id,region=region,component=component,
                     n_channels=len(group),mean_abs_weight=float(group[f'input_weight_{component}'].abs().mean())))
-        for hemisphere in ('left','right'):
+        for hemisphere in ((target_hemisphere,) if fold_hemispheres else ('left','right')):
             group = frame[frame.hemisphere == hemisphere]
             xyz = group[['x','y','z']].to_numpy(float)
             center = xyz.mean(axis=0) if len(xyz) else np.full(3,np.nan)
@@ -754,8 +790,11 @@ def plot_kmeans_hemisphere_centroids(summary, title=''):
     clusters = sorted(members.loc[members.cluster_id>=0,'cluster_id'].unique())
     colors = {c:to_hex(plt.get_cmap('turbo')(i/max(len(clusters)-1,1))) for i,c in enumerate(clusters)}
     fig = plt.figure(figsize=(22,8))
-    brain=plotting.plot_glass_brain(None,figure=fig,display_mode='lyrz',
-        title=f'{title} · left/right spatial centroids (stars); K-means labels unchanged')
+    folded = 'fold_hemispheres' in members and bool(members.fold_hemispheres.iloc[0])
+    target = members.hemisphere.iloc[0] if folded else None
+    label = f'both hemispheres folded to {target}' if folded else 'left/right'
+    brain=plotting.plot_glass_brain(None,figure=fig,display_mode=target[0] if folded else 'lyrz',
+        title=f'{title} · {label} spatial centroids (stars); K-means labels unchanged')
     brain.add_markers(members[['x','y','z']].to_numpy(),marker_color='lightgray',marker_size=5,alpha=.2)
     for cluster_id in clusters:
         group=members[members.cluster_id==cluster_id]
