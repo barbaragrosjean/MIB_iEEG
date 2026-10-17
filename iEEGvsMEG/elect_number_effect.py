@@ -114,7 +114,7 @@ def plot_elect_number_effect(result):
     fig,axes=plt.subplots(1,3,figsize=(11,5),layout='constrained')
     for ax,key,title in zip(axes.flat,
         ['total_variance','subspace_overlap','matched_abs_r'],
-        ['MEG total variance in first 5 PCs','Temporal subspace overlap with first 5 PCs iEEG','Matched component correlation first 5 PCs iEEG']):
+        ['MEG total variance (all PCs)','Temporal subspace overlap with first 5 PCs iEEG','Matched component correlation first 5 PCs iEEG']):
         
         g=result['metrics'].groupby('n_channels')[key].agg(['median','min','max']).sort_index()
         
@@ -123,7 +123,12 @@ def plot_elect_number_effect(result):
         if result['config']['repeats']>1:
             ax.fill_between(g.index,g['min'],g['max'],alpha=.2)
         
-        ax.set(title=title,xlabel='Remaining MEG channels',ylabel='Fraction / similarity',ylim=(0,1.02))
+        ax.set(title=title, xlabel='Number of MEG channels')
+        if key == 'total_variance':
+            ax.set_ylabel('Total variance (sum across channels)')
+            ax.set_ylim(bottom=0)  # Absolute variance is not bounded by one.
+        else:
+            ax.set(ylabel='Similarity', ylim=(0, 1.02))
         ax.grid(alpha=.2)
     fig.suptitle('Channel-count effect: full-concatenated MEG vs fixed 5-PC iEEG reference')
     return fig

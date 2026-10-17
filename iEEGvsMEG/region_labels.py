@@ -4,7 +4,7 @@ import nibabel as nib
 from nilearn import datasets
 from nilearn.image import load_img
 
-def get_region_label(pos_m) : 
+def get_region_label(pos_m, *, return_atlas_labels=False) : 
     """Legacy AAL-to-project mapping; input DataFrame coordinates are in metres."""
     # Load atlas
     atlas = datasets.fetch_atlas_aal()
@@ -172,4 +172,6 @@ def get_region_label(pos_m) :
         if r == None : 
             print(regions[i])
     
+    if return_atlas_labels:
+        return regions, regions_meg
     return regions_meg

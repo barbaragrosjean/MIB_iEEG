@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select a stable leading PLSSVD prefix against a selected phase null; never refit models."""
+"""Select a stable leading PLSSVD prefix against a selected null; never refit models."""
 
 from pathlib import Path
 import argparse
@@ -8,23 +8,31 @@ import numpy as np
 import pandas as pd
 
 
-def _phase_name(perm):
+NULL_TYPES = ('time_cirular_shift', 'time_block', 'time_point', 'space', 'phase')
+
+
+def _null_name(perm, perm_type='phase'):
     if perm not in ('ieeg', 'meg', 'both'):
         raise ValueError('perm must be ieeg, meg or both.')
-    return perm+'__phase'
+    if perm_type == 'time_circular_shift':
+        perm_type = 'time_cirular_shift'
+    if perm_type not in NULL_TYPES:
+        raise ValueError(f'perm_type must be one of {NULL_TYPES}.')
+    return perm+'__'+perm_type
 
 
-def _selection_folder(runs_dir, n_components, perm):
+def _selection_folder(runs_dir, n_components, perm, perm_type='phase'):
     # Preserve the existing both-phase output location.
     root = Path(runs_dir)/'component_selection'
-    return (root if perm == 'both' else root/_phase_name(perm))/f'k_{n_components:03d}'
+    name = _null_name(perm, perm_type)
+    return (root if name == 'both__phase' else root/name)/f'k_{n_components:03d}'
 
 
-def select_components(components, n_components=10, null_quantile=.95, min_support=.90, perm='both'):
+def select_components(components, n_components=10, null_quantile=.95, min_support=.90, perm='both', perm_type='phase'):
     """Input: matched iteration fold means, native component order, signed covariance."""
     if n_components < 1 or not 0 < null_quantile < 1 or not 0 < min_support <= 1:
         raise ValueError('Require positive component count and thresholds in (0,1), with support <=1.')
-    name = _phase_name(perm)
+    name = _null_name(perm, perm_type)
     frame = components.query("partition == 'test'")
     matrices = {}
     for label in ('Unpermuted', 'Permuted'):
@@ -58,17 +66,17 @@ def select_components(components, n_components=10, null_quantile=.95, min_suppor
 
 
 def prepare_selection(runs_dir, n_components=10, null_quantile=.95, min_support=.90,
-                      recompute=False, recompute_evaluation=False, perm='both'):
+                      recompute=False, recompute_evaluation=False, perm='both', perm_type='phase'):
     from plssvd_figures import load_comparison
     runs_dir = Path(runs_dir)
-    name = _phase_name(perm)
+    name = _null_name(perm, perm_type)
     if recompute_evaluation:
         from plssvd_postprocess import evaluate_run, prepare_comparison
         for run_name in ('none', name):
             evaluate_run(runs_dir/run_name, [n_components])
         prepare_comparison(runs_dir, name, n_components)
-    data = load_comparison(runs_dir, _phase_name(perm), n_components)
-    folder = _selection_folder(runs_dir, n_components, perm)
+    data = load_comparison(runs_dir, _null_name(perm, perm_type), n_components)
+    folder = _selection_folder(runs_dir, n_components, perm, perm_type)
     settings = dict(source_signature=data['metadata']['signature'],
                     n_components=n_components, null_quantile=null_quantile, min_support=min_support)
     manifest = folder/'selection.json'
@@ -76,8 +84,8 @@ def prepare_selection(runs_dir, n_components=10, null_quantile=.95, min_support=
         saved = json.loads(manifest.read_text())
         if any(saved.get(key) != value for key,value in settings.items()):
             raise ValueError('Selection settings or source results changed. Use --recompute.')
-        return load_selection(runs_dir, n_components, perm=perm)
-    table, summary = select_components(data['components'], n_components, null_quantile, min_support, perm=perm)
+        return load_selection(runs_dir, n_components, perm=perm, perm_type=perm_type)
+    table, summary = select_components(data['components'], n_components, null_quantile, min_support, perm=perm, perm_type=perm_type)
     folder.mkdir(parents=True, exist_ok=True)
     # Write the manifest last so interrupted output is not treated as complete.
     if manifest.exists():
@@ -86,19 +94,24 @@ def prepare_selection(runs_dir, n_components=10, null_quantile=.95, min_support=
     data['components'].to_csv(folder/'components.csv', index=False)
     data['metrics'].to_csv(folder/'metrics.csv', index=False)
     manifest.write_text(json.dumps(dict(summary, **settings), indent=2))
-    return load_selection(runs_dir, n_components, perm=perm)
+    return load_selection(runs_dir, n_components, perm=perm, perm_type=perm_type)
 
 
-def load_selection(runs_dir, n_components=10, perm='both'):
-    """Read saved selection only; no evaluations or model fitting."""
-    _phase_name(perm)
-    folder = _selection_folder(runs_dir, n_components, perm)
+def load_selection(runs_dir, n_components=10, perm='both', perm_type='phase'):
+    """Read selection for perm (modality) and perm_type (null transformation).
+
+    Supported types: time_cirular_shift, time_block, time_point, space, phase.
+    Defaults preserve historical phase selections. No evaluation or fitting is
+    performed; prepare_selection must first create results for the chosen null.
+    """
+    _null_name(perm, perm_type)
+    folder = _selection_folder(runs_dir, n_components, perm, perm_type)
     summary = json.loads((folder/'selection.json').read_text())
-    if summary['permutation'] != _phase_name(perm):
-        raise ValueError('Saved selection uses a different phase null.')
+    if summary['permutation'] != _null_name(perm, perm_type):
+        raise ValueError('Saved selection uses a different null model.')
     # Reject stale results using the standard prepared-comparison provenance check.
     from plssvd_figures import load_comparison
-    current = load_comparison(runs_dir, _phase_name(perm), n_components)
+    current = load_comparison(runs_dir, _null_name(perm, perm_type), n_components)
     if current['metadata']['signature'] != summary['source_signature']:
         raise ValueError('Selection is stale. Rerun plssvd_select_components.py --recompute.')
     return dict(folder=folder, summary=summary, **{name:pd.read_csv(folder/(name+'.csv'))
@@ -149,16 +162,17 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runs-dir',type=Path,default=Path(__file__).resolve().parent/'out/plssvd_eval/full_concatenated')
     parser.add_argument('--perm', choices=['ieeg','meg','both'], default='both')
+    parser.add_argument('--perm-type', choices=[*NULL_TYPES, 'time_circular_shift'], default='phase')
     parser.add_argument('--components',type=int,default=10)
     parser.add_argument('--null-quantile',type=float,default=.95)
     parser.add_argument('--min-support',type=float,default=.90)
     parser.add_argument('--recompute',action='store_true',help='Recompute selection tables from prepared comparisons.')
-    parser.add_argument('--recompute-evaluation',action='store_true',help='Refresh evaluation/comparison from existing baseline and selected phase fits; reuse valid cached evaluations. Never refit surrogates.')
+    parser.add_argument('--recompute-evaluation',action='store_true',help='Refresh evaluation/comparison from existing baseline and selected null fits; reuse valid cached evaluations. Never refit surrogates.')
     args=parser.parse_args()
     import matplotlib
     matplotlib.use('Agg')
     result=prepare_selection(args.runs_dir,args.components,args.null_quantile,args.min_support,
-                             args.recompute or args.recompute_evaluation,args.recompute_evaluation,perm=args.perm)
+                             args.recompute or args.recompute_evaluation,args.recompute_evaluation,perm=args.perm,perm_type=args.perm_type)
     fig=plot_selection(result)
     for ext in ('png','pdf'):fig.savefig(result['folder']/('selection.'+ext),dpi=180)
     import matplotlib.pyplot as plt
