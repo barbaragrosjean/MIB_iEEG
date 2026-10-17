@@ -90,52 +90,72 @@ def load_and_filter(subj, out_path=OUT_PATH + '/ripples', save=False, freq_band=
         return env
 
 
-def identify_ripples(subj,env='none', env_path=OUT_PATH + '/ripples', out_path=OUT_PATH + '/ripples', freq_band=FREQ_BAND, fs=FS, save=False) : 
-    # Take the envolopes
-    if env == 'none' :
+def identify_ripples(subj,env=None, env_path=OUT_PATH + '/ripples', out_path=OUT_PATH + '/ripples', freq_band=FREQ_BAND, fs=FS, save=False) :
+    # Load envelopes with shape (trials, channels, time)
+    if env is None :
         file = env_path + f'/{subj}_env{str(freq_band[0])}_{str(freq_band[1])}.p'
         with open(file, "rb") as f:
-            env = pickle.load(f)  
-        
-    # Ripples were identified as events with a maximum amplitude three s.d. above the mean, and with a duration of at least 25 ms
-    detection = np.where(env > np.mean(env) + 3 * np.std(env), True, False)
-    true_indices = [i for i, val in enumerate(detection) if val]
+            env = pickle.load(f)
 
-    # Ripples that were detected within 15 ms of each other were merged. --turn True
-    point15ms = fs*0.015 
-    for i in range(len(true_indices) - 1):
-        start = true_indices[i]
-        end = true_indices[i+1]
-        if end - start <= point15ms:
-            for j in range(start + 1, end):
-                detection[j] = True
+    env = np.asarray(env, dtype=float)
+    if env.ndim != 3 or 0 in env.shape :
+        raise ValueError('env must have shape (trials, channels, time) with nonempty dimensions')
+    if not np.all(np.isfinite(env)) or np.any(env < 0) :
+        raise ValueError('env must contain finite, nonnegative amplitudes')
+    if not np.isfinite(fs) or fs <= 0 :
+        raise ValueError('fs must be a positive sampling frequency')
 
-    rip = np.where(detection ==True, env, np.nan)
+    # One threshold per channel, estimated across all supplied trials and times
+    threshold = np.mean(env, axis=(0, 2)) + 3 * np.std(env, axis=(0, 2))
+    candidates = env > threshold[None, :, None]
+    detection = np.zeros(env.shape, dtype=bool)
+    point15ms = int(np.floor(fs * 0.015))
+    point25ms = int(np.ceil(fs * 0.025))
 
-    # Test the 25ms duration --turn False if below
-    point20ms = fs*0.025 
-    onset_bool = np.where(detection & ~np.concatenate(([False], detection[:-1])), True, False)
-    for i in range(len(true_indices) - 1):
-        start = onset_bool[i]
-        c=0
-        while detection[true_indices[i] +c] == True :
-            c+=1
-        end = true_indices[i] + c # duration of the event i 
-        if end - start <= point20ms:
-            for j in range(start + 1, end):
-                detection[j] = False
-
-    # json fils with the subject, duration and onset for each trials and each channels
+    # Parallel lists: each entry describes one event; offsets are exclusive
     meta_data = {}
-    meta_data['subj']=subj
-    meta_data['onset'] = np.where(detection & ~np.concatenate(([False], detection[:-1])))[0] # 2D array chxtrials
-    padded = np.empty(len(detection) + 2, dtype=bool)
-    padded[0], padded[-1] = False, False
-    padded[1:-1] = detection
-    diff = np.diff(padded.astype(int))
-    starts = np.where(diff == 1)[0]
-    ends = np.where(diff == -1)[0]
-    meta_data['durations'] = ends - starts # 2D array chxtrials
+    meta_data['subj'] = subj
+    meta_data['sfreq'] = float(fs)
+    meta_data['threshold'] = threshold.tolist()
+    meta_data['threshold_method'] = 'channel mean + 3 SD across supplied trials and times'
+    meta_data['time_units'] = 'samples from epoch start; offset exclusive'
+    meta_data['index_base'] = 0
+    for key in ['trial', 'channel', 'onset', 'offset', 'durations', 'duration_seconds', 'peak_amplitude', 'touches_boundary'] :
+        meta_data[key] = []
+
+    for tr in range(env.shape[0]) :
+        for ch in range(env.shape[1]) :
+            # Find contiguous intervals above the threshold along the time axis
+            padded = np.concatenate(([False], candidates[tr, ch], [False]))
+            diff = np.diff(padded.astype(int))
+            starts = np.where(diff == 1)[0]
+            ends = np.where(diff == -1)[0]
+
+            # Merge intervals separated by at most 15 ms of below-threshold samples
+            merged = []
+            for start, end in zip(starts, ends) :
+                if len(merged) > 0 and start - merged[-1][1] <= point15ms :
+                    merged[-1][1] = int(end)
+                else :
+                    merged.append([int(start), int(end)])
+
+            # Keep merged intervals lasting at least 25 ms, including filled gaps
+            for start, end in merged :
+                duration = end - start
+                if duration < point25ms :
+                    continue
+                detection[tr, ch, start:end] = True
+                meta_data['trial'].append(tr)
+                meta_data['channel'].append(ch)
+                meta_data['onset'].append(start)
+                meta_data['offset'].append(end)
+                meta_data['durations'].append(duration)
+                meta_data['duration_seconds'].append(float(duration / fs))
+                meta_data['peak_amplitude'].append(float(np.max(env[tr, ch, start:end])))
+                meta_data['touches_boundary'].append(start == 0 or end == env.shape[2])
+
+    # Apply the final mask only after merging and duration rejection
+    rip = np.where(detection, env, np.nan)
 
     if save:
         if not os.path.exists(out_path) : 
