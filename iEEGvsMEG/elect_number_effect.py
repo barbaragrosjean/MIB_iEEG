@@ -111,18 +111,21 @@ def load_elect_number_effect(output_dir):
 
 def plot_elect_number_effect(result):
     import matplotlib.pyplot as plt
-    fig,axes=plt.subplots(2,2,figsize=(11,7),layout='constrained')
+    fig,axes=plt.subplots(1,3,figsize=(11,5),layout='constrained')
     for ax,key,title in zip(axes.flat,
-        ['variance_fraction_first5','ieeg_variance_captured','subspace_overlap','matched_abs_r'],
-        ['MEG variance fraction in first 5 PCs','Retained iEEG-PC variance captured',
-         'Temporal subspace overlap','Matched component correlation (mean |r|)']):
+        ['total_variance','subspace_overlap','matched_abs_r'],
+        ['MEG total variance in first 5 PCs','Temporal subspace overlap with first 5 PCs iEEG','Matched component correlation first 5 PCs iEEG']):
+        
         g=result['metrics'].groupby('n_channels')[key].agg(['median','min','max']).sort_index()
+        
         ax.plot(g.index,g['median'],'o-',markersize=3)
-        if result['config']['repeats']>1:ax.fill_between(g.index,g['min'],g['max'],alpha=.2)
+        
+        if result['config']['repeats']>1:
+            ax.fill_between(g.index,g['min'],g['max'],alpha=.2)
+        
         ax.set(title=title,xlabel='Remaining MEG channels',ylabel='Fraction / similarity',ylim=(0,1.02))
         ax.grid(alpha=.2)
     fig.suptitle('Channel-count effect: full-concatenated MEG vs fixed 5-PC iEEG reference')
-    fig.supxlabel('Channels increase left → right. Nested random addition (new runs capped at 20,000); shading = range across sampling paths, not confidence intervals.',fontsize=9)
     return fig
 
 
