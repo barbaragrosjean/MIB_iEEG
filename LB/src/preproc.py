@@ -241,7 +241,7 @@ def TFR_mean(TFR,freq_bands=FREQ_BAND_DICT, freqs=FREQS, event_id= EVENT_ID, tri
 
         return TFR_mean_band, TFR_mean_band_trials
     
-def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, event_id = EVENT_ID, project_path = PROJECT_PATH, out_path = OUT_PATH + '/Data', trials = True, save_epoch=True, compute_TFR=True) :  
+def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, event_id = EVENT_ID, project_path = PROJECT_PATH, out_path = OUT_PATH + '/Data', trials = True, save_epoch=True, compute_TFR=True, crp_argument=[-0.5,4]) :  
     info = {}
     if not os.path.exists(out_path) : 
         os.makedirs(out_path)
@@ -329,8 +329,9 @@ def preproc(subj, sfreq = 600,new_sfreq = 200, freqs = FREQS, bwidth = BWIDTH, e
         info['time_tfr'] = list(TFR.times)
         del TFRtrials
         del TFR
-
-    epochs = epochs.crop(-0.5,4) 
+    if crp_argument != False : 
+        epochs = epochs.crop(crp_argument[0], crp_argument[1]) 
+    
 
     if new_sfreq != 'none' :
         epochs = epochs.resample(new_sfreq)

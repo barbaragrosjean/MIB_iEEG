@@ -25,15 +25,17 @@ def load_and_filter(subj, out_path=OUT_PATH + '/ripples', save=False, freq_band=
     # Get raw iEEG data and preproc without downsampling shape (trials, ch, time)
     epoch = preproc(subj, sfreq = fs,new_sfreq = 'none', freqs = FREQS, 
             bwidth = BWIDTH, event_id = EVENT_ID, project_path = PROJECT_PATH, 
-            out_path = out_path, trials = True, save_epoch=False, compute_TFR=False)   # TODO: CHECK CROPPED ARGUMENTS
+            out_path = out_path, trials = True, save_epoch=False, compute_TFR=False, 
+            crp_argument=False) 
 
     # filtered between 80 and 120 Hz using a second-order Butterworth filter.
     from scipy.signal import butter, sosfilt, hilbert
-    sos = butter(2, freq_band, btype='bandpass', output='sos')
-    filtered = sosfilt(sos, epoch) # TODO check that I can have my 3d array or if I need to iterate
+    sos = butter(2, freq_band, btype='bandpass', output='sos', fs=FS)
+    filtered = sosfilt(sos, epoch, axis=-1)
 
     # A Hilbert transform was then applied to the filtered signal to extract its instantaneous amplitude. 
-    env  = hilbert(filtered)
+    analytic_signal  = hilbert(filtered, axis=-1)
+    env = np.abs(analytic_signal)
 
     # SAVE OUTPUT: matrix (condition, trials, time) 
     if save:
