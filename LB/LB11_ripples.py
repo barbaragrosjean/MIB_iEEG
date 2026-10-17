@@ -2,6 +2,7 @@ import os
 import pickle
 import numpy as np
 import pandas as pd
+import json 
 
 from src.setting import ExcludSubj, GetInfo
 from src.config import OUT_PATH, PROJECT_PATH, FREQS, BWIDTH, EVENT_ID
@@ -18,15 +19,13 @@ for s in failled :
 
 FREQ_BAND = [80, 120]
 FS=600
-# Should I first compute envelope and then crop the epoch or is it fine to apply it on cropped data? 
-
 
 def load_and_filter(subj, out_path=OUT_PATH + '/ripples', save=False, freq_band=FREQ_BAND, fs=FS):
 
     # Get raw iEEG data and preproc without downsampling shape (trials, ch, time)
     epoch = preproc(subj, sfreq = fs,new_sfreq = 'none', freqs = FREQS, 
             bwidth = BWIDTH, event_id = EVENT_ID, project_path = PROJECT_PATH, 
-            out_path = out_path, trials = True, save_epoch=False, compute_TFR=False)   # CROPPED?
+            out_path = out_path, trials = True, save_epoch=False, compute_TFR=False)   # TODO: CHECK CROPPED ARGUMENTS
 
     # filtered between 80 and 120 Hz using a second-order Butterworth filter.
     from scipy.signal import butter, sosfilt, hilbert
@@ -36,7 +35,7 @@ def load_and_filter(subj, out_path=OUT_PATH + '/ripples', save=False, freq_band=
     # A Hilbert transform was then applied to the filtered signal to extract its instantaneous amplitude. 
     env  = hilbert(filtered)
 
-    # SAVE OUTPUT: matrix (condition, trials, time) of enveloppe
+    # SAVE OUTPUT: matrix (condition, trials, time) 
     if save:
         if not os.path.exists(out_path) : 
             os.makedirs(out_path)
@@ -103,12 +102,14 @@ def identify_ripples(subj,env='none', env_path=OUT_PATH + '/ripples', out_path=O
             pickle.dump(rip, f)
         del rip
 
-        # save the meta_data
+        with open(out_path + f'/{subj}_env_rip{str(freq_band[0])}_{str(freq_band[1])}.json', 'w') as f:
+            json.dump(meta_data, f)
+
     else :    
         return rip, meta_data
 
 
-def test_adjacent(subj, env_path=OUT_PATH + '/ripples', out_path=OUT_PATH + '/ripples', freq_band=FREQ_BAND, fs=FS) :
+def test_adjacent(subj, env_path=OUT_PATH + '/ripples', out_path=OUT_PATH + '/ripples', freq_band=FREQ_BAND, fs=FS, save=False) :
 
     # Get the channels region of belonging 
     _, _, _, _, regions = GetInfo([subj], project_path = PROJECT_PATH, data_path = OUT_PATH + '/Data', save=False) # TODO UPDATE THE DATAPATH
@@ -119,24 +120,17 @@ def test_adjacent(subj, env_path=OUT_PATH + '/ripples', out_path=OUT_PATH + '/ri
     # For patients who had more than one anterior hippocampal electrode
     if HPC_ch_num >=2 :
         # we examined whether the same ripple was picked up by the different electrodes (within 20 ms).
-
-        # Get the ripples
         file = env_path + f'/{subj}_env_rip{str(freq_band[0])}_{str(freq_band[1])}.p'
         with open(file, "rb") as f:
-            env_rip = pickle.load(f)  
+            env_rip = pickle.load(f)  # array channel x trials
         
-        # select the HPC ones
-        hpc_rip = env_rip[HPC_ch_idx, :]
-        hpc_rip_bool = np.where(hpc_rip.isnan(), False) 
+        # select the HPC 
+        hpc_rip = env_rip[HPC_ch_idx, :] # array channel x trials
+        hpc_rip_bool = np.where(hpc_rip.isnan(), False)  # array channel x trials
 
         # Test of there are mutilpe electordes capturing the same within 20ms
         point20ms = fs*0.02 
-        for i in range(len(hpc_rip_bool) - 1):
-            start = hpc_rip_bool[i]
-            end = hpc_rip_bool[i+1]
-            if end - start <= point20ms:
-                for j in range(start + 1, end):
-                    # I don't know how to store this info
+        for tr in hpc_rip_bool.shape[1] :
 
         # save as before 
                     
@@ -165,6 +159,3 @@ def ripples_pipline(subject_included) :
         load_and_filter(subj)
         identify_ripples(subj)
         test_adjacent(subj)
-
-    
-
