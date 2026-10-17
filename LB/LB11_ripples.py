@@ -82,7 +82,8 @@ def load_and_filter(subj, out_path=OUT_PATH + '/ripples', save=False, freq_band=
         with open(out_path + f'/{subj}_env{str(freq_band[0])}_{str(freq_band[1])}.p', "wb") as f:
             pickle.dump(env, f)
         info = {'chnames': epochs.ch_names, 'time_epoch': epochs.times.tolist(),
-                'n_trials': len(epochs), 'sfreq': float(epochs.info['sfreq'])}
+                'n_trials': len(epochs), 'sfreq': float(epochs.info['sfreq']),
+                'event_id': epochs.events[:, 2].tolist(), 'condition_codes': epochs.event_id}
         with open(out_path + f'/{subj}_info.json', 'w') as f:
             json.dump(info, f)
         ch_coord_df = pd.DataFrame({ch['ch_name']: ch['loc'][:3] * 1000 for ch in epochs.info['chs']}).T
@@ -277,12 +278,136 @@ def subj_ripples_in_time(subj, env_path=OUT_PATH + '/ripples', out_path=OUT_PATH
     return counts, bins
 
 
-def group_ripples_in_time(subj_included):
-    pass
-    # Same than above but group all participant, you should have for each subject the average count over trials:
-    # (condition, electrodes, time_bins ). you should group the participant and divid by regions of interest. I want one plot for each RIOs
-    # then an figure for the average taking the average count per region of interest so a 2d plot of ROIs x time at group level. 
-    # save at the end in OUT_PATH + 'ripples/figures' and the name of the file should be group 
+def group_ripples_in_time(subj_included, env_path=OUT_PATH + '/ripples', out_path=OUT_PATH + '/ripples/figures', freq_band=FREQ_BAND, bin_width=0.25):
+    if len(subj_included) == 0 or len(set(subj_included)) != len(subj_included) :
+        raise ValueError('Provide a nonempty list of unique subjects')
+    if not np.isfinite(bin_width) or bin_width <= 0 :
+        raise ValueError('bin_width must be positive and expressed in seconds')
+
+    # Load trial conditions and match regions to the envelope channel order
+    subjects = []
+    regions = []
+    conditions = []
+    for subj in subj_included :
+        with open(env_path + f'/{subj}_info.json') as f:
+            info = json.load(f)
+        if 'event_id' not in info or 'condition_codes' not in info :
+            raise ValueError(f'Rerun load_and_filter({subj!r}, save=True) to save trial conditions')
+        with open(env_path + f'/{subj}_env_rip{freq_band[0]}_{freq_band[1]}.json') as f:
+            meta_data = json.load(f)
+        _, _, elect_list, _, ch_regions = GetInfo([subj], project_path=PROJECT_PATH, data_path=env_path, save=False)
+        region_by_ch = dict(zip(elect_list, ch_regions))
+        ch_regions = np.array([region_by_ch[ch] for ch in info['chnames']])
+        trial_codes = np.array(info['event_id'], dtype=int)
+        if len(trial_codes) != info['n_trials'] :
+            raise ValueError(f'Trial conditions do not match the number of epochs for {subj}')
+        times = np.array(info['time_epoch'])
+        if len(subjects) == 0 :
+            limits = times[[0, -1]]
+            bins = np.append(np.arange(limits[0], limits[1], bin_width), limits[1])
+        elif not np.allclose(times[[0, -1]], limits) :
+            raise ValueError('All subjects must have the same epoch time limits')
+        for region in ch_regions :
+            if region not in regions :
+                regions.append(str(region))
+        for condition, code in info['condition_codes'].items() :
+            if int(code) in trial_codes and condition not in conditions :
+                conditions.append(condition)
+        subjects.append((info, meta_data, ch_regions, trial_codes))
+
+    if len(conditions) == 0 or len(regions) == 0 :
+        raise ValueError('No trial conditions or electrode regions available')
+
+    # Each subject contributes one mean per condition, region and time bin
+    subject_counts = np.full((len(subjects), len(conditions), len(regions), len(bins) - 1), np.nan)
+    for si, (info, meta_data, ch_regions, trial_codes) in enumerate(subjects) :
+        event_trials = np.array(meta_data['trial'], dtype=int)
+        event_channels = np.array(meta_data['channel'], dtype=int)
+        onsets = info['time_epoch'][0] + np.array(meta_data['onset']) / meta_data['sfreq']
+        for ci, condition in enumerate(conditions) :
+            if condition not in info['condition_codes'] :
+                continue
+            trials = np.where(trial_codes == int(info['condition_codes'][condition]))[0]
+            if len(trials) == 0 :
+                continue
+            for ri, region in enumerate(regions) :
+                channels = np.where(ch_regions == region)[0]
+                if len(channels) == 0 :
+                    continue
+                selected = np.isin(event_trials, trials) & np.isin(event_channels, channels)
+                counts, _ = np.histogram(onsets[selected], bins=bins)
+                subject_counts[si, ci, ri] = counts / (len(trials) * len(channels))
+
+    # SD describes between-subject variability; it is undefined for a single subject
+    mean_count = np.full(subject_counts.shape[1:], np.nan)
+    std_count = np.full(subject_counts.shape[1:], np.nan)
+    n_subjects = np.sum(np.isfinite(subject_counts[:, :, :, 0]), axis=0)
+    for ci in range(len(conditions)) :
+        for ri in range(len(regions)) :
+            values = subject_counts[:, ci, ri]
+            values = values[np.isfinite(values[:, 0])]
+            if len(values) > 0 :
+                mean_count[ci, ri] = np.mean(values, axis=0)
+            if len(values) > 1 :
+                std_count[ci, ri] = np.std(values, axis=0, ddof=1)
+
+    if not os.path.exists(out_path) :
+        os.makedirs(out_path)
+    vmax = np.nanmax(mean_count)
+    if vmax == 0 :
+        vmax = 1
+
+    # Use the same color scale and annotation format for all heatmaps
+    def plot_heatmap(ax, means, stds, labels, title):
+        im = ax.pcolormesh(bins, np.arange(len(labels) + 1) - 0.5, means,
+                           cmap='viridis', vmin=0, vmax=vmax, shading='flat')
+        ax.set_ylim(len(labels) - 0.5, -0.5)
+        ax.set_yticks(np.arange(len(labels)))
+        ax.set_yticklabels(labels)
+        ax.set_xlabel('Time from stimulus onset (s)')
+        ax.set_title(title)
+        ax.axvline(0, color='white', linestyle='--', linewidth=1)
+        for row in range(len(labels)) :
+            for col in range(len(bins) - 1) :
+                mean = means[row, col]
+                std = stds[row, col]
+                if not np.isfinite(mean) :
+                    label = 'NA'
+                else :
+                    sd_label = f'{std:.2f}' if np.isfinite(std) else 'NA'
+                    label = f'{mean:.2f} ± {sd_label}'
+                color = 'black' if not np.isfinite(mean) or mean > vmax * 0.6 else 'white'
+                ax.text((bins[col] + bins[col + 1]) / 2, row, label,
+                        ha='center', va='center', fontsize=7, color=color)
+        return im
+
+    # One figure per ROI: conditions by time
+    width = max(12, (len(bins) - 1) * 0.9)
+    for ri, region in enumerate(regions) :
+        labels = [f'{condition} (n={n_subjects[ci, ri]})' for ci, condition in enumerate(conditions)]
+        fig, ax = plt.subplots(figsize=(width, max(4, len(conditions) * 0.6)))
+        im = plot_heatmap(ax, mean_count[:, ri], std_count[:, ri], labels,
+                          f'{region}: mean count ± between-subject SD ({bin_width:g} s bins)')
+        ax.set_ylabel('Condition')
+        fig.colorbar(im, ax=ax, label='Ripples per trial per electrode per bin')
+        fig.tight_layout()
+        fig.savefig(out_path + f'/group_{region}_time.png', dpi=300)
+        plt.close(fig)
+
+    # Group figure: regions by time, with one panel per condition
+    fig, axes = plt.subplots(len(conditions), 1, squeeze=False,
+                              figsize=(width, len(conditions) * max(3, len(regions) * 0.5)))
+    for ci, condition in enumerate(conditions) :
+        labels = [f'{region} (n={n_subjects[ci, ri]})' for ri, region in enumerate(regions)]
+        ax = axes[ci, 0]
+        im = plot_heatmap(ax, mean_count[ci], std_count[ci], labels,
+                          f'{condition}: mean count ± between-subject SD ({bin_width:g} s bins)')
+        ax.set_ylabel('Region')
+        fig.colorbar(im, ax=ax, label='Ripples per trial per electrode per bin')
+    fig.tight_layout()
+    fig.savefig(out_path + '/group_time.png', dpi=300)
+    plt.close(fig)
+    return mean_count, std_count, subject_counts, bins, conditions, regions
 
 
 if __name__ == "__main__":
