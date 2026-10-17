@@ -1,3 +1,7 @@
+'''
+submit_to_cluster -n 2 -q short.q "python -u LB11_ripples.py" --project MINDLAB2021_MEG-TempSeqAges
+'''
+
 import os
 import pickle
 import numpy as np
@@ -283,7 +287,7 @@ def group_ripples_in_time(subj_included):
 
 if __name__ == "__main__":
     subj_included = [file.replace('sub-', '') for file in os.listdir(PROJECT_PATH + '/data/BIDS') if file[:4] == 'sub-']
-    subj_included = ExcludSubj(subj_included=subj_included, data_path=OUT_PATH + '/Data_longWOBS')
+    #subj_included = ExcludSubj(subj_included=subj_included, data_path=OUT_PATH + '/Data_longWOBS')
 
     failled =['COG023', 'LL10', 'CP41', 'LL23', 'CP40', 'COG022', 'LL30', 'LL15']
 
@@ -291,7 +295,13 @@ if __name__ == "__main__":
         if s in subj_included :
             subj_included.remove(s)
 
-    for subj in subj_included[0]:
-        load_and_filter(subj)
-        identify_ripples(subj)
-        test_adjacent(subj)
+    print("Subject imcluded: ", len(subj_included))
+
+    for subj in subj_included[:1]:
+        print("Start processing:", subj)
+        load_and_filter(subj, save=True)
+        print("Ripples indentification")
+        identify_ripples(subj, save=True)
+        #test_adjacent(subj)
+        subj_ripples_trials(subj)
+        subj_ripples_in_time(subj)
