@@ -11,6 +11,11 @@ import pandas as pd
 from scipy.linalg import eigh
 
 MEG_KINDS = ('full_concatenated', 'full_average', 'coverage_average', 'paired_coverage')
+COMPARISONS = (
+    ('averaging', 'full_concatenated', 'full_average', 'Participant averaging'),
+    ('coverage', 'full_average', 'coverage_average', 'Coverage restriction in averaged data'),
+    ('paired_coverage', 'full_concatenated', 'paired_coverage', 'Coverage + participant contributions'),
+)
 
 
 def _dimensions(values):
@@ -59,10 +64,12 @@ def reference_fraction(reference, modified, k):
 
 
 def compare_meg_information(datasets, dimensions=(1, 2, 3, 5, 10), max_gram_gib=2.):
-    """Describe the four constructions against full-concatenated MEG.
+    """Compare constructions directly by manipulation; none is ground truth.
 
     Inputs must have identical time/condition rows. Unavailable k values are
-    recorded explicitly; no silent rank truncation. Full reference is in sample.
+    recorded explicitly; no silent rank truncation. All comparisons are in sample.
+    A_variance_captured_by_B targets the first k PCs of A using B as the basis;
+    the reverse direction targets B. Temporal overlap is symmetric.
     """
     dimensions = _dimensions(dimensions)
     selected = {name: datasets[name] for name in MEG_KINDS}
@@ -84,15 +91,19 @@ def compare_meg_information(datasets, dimensions=(1, 2, 3, 5, 10), max_gram_gib=
                             rank=fit['rank'], effective_dimensionality=fit['effective_dimensionality']))
         spectra.extend(dict(dataset=name, component=j+1, variance_ratio=float(v),
                             cumulative_variance=float(cumulative[j])) for j, v in enumerate(ratio))
+    for manipulation, a_name, b_name, title in COMPARISONS:
+        a, b = fits[a_name], fits[b_name]
         for k in dimensions:
-            captured = reference_fraction(fits['full_concatenated'], fit, k)
-            rows.append(dict(dataset=name, k=k, reference_variance_captured=captured,
-                             unrecovered_reference_variance=1-captured,
-                             cumulative_variance=float(cumulative[k-1]) if k <= fit['rank'] else np.nan,
-                             status='ok' if np.isfinite(captured) else 'insufficient_rank'))
+            valid = k <= min(a['rank'], b['rank'])
+            overlap = float(np.clip(np.sum((a['basis'][:, :k].T@b['basis'][:, :k])**2)/k, 0, 1)) if valid else np.nan
+            rows.append(dict(manipulation=manipulation, dataset_A=a_name, dataset_B=b_name,
+                             k=k, temporal_overlap=overlap,
+                             A_variance_captured_by_B=reference_fraction(a, b, k),
+                             B_variance_captured_by_A=reference_fraction(b, a, k),
+                             status='ok' if valid else 'insufficient_rank'))
     context = ref.source_data or {}
-    return dict(config=dict(dimensions=dimensions, reference='full_concatenated',
-                            condition_mode=ref.condition_mode, scope='in_sample',
+    return dict(config=dict(schema_version=2, dimensions=dimensions, comparisons=[list(c) for c in COMPARISONS],
+                            condition_mode=ref.condition_mode, scope='in_sample; no ground-truth construction',
                             preprocessing=context.get('load_config', {}),
                             meg_subjects=context.get('meg_subjects', []),
                             pairing=getattr(selected['paired_coverage'], 'pairing', None),
@@ -205,36 +216,46 @@ def load_information(output_dir):
 
 
 def plot_meg_information(result):
+    """One column per manipulation: geometry, normalized spectra, dimensionality."""
     import matplotlib.pyplot as plt
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4), layout='constrained')
-    for name in MEG_KINDS:
-        frame = result['metrics'].query('dataset == @name')
-        axes[0].plot(frame.k, frame.reference_variance_captured, 'o-', label=name)
-        spectrum = result['spectra'].query('dataset == @name')
-        spectrum = spectrum[spectrum.component <= max(result['config']['dimensions'])]
-        axes[1].plot(spectrum.component, spectrum.cumulative_variance, 'o-', label=name)
-    for ax, title in zip(axes[:2], ['Full-concatenated reference variance captured', 'Cumulative explained variance']):
-        ax.set(title=title, xlabel='Number of components', ylabel='Fraction', ylim=(0, 1.02))
-        ax.grid(alpha=.2)
-    summary = result['summary'].set_index('dataset').loc[list(MEG_KINDS)]
-    axes[2].bar(range(len(summary)), summary.effective_dimensionality)
-    axes[2].set(xticks=range(len(summary)), xticklabels=summary.index,
-                title='Effective dimensionality (full spectrum)', ylabel='Participation ratio')
-    axes[2].tick_params(axis='x', rotation=35)
-    axes[0].legend(fontsize=8)
-    fig.suptitle('MEG construction sensitivity · descriptive, in sample')
+    if result['config'].get('schema_version') != 2:
+        raise ValueError('Recompute direct manipulation comparisons into a new output folder.')
+    fig, axes = plt.subplots(3, 3, figsize=(17, 12), layout='constrained')
+    for col, (manipulation, a, b, title) in enumerate(COMPARISONS):
+        frame = result['metrics'].query('manipulation == @manipulation')
+        ax = axes[0, col]
+        for key, label, style in [('temporal_overlap', 'Symmetric temporal overlap', 'o-'),
+            ('A_variance_captured_by_B', 'A variance captured by B', 's--'),
+            ('B_variance_captured_by_A', 'B variance captured by A', '^:')]:
+            ax.plot(frame.k, frame[key], style, label=label)
+        ax.set(title=f'{title}\nA: {a}\nB: {b}', xlabel='Number of PCs (k)', ylabel='Fraction', ylim=(0, 1.02))
+        ax.legend(fontsize=8); ax.grid(alpha=.2)
+        for name, label in [(a, 'A'), (b, 'B')]:
+            spectrum = result['spectra'].query('dataset == @name')
+            spectrum = spectrum[spectrum.component <= max(result['config']['dimensions'])]
+            axes[1, col].plot(spectrum.component, spectrum.cumulative_variance, 'o-', label=f'{label}: {name}')
+        axes[1, col].set(xlabel='Number of PCs', ylabel='Cumulative explained variance', ylim=(0, 1.02))
+        axes[1, col].legend(fontsize=8); axes[1, col].grid(alpha=.2)
+        vals = result['summary'].set_index('dataset').loc[[a, b], 'effective_dimensionality']
+        axes[2, col].bar(['A', 'B'], vals, color=['tab:blue', 'tab:orange'])
+        axes[2, col].set(ylabel='Participation ratio', title='Effective dimensionality · full spectrum',
+                         ylim=(0, result['summary'].effective_dimensionality.max()*1.15))
+        for j, value in enumerate(vals):
+            axes[2, col].text(j, value, f'{value:.2f}', ha='center', va='bottom')
+    fig.suptitle('MEG construction comparisons · descriptive, in sample · no ground-truth construction')
     return fig
 
 
 def plot_split_half_reliability(result):
     import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(figsize=(9, 5), layout='constrained')
-    for name, frame in result['reliability'].groupby('dataset', sort=False):
-        stats = frame.groupby('k').overlap.agg(['median', 'min', 'max'])
-        ax.plot(stats.index, stats['median'], 'o-', label=name)
-        ax.fill_between(stats.index, stats['min'], stats['max'], alpha=.15)
-    ax.set(xlabel='Number of components', ylabel='Temporal subspace overlap', ylim=(0, 1.02),
-           title='Independent trial halves: median and range across repeated splits')
-    ax.legend(fontsize=8); ax.grid(alpha=.2)
-    fig.supxlabel('Ranges describe split sensitivity, not confidence intervals. No Spearman–Brown correction.', fontsize=9)
+    fig, axes = plt.subplots(1, 3, figsize=(17, 4), layout='constrained')
+    for ax, (_, a, b, title) in zip(axes, COMPARISONS):
+        for name in (a, b):
+            frame = result['reliability'].query('dataset == @name')
+            stats = frame.groupby('k').overlap.agg(['median', 'min', 'max'])
+            ax.plot(stats.index, stats['median'], 'o-', label=name)
+            ax.fill_between(stats.index, stats['min'], stats['max'], alpha=.15)
+        ax.set(title=title, xlabel='Number of PCs (k)', ylabel='Split-half temporal overlap', ylim=(0, 1.02))
+        ax.legend(fontsize=8); ax.grid(alpha=.2)
+    fig.suptitle('Trial split-half reliability · median and range, not confidence intervals')
     return fig

@@ -24,6 +24,18 @@ class MatrixDataset:
 
 
 class InformationTests(unittest.TestCase):
+    def test_manipulation_directions(self):
+        # One shared temporal axis carries 90% of A variance but 20% of B.
+        q, _ = np.linalg.qr(np.array([[1., 1, 1], [-1, 1, 1], [0, -2, 1], [0, 0, -3]]))
+        a = MatrixDataset(q[:, [0, 1]]*np.sqrt([9., 1.]))
+        b = MatrixDataset(q[:, [2, 0]]*np.sqrt([8., 2.]))
+        result = compare_meg_information(dict(zip(MEG_KINDS, [a, b, b, a])), dimensions=[1, 2, 3])
+        row = result['metrics'].query("manipulation == 'averaging' and k == 2").iloc[0]
+        self.assertAlmostEqual(row.temporal_overlap, .5)
+        self.assertAlmostEqual(row.A_variance_captured_by_B, .9)
+        self.assertAlmostEqual(row.B_variance_captured_by_A, .2)
+        self.assertTrue(result['metrics'].query('k == 3').temporal_overlap.isna().all())
+
     def test_spectrum_and_weighted_projection(self):
         rng = np.random.default_rng(4)
         x = rng.normal(size=(30, 8))
