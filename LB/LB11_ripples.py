@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import json 
 import mne
+import matplotlib.pyplot as plt
 from mne_bids import BIDSPath, read_raw_bids
 
 from src.setting import ExcludSubj, GetInfo
@@ -76,6 +77,14 @@ def load_and_filter(subj, out_path=OUT_PATH + '/ripples', save=False, freq_band=
 
         with open(out_path + f'/{subj}_env{str(freq_band[0])}_{str(freq_band[1])}.p', "wb") as f:
             pickle.dump(env, f)
+        info = {'chnames': epochs.ch_names, 'time_epoch': epochs.times.tolist(),
+                'n_trials': len(epochs), 'sfreq': float(epochs.info['sfreq'])}
+        with open(out_path + f'/{subj}_info.json', 'w') as f:
+            json.dump(info, f)
+        ch_coord_df = pd.DataFrame({ch['ch_name']: ch['loc'][:3] * 1000 for ch in epochs.info['chs']}).T
+        ch_coord_df.columns = ['x', 'y', 'z']
+        ch_coord_df['subj'] = subj
+        ch_coord_df.to_csv(out_path + f'/{subj}_coords.csv')
         del env
     else :    
         return env
@@ -179,23 +188,93 @@ def test_adjacent(subj, env_path=OUT_PATH + '/ripples', out_path=OUT_PATH + '/ri
         # Test of there are mutilpe electordes capturing the same within 20ms
         point20ms = fs*0.02 
         for tr in hpc_rip_bool.shape[1] :
+            pass
 
         # save as before 
                     
 
-def subj_ripples_trials(subj, ):
-    # OUTPUT a figure of a 2d histogram trial vs electrodes, of the ripples count over time for each trials and electrodes
-    # I want that in the annotation ylabel we see the area in which the electrodes is implented. 
-    # For each subject.
-    # save at the end in OUT_PATH + 'ripples/figures' and the name of the file should be subj + _trials
+def subj_ripples_trials(subj, env_path=OUT_PATH + '/ripples', out_path=OUT_PATH + '/ripples/figures', freq_band=FREQ_BAND):
+    # Load events and the channel order used for the envelopes
+    with open(env_path + f'/{subj}_env_rip{freq_band[0]}_{freq_band[1]}.json') as f:
+        meta_data = json.load(f)
+    with open(env_path + f'/{subj}_info.json') as f:
+        info = json.load(f)
+    _, _, elect_list, _, regions = GetInfo([subj], project_path=PROJECT_PATH, data_path=env_path, save=False)
+    region_by_ch = dict(zip(elect_list, regions))
+    labels = [ch + ' (' + region_by_ch[ch] + ')' for ch in info['chnames']]
 
-def subj_ripples_in_time(subj, ):
-    # OUTPUT a figure of a 2d histogram time vs electrodes, of the ripples count over trials I want that in the annotation ylabel 
-    # we see the area in which the electrodes is implented. For each subject. you should define time bins to count over the trials.
-    # save at the end in OUT_PATH + 'ripples/figures' and the name of the file should be subj + _time
+    # Count events over the full epoch for each electrode and trial
+    counts = np.zeros((len(labels), info['n_trials']), dtype=int)
+    for tr, ch in zip(meta_data['trial'], meta_data['channel']) :
+        counts[ch, tr] += 1
+
+    fig, ax = plt.subplots(figsize=(12, max(4, len(labels) * 0.25)))
+    im = ax.imshow(counts, aspect='auto', interpolation='nearest', cmap='viridis', vmin=0,
+                   extent=[0.5, info['n_trials'] + 0.5, len(labels) - 0.5, -0.5])
+    ax.set_yticks(np.arange(len(labels)))
+    ax.set_yticklabels(labels)
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    ax.set_xlabel('Trial')
+    ax.set_ylabel('Electrode (region)')
+    ax.set_title(f'{subj}: ripple counts per trial')
+    cbar = fig.colorbar(im, ax=ax, label='Ripple count')
+    cbar.locator = plt.MaxNLocator(integer=True)
+    cbar.update_ticks()
+    fig.tight_layout()
+
+    if not os.path.exists(out_path) :
+        os.makedirs(out_path)
+    fig.savefig(out_path + f'/{subj}_trials.png', dpi=300)
+    plt.close(fig)
+    return counts
+
+
+def subj_ripples_in_time(subj, env_path=OUT_PATH + '/ripples', out_path=OUT_PATH + '/ripples/figures', freq_band=FREQ_BAND, bin_width=0.25):
+    # Load events and electrode regions
+    with open(env_path + f'/{subj}_env_rip{freq_band[0]}_{freq_band[1]}.json') as f:
+        meta_data = json.load(f)
+    with open(env_path + f'/{subj}_info.json') as f:
+        info = json.load(f)
+    _, _, elect_list, _, regions = GetInfo([subj], project_path=PROJECT_PATH, data_path=env_path, save=False)
+    region_by_ch = dict(zip(elect_list, regions))
+    labels = [ch + ' (' + region_by_ch[ch] + ')' for ch in info['chnames']]
+
+    # Count each event once, using its onset relative to stimulus onset
+    if not np.isfinite(bin_width) or bin_width <= 0 :
+        raise ValueError('bin_width must be positive and expressed in seconds')
+    times = np.array(info['time_epoch'])
+    bins = np.arange(times[0], times[-1], bin_width)
+    bins = np.append(bins, times[-1])
+    onsets = times[0] + np.array(meta_data['onset']) / meta_data['sfreq']
+    channels = np.array(meta_data['channel'])
+    counts = np.zeros((len(labels), len(bins) - 1), dtype=int)
+    for ch in range(len(labels)) :
+        counts[ch], _ = np.histogram(onsets[channels == ch], bins=bins)
+
+    fig, ax = plt.subplots(figsize=(12, max(4, len(labels) * 0.25)))
+    im = ax.pcolormesh(bins, np.arange(len(labels) + 1) - 0.5, counts,
+                       cmap='viridis', vmin=0, shading='flat')
+    ax.set_ylim(len(labels) - 0.5, -0.5)
+    ax.set_yticks(np.arange(len(labels)))
+    ax.set_yticklabels(labels)
+    ax.axvline(0, color='white', linestyle='--', linewidth=1)
+    ax.set_xlabel('Time from stimulus onset (s)')
+    ax.set_ylabel('Electrode (region)')
+    ax.set_title(f'{subj}: ripple counts across trials ({bin_width:g} s bins)')
+    cbar = fig.colorbar(im, ax=ax, label='Ripple count across trials')
+    cbar.locator = plt.MaxNLocator(integer=True)
+    cbar.update_ticks()
+    fig.tight_layout()
+
+    if not os.path.exists(out_path) :
+        os.makedirs(out_path)
+    fig.savefig(out_path + f'/{subj}_time.png', dpi=300)
+    plt.close(fig)
+    return counts, bins
 
 
 def group_ripples_in_time(subj_included):
+    pass
     # Same than above but group all participant, you should have for each subject the average count over trials:
     # (condition, electrodes, time_bins ). you should group the participant and divid by regions of interest. I want one plot for each RIOs
     # then an figure for the average taking the average count per region of interest so a 2d plot of ROIs x time at group level. 
