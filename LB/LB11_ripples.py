@@ -279,12 +279,6 @@ def subj_ripples_in_time(subj, env_path=OUT_PATH + '/ripples', out_path=OUT_PATH
 
 
 def group_ripples_in_time(subj_included, env_path=OUT_PATH + '/ripples', out_path=OUT_PATH + '/ripples/figures', freq_band=FREQ_BAND, bin_width=0.25):
-    if len(subj_included) == 0 or len(set(subj_included)) != len(subj_included) :
-        raise ValueError('Provide a nonempty list of unique subjects')
-    if not np.isfinite(bin_width) or bin_width <= 0 :
-        raise ValueError('bin_width must be positive and expressed in seconds')
-
-    # Load trial conditions and match regions to the envelope channel order
     subjects = []
     regions = []
     conditions = []
@@ -314,9 +308,6 @@ def group_ripples_in_time(subj_included, env_path=OUT_PATH + '/ripples', out_pat
             if int(code) in trial_codes and condition not in conditions :
                 conditions.append(condition)
         subjects.append((info, meta_data, ch_regions, trial_codes))
-
-    if len(conditions) == 0 or len(regions) == 0 :
-        raise ValueError('No trial conditions or electrode regions available')
 
     # Each subject contributes one mean per condition, region and time bin
     subject_counts = np.full((len(subjects), len(conditions), len(regions), len(bins) - 1), np.nan)
@@ -407,13 +398,11 @@ def group_ripples_in_time(subj_included, env_path=OUT_PATH + '/ripples', out_pat
     fig.tight_layout()
     fig.savefig(out_path + '/group_time.png', dpi=300)
     plt.close(fig)
-    return mean_count, std_count, subject_counts, bins, conditions, regions
+    #return mean_count, std_count, subject_counts, bins, conditions, regions
 
 
 if __name__ == "__main__":
     subj_included = [file.replace('sub-', '') for file in os.listdir(PROJECT_PATH + '/data/BIDS') if file[:4] == 'sub-']
-    #subj_included = ExcludSubj(subj_included=subj_included, data_path=OUT_PATH + '/Data_longWOBS')
-
     failled =['COG023', 'LL10', 'CP41', 'LL23', 'CP40', 'COG022', 'LL30', 'LL15']
 
     for s in failled : 
@@ -422,7 +411,7 @@ if __name__ == "__main__":
 
     print("Subject imcluded: ", len(subj_included))
 
-    for subj in subj_included[:1]:
+    for subj in subj_included:
         print("Start processing:", subj)
         load_and_filter(subj, save=True)
         print("Ripples indentification")
@@ -430,3 +419,4 @@ if __name__ == "__main__":
         #test_adjacent(subj)
         subj_ripples_trials(subj)
         subj_ripples_in_time(subj)
+    group_ripples_in_time(subj_included=subj_included)
