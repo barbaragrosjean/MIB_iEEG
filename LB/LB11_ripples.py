@@ -10,15 +10,6 @@ from src.setting import ExcludSubj, GetInfo
 from src.config import OUT_PATH, PROJECT_PATH, TASK
 from src.preproc import get_bads, set_reference, LB_event_fun
 
-subj_included = [file.replace('sub-', '') for file in os.listdir(PROJECT_PATH + '/data/BIDS') if file[:4] == 'sub-']
-subj_included = ExcludSubj(subj_included=subj_included, data_path=OUT_PATH + '/Data_longWOBS')
-
-failled =['COG023', 'LL10', 'CP41', 'LL23', 'CP40', 'COG022', 'LL30', 'LL15']
-
-for s in failled : 
-    if s in subj_included :
-        subj_included.remove(s)
-
 FREQ_BAND = [80, 120]
 FS=600
 
@@ -98,13 +89,7 @@ def identify_ripples(subj,env=None, env_path=OUT_PATH + '/ripples', out_path=OUT
             env = pickle.load(f)
 
     env = np.asarray(env, dtype=float)
-    if env.ndim != 3 or 0 in env.shape :
-        raise ValueError('env must have shape (trials, channels, time) with nonempty dimensions')
-    if not np.all(np.isfinite(env)) or np.any(env < 0) :
-        raise ValueError('env must contain finite, nonnegative amplitudes')
-    if not np.isfinite(fs) or fs <= 0 :
-        raise ValueError('fs must be a positive sampling frequency')
-
+    
     # One threshold per channel, estimated across all supplied trials and times
     threshold = np.mean(env, axis=(0, 2)) + 3 * np.std(env, axis=(0, 2))
     candidates = env > threshold[None, :, None]
@@ -217,8 +202,17 @@ def group_ripples_in_time(subj_included):
     # save at the end in OUT_PATH + 'ripples/figures' and the name of the file should be group 
 
 
-def ripples_pipline(subject_included) :
-    for subj in subject_included:
+if __name__ == "__main__":
+    subj_included = [file.replace('sub-', '') for file in os.listdir(PROJECT_PATH + '/data/BIDS') if file[:4] == 'sub-']
+    subj_included = ExcludSubj(subj_included=subj_included, data_path=OUT_PATH + '/Data_longWOBS')
+
+    failled =['COG023', 'LL10', 'CP41', 'LL23', 'CP40', 'COG022', 'LL30', 'LL15']
+
+    for s in failled : 
+        if s in subj_included :
+            subj_included.remove(s)
+
+    for subj in subj_included[0]:
         load_and_filter(subj)
         identify_ripples(subj)
         test_adjacent(subj)
