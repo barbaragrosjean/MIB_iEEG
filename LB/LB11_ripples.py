@@ -26,7 +26,6 @@ def load_and_filter(subj, out_path=OUT_PATH + '/ripples', save=False, freq_band=
 
     from scipy.signal import butter, sosfiltfilt, hilbert
 
-    info = {}
     if not os.path.exists(out_path) :
         os.makedirs(out_path)
 
@@ -56,12 +55,6 @@ def load_and_filter(subj, out_path=OUT_PATH + '/ripples', save=False, freq_band=
     raw = set_reference(raw, bads=bad_channels, white=white_channels)
     raw = raw.drop_channels(raw.info['bads'], on_missing='warn')
 
-    ch_coord_df = pd.DataFrame({ch['ch_name']: ch['loc'][:3] for ch in raw.info['chs']}).T
-    ch_coord_df = ch_coord_df.rename(columns={0: 'x', 1: 'y', 2: 'z'})
-    for c in ['x', 'y', 'z'] :
-        ch_coord_df[c] = ch_coord_df[c].apply(lambda x : x * 1000)
-    ch_coord_df['subj'] = subj
-
     # Resample and remove slow drift and line-frequency harmonics before epoching
     raw.resample(sfreq=fs)
     raw.filter(l_freq=0.1, h_freq=None)
@@ -84,15 +77,6 @@ def load_and_filter(subj, out_path=OUT_PATH + '/ripples', save=False, freq_band=
                        preload=True, baseline=None, on_missing='warn', reject=None)
     env = epochs.get_data()
     del raw
-
-    # Save channel coordinates and trial information as in preproc
-    info['chnames'] = epochs.info['ch_names']
-    info['time_epoch'] = list(epochs.times)
-    info['event_count'] = [[list(event_id.keys())[list(event_id.values()).index(event)], str(count)] for event, count in zip(np.unique(epochs.events[:, 2], return_counts=True)[0], np.unique(epochs.events[:, 2], return_counts=True)[1])]
-    info['event_id'] = [str(e) for e in epochs.events[:, 2]]
-    with open(out_path + f'/{subj}_info.json', 'w') as f:
-        json.dump(info, f)
-    ch_coord_df.to_csv(out_path + f'/{subj}_coords.csv')
 
     # SAVE OUTPUT: matrix (trials, channels, time)
     if save:
