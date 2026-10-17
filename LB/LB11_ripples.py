@@ -3,10 +3,12 @@ import pickle
 import numpy as np
 import pandas as pd
 import json 
+import mne
+from mne_bids import BIDSPath, read_raw_bids
 
 from src.setting import ExcludSubj, GetInfo
-from src.config import OUT_PATH, PROJECT_PATH, FREQS, BWIDTH, EVENT_ID
-from src.preproc import preproc
+from src.config import OUT_PATH, PROJECT_PATH, TASK
+from src.preproc import get_bads, set_reference, LB_event_fun
 
 subj_included = [file.replace('sub-', '') for file in os.listdir(PROJECT_PATH + '/data/BIDS') if file[:4] == 'sub-']
 subj_included = ExcludSubj(subj_included=subj_included, data_path=OUT_PATH + '/Data_longWOBS')
@@ -22,22 +24,77 @@ FS=600
 
 def load_and_filter(subj, out_path=OUT_PATH + '/ripples', save=False, freq_band=FREQ_BAND, fs=FS):
 
-    # Get raw iEEG data and preproc without downsampling shape (trials, ch, time)
-    epoch = preproc(subj, sfreq = fs,new_sfreq = 'none', freqs = FREQS, 
-            bwidth = BWIDTH, event_id = EVENT_ID, project_path = PROJECT_PATH, 
-            out_path = out_path, trials = True, save_epoch=False, compute_TFR=False, 
-            crp_argument=False) 
+    from scipy.signal import butter, sosfiltfilt, hilbert
 
-    # filtered between 80 and 120 Hz using a second-order Butterworth filter.
-    from scipy.signal import butter, sosfilt, hilbert
-    sos = butter(2, freq_band, btype='bandpass', output='sos', fs=FS)
-    filtered = sosfilt(sos, epoch, axis=-1)
+    info = {}
+    if not os.path.exists(out_path) :
+        os.makedirs(out_path)
 
-    # A Hilbert transform was then applied to the filtered signal to extract its instantaneous amplitude. 
-    analytic_signal  = hilbert(filtered, axis=-1)
-    env = np.abs(analytic_signal)
+    # Load raw iEEG data and bad channels
+    bids_root = os.path.join(PROJECT_PATH, 'data/BIDS/')
+    bids_path = BIDSPath(subject=subj, task=TASK, root=bids_root)
+    elec_path = os.path.join(PROJECT_PATH, 'misc/electrodes/', subj + '_electrodes.csv')
+    bads_path = os.path.join(PROJECT_PATH, 'misc/bad_channels/', subj + '_bad_channels.csv')
+    bad_channels, white_channels, _ = get_bads(subj, bads_path, elec_path)
 
-    # SAVE OUTPUT: matrix (condition, trials, time) 
+    raw = read_raw_bids(bids_path)
+    raw.pick_types(seeg=True, ecog=True)
+
+    # Keep the continuous task recording with margins around the events
+    onsets = []
+    for ano in raw.annotations :
+        if 'bach' in ano['description'] :
+            onsets.append(ano['onset'] - raw.first_time)
+    if len(onsets) == 0 :
+        raise ValueError(f'No bach events found for {subj}')
+    tmin_ = max(0, min(onsets) - 2)
+    tmax_ = min(raw.times[-1], max(onsets) + 50)
+    raw.crop(tmin=tmin_, tmax=tmax_)
+    raw.load_data()
+
+    # Bipolar reference and remove bad channels
+    raw = set_reference(raw, bads=bad_channels, white=white_channels)
+    raw = raw.drop_channels(raw.info['bads'], on_missing='warn')
+
+    ch_coord_df = pd.DataFrame({ch['ch_name']: ch['loc'][:3] for ch in raw.info['chs']}).T
+    ch_coord_df = ch_coord_df.rename(columns={0: 'x', 1: 'y', 2: 'z'})
+    for c in ['x', 'y', 'z'] :
+        ch_coord_df[c] = ch_coord_df[c].apply(lambda x : x * 1000)
+    ch_coord_df['subj'] = subj
+
+    # Resample and remove slow drift and line-frequency harmonics before epoching
+    raw.resample(sfreq=fs)
+    raw.filter(l_freq=0.1, h_freq=None)
+    nfreqs = np.arange(1, np.ceil(raw.info['lowpass']/raw.info['line_freq'])) * raw.info['line_freq']
+    if nfreqs.size > 0 :
+        raw.notch_filter(freqs=nfreqs)
+
+    events, event_id = mne.events_from_annotations(raw)
+    events, event_id = LB_event_fun(events, event_id, sfreq=raw.info['sfreq'])
+
+    # Filter the continuous signal (order 2 prototype, order 4 bandpass, forward-backward)
+    sos = butter(2, freq_band, btype='bandpass', output='sos', fs=raw.info['sfreq'])
+    raw.apply_function(lambda x : sosfiltfilt(sos, x), picks='all')
+
+    # Extract the continuous amplitude envelope, keeping voltage units
+    raw.apply_function(lambda x : np.abs(hilbert(x)), picks='all')
+
+    # Epoch the envelope only after filtering and the Hilbert transform
+    epochs = mne.Epochs(raw, events, event_id=event_id, tmin=-1.5, tmax=5,
+                       preload=True, baseline=None, on_missing='warn', reject=None)
+    env = epochs.get_data()
+    del raw
+
+    # Save channel coordinates and trial information as in preproc
+    info['chnames'] = epochs.info['ch_names']
+    info['time_epoch'] = list(epochs.times)
+    info['event_count'] = [[list(event_id.keys())[list(event_id.values()).index(event)], str(count)] for event, count in zip(np.unique(epochs.events[:, 2], return_counts=True)[0], np.unique(epochs.events[:, 2], return_counts=True)[1])]
+    info['event_id'] = [str(e) for e in epochs.events[:, 2]]
+    with open(out_path + f'/{subj}_info.json', 'w') as f:
+        json.dump(info, f)
+    ch_coord_df.to_csv(out_path + f'/{subj}_coords.csv')
+
+    # SAVE OUTPUT: matrix (trials, channels, time)
     if save:
         if not os.path.exists(out_path) : 
             os.makedirs(out_path)
