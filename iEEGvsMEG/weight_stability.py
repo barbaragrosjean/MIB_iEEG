@@ -44,6 +44,57 @@ def half_trial_indices(trials, seed, split_unit):
     return result
 
 
+def bilateral_label(value):
+    """Remove explicit terminal/prefix hemisphere tokens, preserving internal ROI names."""
+    import re
+    if pd.isna(value): return value
+    value = re.sub(r'^(?:left|right|lh|rh|L|R)[_ .-]+', '', str(value), flags=re.I)
+    return re.sub(r'[_ .-]+(?:left|right|lh|rh|L|R)$', '', value, flags=re.I)
+
+
+def roi_pair_correlations(ieeg, meg, metadata, level='region', block_size=256):
+    """Signed Pearson across iterations, then arithmetic mean/sample SD across ROI pairs.
+
+    Arrays: iteration x fixed coverage location x aligned component.
+    Each valid channel pair has equal weight. Constant trajectories are excluded.
+    No dense all-channel correlation matrix is retained.
+    """
+    x, y = np.asarray(ieeg,float), np.asarray(meg,float)
+    if x.shape != y.shape or x.ndim != 3 or x.shape[1] != len(metadata) or len(x)<2:
+        raise ValueError('Need aligned iteration x coverage x component arrays.')
+    if not np.isfinite(x).all() or not np.isfinite(y).all():
+        raise ValueError('Weight trajectories must be finite.')
+    labels = metadata[level].map(bilateral_label).reset_index(drop=True)
+    groups = {r: np.flatnonzero(labels.eq(r)) for r in sorted(labels.dropna().unique())}
+    rows=[]
+    for c in range(x.shape[2]):
+        standardized=[]
+        for values in (x[:,:,c], y[:,:,c]):
+            centered=values-values.mean(0)
+            norm=np.linalg.norm(centered,axis=0)
+            tolerance=32*np.finfo(float).eps*np.maximum(np.linalg.norm(values,axis=0),np.finfo(float).tiny)
+            valid=norm>tolerance
+            z=np.divide(centered,norm,out=np.zeros_like(centered),where=valid)
+            standardized.append((z,valid))
+        (a,va),(b,vb)=standardized
+        for ra,ia in groups.items():
+            for rb,ib in groups.items():
+                aa=ia[va[ia]];bb=ib[vb[ib]]
+                count=0;mean=0.;m2=0.
+                for start in range(0,len(aa),block_size):
+                    for stop in range(0,len(bb),block_size):
+                        r=(a[:,aa[start:start+block_size]].T@b[:,bb[stop:stop+block_size]]).clip(-1,1).ravel()
+                        n=len(r)
+                        if not n:continue
+                        delta=r.mean()-mean;total=count+n
+                        m2+=np.sum((r-r.mean())**2)+delta**2*count*n/total
+                        mean+=delta*n/total;count=total
+                rows.append(dict(component=c+1,ieeg_roi=ra,meg_roi=rb,
+                    mean_r=mean if count else np.nan,sd_r=np.sqrt(max(0.,m2)/(count-1)) if count>1 else np.nan,
+                    n_pairs=count,n_possible_pairs=len(ia)*len(ib),n_iterations=len(x)))
+    return rows
+
+
 def roi_statistics(values, metadata, level='region'):
     """ROI means per iteration, then mean/SD across iterations (ddof=1).
 
@@ -54,6 +105,8 @@ def roi_statistics(values, metadata, level='region'):
     values = np.abs(np.asarray(values, float))
     if values.ndim != 3 or values.shape[1] != len(metadata) or values.shape[0] < 2:
         raise ValueError('Need >=2 iterations and aligned fixed feature metadata.')
+    metadata = metadata.reset_index(drop=True).copy()
+    metadata[level] = metadata[level].map(bilateral_label)
     trajectories, summary = [], []
     for roi, rows in metadata.dropna(subset=[level]).groupby(level, sort=True):
         participant_means = [values[:, group.index.to_numpy(), :].mean(axis=1)
@@ -86,6 +139,7 @@ def summarize_weights(root, roi_level='region'):
     if marker.exists(): marker.unlink()
     anchor = pd.read_csv(root/'iteration_000/ieeg_features.csv', dtype={'subject': str}).reset_index(drop=True)
     matrices, roi_rows, trajectories, feature_rows, matches = [], [], [], [], []
+    cross_rows = []
     for model in cfg['models']:
         ref = _load_bundle(root/'iteration_000'/f'{model}_A.npz')
         values = {m: [] for m in MODALITIES}
@@ -100,6 +154,8 @@ def summarize_weights(root, roi_level='region'):
                 cols, signs = transforms[m]
                 matches.extend(dict(model=model, modality=m, iteration=i, component=c+1,
                     original_component=int(col+1), sign=float(sign)) for c, (col, sign) in enumerate(zip(cols, signs)))
+        cross_rows.extend(dict(model=model, **row) for row in roi_pair_correlations(
+            np.stack(values['ieeg']), np.stack(values['meg']), anchor, roi_level))
         for m in MODALITIES:
             matrices.extend(across_iteration_correlations(values[m], model=model, modality=m))
             stack = np.stack(values[m])
@@ -112,13 +168,15 @@ def summarize_weights(root, roi_level='region'):
                     feature_rows.append(dict(model=model, modality=m, coverage_row=j,
                         subject=anchor.subject.iloc[j], roi=anchor[roi_level].iloc[j], component=c+1,
                         mean_magnitude=means[j, c], sd_across_iterations=sds[j, c]))
-    frames = dict(iteration_correlations=pd.DataFrame(matrices),
+    frames = dict(roi_cross_correlations=pd.DataFrame(cross_rows), iteration_correlations=pd.DataFrame(matrices),
         roi_stability=pd.DataFrame(roi_rows, columns=['model', 'modality', 'roi', 'component',
             'mean_magnitude', 'sd_across_iterations', 'mean_channel_sd', 'n_channels', 'n_subjects', 'n_iterations']),
         roi_trajectories=pd.DataFrame(trajectories, columns=['model','modality','roi','component','iteration','magnitude']),
         feature_stability=pd.DataFrame(feature_rows), component_matching=pd.DataFrame(matches))
     for name, frame in frames.items(): frame.to_csv(root/f'{name}.csv', index=False)
-    marker.write_text(json.dumps(dict(roi_level=roi_level,
+    marker.write_text(json.dumps(dict(roi_level=roi_level, summary_version=3,
+        hemispheres='pooled before aggregation',
+        cross_roi='Signed-weight Pearson across iterations; mean and sample SD across valid channel pairs; equal pair weighting.',
         error_bars='Sample SD across iterations of participant-balanced ROI mean magnitudes; not a CI.',
         roi_definition='Fixed iEEG coverage-location labels for BOTH modalities; MEG native source/owner may change.',
         duplicate_policy='Each coverage slot has equal mass within its coverage participant/ROI; repeated native MEG sources remain slots.')))
@@ -126,12 +184,15 @@ def summarize_weights(root, roi_level='region'):
 
 
 def plot_weight_stability(root, component=1, roi_error='sd_across_iterations'):
-    """Exactly two figures: iteration heatmaps and ROI mean ± variability."""
+    """Iteration heatmaps, bilateral ROI means, and cross-modal ROI correlation mean/SD."""
     import matplotlib.pyplot as plt
     root = Path(root)
     cfg = json.loads((root/'config.json').read_text())
     if not (root/'WEIGHT_SUMMARY_COMPLETE.json').exists():
         raise ValueError('Run weight_stability.py --summarize-only first')
+    marker = json.loads((root/'WEIGHT_SUMMARY_COMPLETE.json').read_text())
+    if marker.get('summary_version', 0) < 3:
+        summarize_weights(root, marker.get('roi_level', 'region'))
     if component not in range(1, cfg['components']+1): raise ValueError('Choose a saved component')
     if roi_error not in ('sd_across_iterations', 'mean_channel_sd'): raise ValueError('Unknown ROI variability measure')
     data = pd.read_csv(root/'iteration_correlations.csv')
@@ -163,7 +224,27 @@ def plot_weight_stability(root, component=1, roi_error='sd_across_iterations'):
     error_label = ('SD across iterations of ROI means' if roi_error == 'sd_across_iterations'
                    else 'mean of individual-channel SDs across iterations')
     dots.suptitle(title+'\nParticipant-balanced ROI mean magnitude ± '+error_label+' (not confidence intervals)')
-    return fig, dots
+    cross = pd.read_csv(root/'roi_cross_correlations.csv')
+    cross_fig, axes = plt.subplots(len(cfg['models']), 2,
+        figsize=(max(14,len(rois)*.65),max(6,len(cfg['models'])*5)), squeeze=False, layout='constrained')
+    for row, model in enumerate(cfg['models']):
+        selected = cross.query('model == @model and component == @component')
+        for col, (metric,label) in enumerate([('mean_r','Mean Pearson r'),('sd_r','SD across channel-pair r')]):
+            ax=axes[row,col]
+            matrix=selected.pivot(index='ieeg_roi',columns='meg_roi',values=metric).reindex(index=rois,columns=rois)
+            if not rois:
+                ax.text(.5,.5,'No labelled coverage locations',ha='center');continue
+            cmap=__import__('matplotlib').colormaps['RdBu_r' if col==0 else 'viridis'].copy()
+            cmap.set_bad('lightgrey')
+            im=ax.imshow(np.ma.masked_invalid(matrix.to_numpy()),cmap=cmap,
+                         vmin=-1 if col==0 else 0,vmax=1 if col==0 else np.sqrt(2))
+            ax.set(title=f'{model}: {label}',xlabel='MEG ROI',ylabel='iEEG ROI',
+                xticks=np.arange(len(rois)),yticks=np.arange(len(rois)),xticklabels=rois,yticklabels=rois)
+            ax.tick_params(axis='x',labelrotation=90)
+            cross_fig.colorbar(im,ax=ax)
+    cross_fig.suptitle(title+'\nSigned weights correlated across iterations, then grouped by bilateral ROI pairs\n'
+                      'Fixed coverage locations; grey = undefined; SD is pair heterogeneity, not a confidence interval')
+    return fig, dots, cross_fig
 
 
 def main():
@@ -194,7 +275,7 @@ def main():
         run.output_dir = args.output_dir/condition
         if not args.summarize_only: fit_iterations(run)
         summarize_weights(run.output_dir, args.roi_level)
-        for name, figure in zip(('iteration_heatmaps','roi_weight_stability'), plot_weight_stability(run.output_dir)):
+        for name, figure in zip(('iteration_heatmaps','roi_weight_stability','roi_cross_correlations'), plot_weight_stability(run.output_dir)):
             figure.savefig(run.output_dir/f'{name}.png', dpi=180, bbox_inches='tight')
             plt.close(figure)
         print(f'Completed {condition}: {run.output_dir}', flush=True)
