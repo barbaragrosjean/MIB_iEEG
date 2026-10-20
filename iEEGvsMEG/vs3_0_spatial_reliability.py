@@ -2,10 +2,9 @@
 """Changing-pairing spatial reliability and participant-balanced regional comparisons.
 
 python -u spatial_reliability.py --iterations 100 --components 3
-python -u spatial_reliability.py --summarize-only
 
 Uses the completed out/trial_cache. Fits PCA, PLSSVD and joint PCA on paired_coverage.
-Iterations are repeated random splits, NOT 100 disjoint cross-validation folds.
+
 """
 from pathlib import Path
 import argparse

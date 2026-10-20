@@ -2,8 +2,9 @@
 """Controlled weight stability: trials only, pairing only, or both.
 
 python -u weight_stability.py --iterations 100 --components 3
-Repeat with --summarize-only to reuse fitted weights. No held-out-half or
-multiscale bootstrap analyses are performed by this workflow.
+
+TODO : merge with reliability
+
 """
 from pathlib import Path
 from copy import copy
