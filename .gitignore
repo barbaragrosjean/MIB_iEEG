@@ -16,3 +16,5 @@ py-wrapper_*
 .DS_Store
 
 ._*
+
+template/
