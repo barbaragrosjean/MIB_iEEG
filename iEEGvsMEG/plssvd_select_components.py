@@ -160,7 +160,7 @@ def plot_selection(result):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--runs-dir',type=Path,default=Path(__file__).resolve().parent/'out/plssvd_eval/full_concatenated')
+    parser.add_argument('--runs-dir',type=Path,default=Path(__file__).resolve().parent/f'out/plssvd_eval_equal_var/paired_coverage')
     parser.add_argument('--perm', choices=['ieeg','meg','both'], default='both')
     parser.add_argument('--perm-type', choices=[*NULL_TYPES, 'time_circular_shift'], default='phase')
     parser.add_argument('--components',type=int,default=10)
