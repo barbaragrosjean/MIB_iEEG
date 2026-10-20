@@ -92,7 +92,7 @@ def main():
     import numpy as np
     import pandas as pd
     from src.setting import GetInfo, PROJECT_PATH
-    from plssvd_eval_utils import ValidationOptions, prepare_trial_cache, fit_plssvd, validation_run_name, _checked_options
+    from vs2_1_plssvd_eval_utils import ValidationOptions, prepare_trial_cache, fit_plssvd, validation_run_name, _checked_options
 
     meg_dir = args.meg_dir or root / 'MEG' / 'dataMEG'
     ieeg_dir = args.ieeg_dir or root / 'ieeg_shortWOBS_fs250'
@@ -115,7 +115,7 @@ def main():
     coord, _, electrodes, subjects, regions = GetInfo(
         ieeg_subjects, data_path=str(ieeg_dir), project_path=str(args.project_path if args.project_path is not None else PROJECT_PATH))
     # Preserve the notebook coordinate conversion; exporter receives metres.
-    from coverage_matching_utils import ieeg_getinfo_coordinates_m
+    from vs1_coverage_matching_utils import ieeg_getinfo_coordinates_m
     coord = ieeg_getinfo_coordinates_m(coord)
     metadata = pd.DataFrame(coord, columns=['x', 'y', 'z'])
     metadata['subject'] = subjects

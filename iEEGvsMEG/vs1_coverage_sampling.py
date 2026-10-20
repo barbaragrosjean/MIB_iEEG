@@ -11,7 +11,7 @@ import json
 import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
-from coverage_matching_utils import (Dataset, SETUP_NAMES, construct_five_datasets,
+from vs1_coverage_matching_utils import (Dataset, SETUP_NAMES, construct_five_datasets,
                                      fit_block_pca, compare_pca_to_ieeg)
 
 

@@ -10,7 +10,7 @@ def collect_statistics(fold, scores, model):
     X is centered by the TRAIN feature mean. Crosscovariance denominators use
     partition centering, matching the original evaluation definition.
     """
-    from cov_models_utils import _gram
+    from vs2_0_cov_models_utils import _gram
     parts = ('train', 'test')
     output = {f'{p}_{m}': scores[p][m] for p in parts for m in ('ieeg', 'meg')}
     k = model['k_max']
@@ -46,14 +46,14 @@ def collect_statistics(fold, scores, model):
         output[part+'_total_crosscov_energy'] = np.sum(gx*gy)/(n-1)**2
         for modality, gram in [('ieeg',gx),('meg',gy)]:
             if part == 'train':
-                from plssvd_pca import independent_pca_scores
+                from vs2_1_plssvd_pca import independent_pca_scores
                 pca = independent_pca_scores(fold['train'][modality],fold['test'][modality],k,
                                              model[modality+'_scale'],train_gram=gram)
                 output[f'train_{modality}_pca'] = pca['train']
                 output[f'test_{modality}_pca'] = pca['test']
                 output[f'{part}_{modality}_temporal_singular_values'] = pca['singular_values']
             else:
-                from plssvd_pca import temporal_singular_values
+                from vs2_1_plssvd_pca import temporal_singular_values
                 output[f'{part}_{modality}_temporal_singular_values'] = temporal_singular_values(
                     gram,fold[part][modality].n_features)
     return output
@@ -68,7 +68,7 @@ def selected_count(requested, maximum):
 
 def evaluate_statistics(saved, k, ridge):
     """Exact selected-k metrics; ridge penalty also changes with selected k."""
-    from plssvd_eval_utils import _r
+    from vs2_1_plssvd_eval_utils import _r
     scores = {p: {m: saved[f'{p}_{m}'][:,:k] for m in ('ieeg','meg')} for p in ('train','test')}
     evaluations, covariances = {}, {}
     for part in ('train','test'):
@@ -104,7 +104,7 @@ def evaluate_statistics(saved, k, ridge):
 
 def evaluate_iteration(root, options, n_components=None):
     """Evaluate completed compact fit artifacts; large weights stay on disk."""
-    from plssvd_eval_utils import _r, _across_split_stability
+    from vs2_1_plssvd_eval_utils import _r, _across_split_stability
     k = selected_count(n_components, options['n_components'])
     metrics, summaries, components, all_scores = [], [], [], []
     for fold in range(options['repeats']):

@@ -602,7 +602,7 @@ def shared_coordinate_regions(datasets, *, labeler=None):
     native MNI mm, converted to metres for the legacy MEG get_region_label API.
     """
     if labeler is None:
-        from region_labels import get_region_label
+        from vs0_region_labels import get_region_label
         labeler = get_region_label
     names = list(datasets)
     frames = [datasets[name].metadata.copy().reset_index(drop=True) for name in names]
@@ -691,7 +691,7 @@ def plot_modality_glasser(datasets, values, *, ieeg_radius_mm=0., sigma=4., view
     vmin/vmax are shared across all modality/component panels when provided;
     None retains automatic per-panel limits. They do not threshold the data.
     """
-    from coverage_matching_utils import plot_glasser_weights
+    from vs1_coverage_matching_utils import plot_glasser_weights
     figures = []
     for modality,dataset in datasets.items():
         xyz = dataset.metadata[['x','y','z']].to_numpy(float)

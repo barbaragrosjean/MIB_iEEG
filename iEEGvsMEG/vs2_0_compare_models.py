@@ -106,7 +106,7 @@ def compare_fitted_models(fold, fitted, dimensions, repeat=0):
     fitted with more components). Spatial patterns are evaluated one model pair
     and partition at a time, avoiding retention of all large full-source maps.
     """
-    from plssvd_eval_utils import _project, _patterns
+    from vs2_1_plssvd_eval_utils import _project, _patterns
     dimensions = _dimensions(dimensions)
     if len(fitted) < 2:
         raise ValueError('Within-modality comparison requires at least two models.')
@@ -137,7 +137,7 @@ def compare_fitted_models(fold, fitted, dimensions, repeat=0):
 
 def compare_cov_models_within(models, ieeg, meg, dimensions=(1, 2, 3, 5, 10)):
     """Descriptive in-sample counterpart for cov_models.ipynb (no holdout claim)."""
-    from plssvd_eval_utils import _patterns
+    from vs2_1_plssvd_eval_utils import _patterns
     dimensions = _dimensions(dimensions)
     if len(models) < 2:
         raise ValueError('Within-modality comparison requires at least two models.')

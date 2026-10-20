@@ -2,8 +2,8 @@
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from coverage_matching_utils import coordinates_mm
 
+from vs1_coverage_matching_utils import coordinates_mm
 
 def read_mni_coordinates(path, n_features, unit='mm'):
     """Accept named x/y/z columns or exactly three headerless numeric columns.

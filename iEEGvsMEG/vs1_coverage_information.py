@@ -137,7 +137,7 @@ def split_half_reliability(reference, cache_dir, *, pairing, dimensions=(1, 2, 3
     No iEEG recordings are loaded. Both halves use the same trials across all four
     constructions. Repeats overlap and their ranges are not confidence intervals.
     """
-    from coverage_matching_utils import construct_five_datasets, _preprocess
+    from vs1_coverage_matching_utils import construct_five_datasets, _preprocess
     dimensions = _dimensions(dimensions)
     if isinstance(repeats, bool) or not isinstance(repeats, (int, np.integer)) or repeats < 1:
         raise ValueError('repeats must be a positive integer.')

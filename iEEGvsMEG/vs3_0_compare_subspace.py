@@ -20,6 +20,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import adjusted_rand_score, silhouette_score
 from sklearn.preprocessing import PolynomialFeatures
 
+
 MODALITIES = ('ieeg', 'meg')
 MODELS = ('separate_pca', 'plssvd', 'joint_pca')
 MEG_KINDS = ('full_average', 'full_concatenated', 'coverage_average',
@@ -50,8 +51,8 @@ def subspace_metrics(a, b):
 
 def fit_models(train, names, k, block_scaling='equal_variance', max_gram_gib=2.):
     """Fit only requested models through observation Gram matrices."""
-    from cov_models_utils import _gram, _spectrum, _weights
-    from plssvd_eval_utils import _means
+    from vs2_0_cov_models_utils import _gram, _spectrum, _weights
+    from vs2_1_plssvd_eval_utils import _means
     n = train['ieeg'].n_observations
     if 12*n*n*8/2**30 > max_gram_gib:
         raise MemoryError('Observation Gram matrices exceed --max-gram-gib.')
@@ -203,7 +204,7 @@ def temporal_representations(scores, k):
 
 
 def _representations(fold, scores, k):
-    from plssvd_eval_utils import _patterns
+    from vs2_1_plssvd_eval_utils import _patterns
     temporal = temporal_representations(scores,k)
     # Spatial comparisons alone use the explicit electrode/source map.
     spatial = {m: {p: _patterns(fold[p][m], scores[p][m][:, :k])[
@@ -218,9 +219,9 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
                    max_gram_gib=2., scratch_dir=None, cloud_prototypes=32,
                    ieeg_coords_dir=None, meg_coords_dir=None, ieeg_coords_unit="mm", meg_coords_unit="mm"):
     """Run/export comparison; reuse an already complete PLSSVD trial cache."""
-    from plssvd_eval_utils import load_trial_cache, _subject_folds, _temporary_fold, _project
-    from spatial_clouds import evaluate_clouds
-    from plssvd_eval_utils import _patterns
+    from vs2_1_plssvd_eval_utils import load_trial_cache, _subject_folds, _temporary_fold, _project
+    from vs3_1_spatial_clouds import evaluate_clouds
+    from vs2_1_plssvd_eval_utils import _patterns
     if not isinstance(cloud_prototypes,int) or cloud_prototypes < 2: raise ValueError('cloud_prototypes must be >=2.')
     dimensions = sorted(set(dimensions))
     if not dimensions or min(dimensions) < 1 or repeats < 2:
@@ -235,7 +236,7 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
     if (out/'config.json').exists():
         raise FileExistsError('Results already exist. Choose a new --output-dir or use --plot-only.')
     trials = load_trial_cache(cache_dir)
-    from mni_coordinates import update_trial_coordinates
+    from vs0_mni_coordinates import update_trial_coordinates
     coordinate_sources=update_trial_coordinates(trials,ieeg_dir=ieeg_coords_dir,meg_dir=meg_coords_dir,
         ieeg_unit=ieeg_coords_unit,meg_unit=meg_coords_unit)
     coordinate_sources.to_csv(out/'coordinate_sources.csv',index=False)
@@ -430,7 +431,7 @@ def plot_results(output_dir, k=None, show=True):
     fig.suptitle('Spatial clusters — common cluster count selected on tuning trials')
     finish(fig, 'cluster_stability_agreement')
     if 'within_model_metrics' in tables:
-        from compare_models import plot_within_models
+        from vs2_0_compare_models import plot_within_models
         for index, fig in enumerate(plot_within_models(tables, k=k, partition='test')):
             finish(fig, f'within_models_k{k}_{index:02d}')
     return figures
