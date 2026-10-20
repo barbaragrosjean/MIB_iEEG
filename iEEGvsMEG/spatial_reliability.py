@@ -244,6 +244,8 @@ def inspect_comparison(directory):
 def fit_iterations(args):
     from plssvd_eval_utils import load_trial_cache, _temporary_fold, _project, _patterns
     from mni_coordinates import update_trial_coordinates
+    weight_only = getattr(args, 'weight_only', False)
+    variation = getattr(args, 'variation', 'both')
     root = args.output_dir
     root.mkdir(parents=True, exist_ok=True)
     trials = load_trial_cache(args.cache_dir)
@@ -277,6 +279,10 @@ def fit_iterations(args):
                   across_iterations='MEG rows follow fixed electrode coverage slots, NOT identical participants/sources.',
                   bootstrap='Independent participant resampling by modality, conditional on each fitted half-A model; '
                             'not full-pipeline uncertainty or participant-held-out validation.')
+    if weight_only:
+        config.update(schema_version=2, variation=variation,
+            design='One half-trial fit per iteration; controlled trial/pairing variation.',
+            bootstrap=None, roi_axis='Fixed iEEG coverage-slot labels in both modalities')
     _write_config(root/'config.json', config)
     coordinate_sources.to_csv(root/'coordinate_sources.csv', index=False)
     for iteration in range(args.iterations):
@@ -284,6 +290,10 @@ def fit_iterations(args):
         expected = [f'{model}_{half}.npz' for model in MODELS for half in ('A', 'B')] + [
             'ieeg_features.csv', 'meg_features.csv', 'pairing.json', 'matching.csv', 'splits.json',
             'preprocessing_A.npz', 'preprocessing_B.npz']
+        if weight_only:
+            expected = [f'{model}_A.npz' for model in MODELS] + [
+                'ieeg_features.csv', 'meg_features.csv', 'pairing.json', 'matching.csv',
+                'splits.json', 'preprocessing_A.npz']
         if (dest/'COMPLETE.json').exists():
             if not all((dest/name).exists() for name in expected):
                 raise ValueError(f'Incomplete files despite completion marker: {dest}')
@@ -291,10 +301,15 @@ def fit_iterations(args):
             continue
         dest.mkdir(parents=True, exist_ok=True)
         split_seed, pair_seed = [int(s.generate_state(1)[0]) for s in np.random.SeedSequence([args.seed, iteration]).spawn(2)]
-        indices = iteration_splits(trials, split_seed, args.split_unit)
+        if weight_only:
+            from weight_stability import controlled_seeds, half_trial_indices
+            split_seed, pair_seed = controlled_seeds(args.seed, iteration, variation)
+            indices = {'A': half_trial_indices(trials, split_seed, args.split_unit)}
+        else:
+            indices = iteration_splits(trials, split_seed, args.split_unit)
         (dest/'splits.json').write_text(json.dumps(indices, default=lambda a: a.tolist()))
         first_pairing = None
-        for half in ('A', 'B'):
+        for half in (('A',) if weight_only else ('A', 'B')):
             with _temporary_fold(trials, 'paired_coverage', indices[half], pair_seed,
                                  args.scratch_dir, condition_mode='average') as prepared:
                 fold, scalers, audit, pairing = prepared
@@ -326,7 +341,8 @@ def fit_iterations(args):
                         for part in fold:
                             scores = _project(fold[part][m], model, m)
                             bundle[f'{m}_{part}_scores'] = scores
-                            bundle[f'{m}_{part}_patterns'] = _patterns(fold[part][m], scores)
+                            if not weight_only:
+                                bundle[f'{m}_{part}_patterns'] = _patterns(fold[part][m], scores)
                     np.savez_compressed(dest/f'{name}_{half}.npz', **bundle)
                 np.savez_compressed(dest/f'preprocessing_{half}.npz', **{
                     f'{m}_{s}_{label}': v for m, subjects in scalers.items() for s, vals in subjects.items()
