@@ -1,9 +1,7 @@
 """Adapted from LB/LB5_decodingCluster.py mainTS and LB/src/decoding.py.
 
-Two condition pseudo-trial decoding, separately within MEG and iEEG.
-PC_use is zero-based. PLSSVD is fitted on training condition averages only.
-Repeated holdouts overlap: accuracy is descriptive, not independent-trial inference.
-Shuffled classifier labels are conditional controls, NOT full-pipeline null tests.
+submit_to_cluster -n 2 -q short.q "python decoding.py --pc_use 0 --model LR --meg-kind paired_coverage --iteration 20"  --project MINDLAB2021_MEG-TempSeqAges
+
 """
 import os
 import json
@@ -21,8 +19,8 @@ from sklearn.svm import SVC
 ROOT = Path(__file__).resolve().parent
 CACHE_DIR = ROOT / 'out' / 'trial_cache'
 OUT_PATH = ROOT / 'out' / 'decoding'
-MEG_KIND = 'full_concatenated'
-BLOCK_SCALING = 'none'
+MEG_KIND = 'paired_coverage'
+BLOCK_SCALING = 'equal_variance'
 
 def select_model(model_name) : 
     classifiers = {
@@ -65,7 +63,6 @@ def DataAugmentation(TFRtr, event_ids, data_aug_method='mean', nb_trials=23) :
         samples.append(data)
         truth.append(true_trials)
     return np.concatenate(samples, axis=0), np.stack(truth, axis=1)
-
 
 def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
                out_path=OUT_PATH, iter_perm=50, cache_dir=CACHE_DIR, model_name='LR',
@@ -201,7 +198,6 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
             model_name=model_name,seed=seed,crop_arg=crop_arg,
             classifier_params=clf.get_params(),cache_dir=str(cache_dir)),indent=2,default=str))
     return pd.DataFrame(metrics), pd.DataFrame(predictions)
-
 
 def mainTS(pc_use=0, model='LR', method_pls='mean', data_aug_method='mean',
            bs_decoding=False, **kwargs) :
