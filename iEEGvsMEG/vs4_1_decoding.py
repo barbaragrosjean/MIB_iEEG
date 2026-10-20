@@ -1,7 +1,15 @@
 """Adapted from LB/LB5_decodingCluster.py mainTS and LB/src/decoding.py.
 
-submit_to_cluster -n 2 -q short.q "python decoding.py --pc_use 0 --model LR --meg-kind paired_coverage --iteration 20"  --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q short.q "python vs4_1_decoding.py --pc_use 0 --model LR --meg-kind paired_coverage --iteration 20" --project MINDLAB2021_MEG-TempSeqAges
 
+Two condition pseudo-trial decoding, separately within MEG and iEEG.
+PC_use is zero-based. PLSSVD is fitted on training condition averages only.
+Repeated holdouts overlap: accuracy is descriptive, not independent-trial inference.
+Shuffled classifier labels are conditional controls, NOT full-pipeline null tests.
+Only original-format one-row summary CSVs are saved, separately by modality.
+Legacy pca_weight fields contain PLS projection weights; best_param contains
+fixed classifier settings. entropy retains the original model-specific meaning
+(LR log loss, SVM hinge loss, RandomForest OOB score).
 """
 import os
 import json
@@ -11,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, log_loss, hinge_loss
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
@@ -64,10 +72,11 @@ def DataAugmentation(TFRtr, event_ids, data_aug_method='mean', nb_trials=23) :
         truth.append(true_trials)
     return np.concatenate(samples, axis=0), np.stack(truth, axis=1)
 
+
 def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
                out_path=OUT_PATH, iter_perm=50, cache_dir=CACHE_DIR, model_name='LR',
                crop_arg=None, n_tr=24, meg_kind=MEG_KIND, block_scaling=BLOCK_SCALING,
-               seed=2026, classifier_params=None) :
+               seed=2026, classifier_params=None, band='broadband') :
     from vs2_1_plssvd_eval_utils import (load_trial_cache, ValidationOptions,
         _temporary_fold, _fit, _raw_weights, _project)
 
@@ -98,11 +107,17 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
     out_path = Path(out_path)
     if save :
         out_path.mkdir(parents=True, exist_ok=True)
-        if any(out_path.iterdir()) :
-            raise FileExistsError('Choose a new decoding output directory.')
-    metrics = []
-    predictions = []
-    split_audit = []
+        l_crop = ('_crp'+str(crop_arg['t_id_min'])+'_'+str(crop_arg['t_id_max'])+'_'
+                  if crop_arg['crop'] else '')
+        for modality in ['ieeg','meg'] :
+            target = out_path / modality / band / 'fullmodel' / f'{method_pls}_{data_aug_method}_{PC_use}_{model_name}full{l_crop}.csv'
+            if target.exists() :
+                raise FileExistsError(f'Output already exists: {target}')
+    # Original decodingTS fields retained for compatibility. pca_weight contains PLS weights.
+    # band is an output label: it must match the supplied cache; no filtering is done here.
+    stored = {m: {key: [] for key in ['y_pred','y_pred_sh','y_test','entropy',
+        'entropy_sh','weight','weight_sh','pca_weight','pca_weight_sh']}
+        for m in ['ieeg','meg']}
     matching_seed = int(rng.integers(2**31-1))
 
     for i in range(iteration) :
@@ -117,10 +132,6 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
                     ids = rng.permutation(len(array))
                     test_ids.append(ids[:1])
                     train_ids.append(ids[1:])
-                    for part, values in [('train',ids[1:]),('test',ids[:1])] :
-                        split_audit.extend(dict(iteration=i, modality=modality,
-                            subject=subject.subject, condition=condition,
-                            partition=part, trial_index=int(j)) for j in values)
                 indices[modality][subject.subject] = {'train':train_ids, 'test':test_ids}
 
         with _temporary_fold(trials, meg_kind, indices, matching_seed,
@@ -129,16 +140,6 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
             model = _fit(fold['train'], PC_use+1, options)
             if model['k_max'] <= PC_use :
                 raise ValueError('Requested PLS component exceeds training rank.')
-            if save :
-                np.savez_compressed(out_path / f'PLS_weights_{i:03d}.npz', **model)
-                np.savez_compressed(out_path / f'preprocessing_{i:03d}.npz',
-                    **{f'{m}_{subject}_{label}':value for m,subjects in scalers.items()
-                       for subject,params in subjects.items()
-                       for label,value in zip(['mean','std','multiplier'],params)})
-                audit.to_csv(out_path / f'matching_{i:03d}.csv', index=False)
-                for modality in ['ieeg','meg'] :
-                    fold['train'][modality].metadata.to_csv(out_path / f'{modality}_features_{i:03d}.csv', index=False)
-
             for modality in ['ieeg', 'meg'] :
                 weights = _raw_weights(trials, fold, model, scalers, audit,
                                        meg_kind, modality, PC_use+1)
@@ -176,28 +177,55 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
                 y_train = np.repeat([0,1], n_tr-1)
                 y_test = np.array([0,1])
 
+                saved = stored[modality]
+                saved['y_test'].extend(y_test.tolist())
+                saved['pca_weight'].append(model[modality+'_weights'][:,PC_use].copy())
                 # NORMAL DECODING AND CONDITIONAL SHUFFLED-CLASSIFIER CONTROL
                 for j in range(-1, iter_perm) :
                     labels = y_train if j==-1 else rng.permutation(y_train)
                     model_clf = clone(clf)
                     model_clf.fit(Train_transformed, labels)
                     y_pred = model_clf.predict(Test_transformed)
-                    metrics.append(dict(iteration=i, modality=modality, permutation=j,
-                        accuracy=accuracy_score(y_test,y_pred)))
-                    predictions.extend(dict(iteration=i,modality=modality,permutation=j,
-                        y_test=int(a),y_pred=int(b)) for a,b in zip(y_test,y_pred))
-        if save :
-            pd.DataFrame(metrics).to_csv(out_path/'metrics.csv',index=False)
-            pd.DataFrame(predictions).to_csv(out_path/'predictions.csv',index=False)
-            pd.DataFrame(split_audit).to_csv(out_path/'split_audit.csv',index=False)
+                    suffix = '' if j == -1 else '_sh'
+                    saved['y_pred'+suffix].extend(y_pred.tolist())
+                    if model_name == 'LR' :
+                        saved['entropy'+suffix].append(log_loss(y_test, model_clf.predict_proba(Test_transformed)[:,1]))
+                        saved['weight'+suffix].append(model_clf.coef_.copy())
+                    elif model_name in ['SVC_linear', 'SVC_rbf'] :
+                        saved['entropy'+suffix].append(hinge_loss([-1,1], model_clf.decision_function(Test_transformed)))
+                        saved['weight'+suffix].append(model_clf.coef_.copy() if model_name == 'SVC_linear' else None)
+                    elif model_name == 'RandomForest' :
+                        saved['entropy'+suffix].append(float(model_clf.oob_score_))
+                        saved['weight'+suffix].append(model_clf.feature_importances_.copy())
+                    if j >= 0 :
+                        # Conditional classifier null: PLS is not refitted after shuffling labels.
+                        saved['pca_weight_sh'].append(model[modality+'_weights'][:,PC_use].copy())
         print(f'Decoding iteration {i+1}/{iteration}',flush=True)
-    if save :
-        (out_path/'settings.json').write_text(json.dumps(dict(method_pls=method_pls,
-            data_aug_method=data_aug_method,iteration=iteration,PC_use=PC_use,
-            iter_perm=iter_perm,n_tr=n_tr,meg_kind=meg_kind,block_scaling=block_scaling,
-            model_name=model_name,seed=seed,crop_arg=crop_arg,
-            classifier_params=clf.get_params(),cache_dir=str(cache_dir)),indent=2,default=str))
-    return pd.DataFrame(metrics), pd.DataFrame(predictions)
+
+    summaries = {}
+    for modality in ['ieeg','meg'] :
+        sumsum = pd.DataFrame()
+        sumsum['band'] = [band]
+        sumsum['method_pca'] = [method_pls]
+        sumsum['data_aug_method'] = [data_aug_method]
+        sumsum['iter'] = [iteration]
+        sumsum['iter_perm'] = [iter_perm]
+        for key in ['y_pred','y_pred_sh','y_test','entropy','entropy_sh',
+                    'weight','weight_sh','pca_weight','pca_weight_sh'] :
+            sumsum[key] = [stored[modality][key]]
+        # Legacy column name; settings are fixed, not selected by GridSearchCV.
+        sumsum['best_param'] = [clf.get_params()]
+        summaries[modality] = sumsum
+        if save :
+            folder = out_path / modality / band / 'fullmodel'
+            folder.mkdir(parents=True, exist_ok=True)
+            l_crop = ('_crp'+str(crop_arg['t_id_min'])+'_'+str(crop_arg['t_id_max'])+'_'
+                      if crop_arg['crop'] else '')
+            # Avoid numpy's default truncation of large weight arrays in CSV cells.
+            with np.printoptions(threshold=np.inf) :
+                sumsum.to_csv(folder / f'{method_pls}_{data_aug_method}_{PC_use}_{model_name}full{l_crop}.csv')
+    return summaries
+
 
 def mainTS(pc_use=0, model='LR', method_pls='mean', data_aug_method='mean',
            bs_decoding=False, **kwargs) :
@@ -213,6 +241,7 @@ def mainTS(pc_use=0, model='LR', method_pls='mean', data_aug_method='mean',
 
 if __name__ == '__main__' :
     parser = argparse.ArgumentParser(description='Decode conditions using training-only MEG/iEEG PLSSVD.')
+    parser.add_argument('--band',default='broadband',help='Output band label; must match cache contents.')
     parser.add_argument('--pc_use',type=int,default=0)
     parser.add_argument('--model',choices=['LR','SVC_linear','SVC_rbf','RandomForest'],default='LR')
     parser.add_argument('--method_pls',choices=['mean','concat'],default='mean')
@@ -229,4 +258,4 @@ if __name__ == '__main__' :
     mainTS(args.pc_use,args.model,args.method_pls,args.method_data_aug,
         iteration=args.iteration,iter_perm=args.iter_perm,n_tr=args.n_tr,
         cache_dir=args.cache_dir,out_path=args.out_path,meg_kind=args.meg_kind,
-        block_scaling=args.block_scaling,seed=args.seed)
+        block_scaling=args.block_scaling,seed=args.seed,band=args.band)
