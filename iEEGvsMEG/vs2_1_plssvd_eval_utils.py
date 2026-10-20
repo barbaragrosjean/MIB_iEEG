@@ -17,8 +17,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.linalg import svd
-from coverage_matching_utils import Dataset, coordinates_mm, construct_five_datasets
-from cov_models_utils import _gram, _spectrum, _weights
+from vs1_coverage_matching_utils import Dataset, coordinates_mm, construct_five_datasets
+from vs2_0_cov_models_utils import _gram, _spectrum, _weights
 
 
 
@@ -501,7 +501,7 @@ def _evaluate_fixed_model(datasets, scores, model, predictors):
     Crosscov energy denominator covers ALL feature pairs, calculated with Gram
     matrices. Covariance is descriptive over condition/time rows, not trial-paired.
     """
-    from cov_models_utils import _chunks
+    from vs2_0_cov_models_utils import _chunks
     n = datasets['ieeg'].n_observations
     centered = {m: scores[m]-scores[m].mean(0) for m in ('ieeg', 'meg')}
     covariance = centered['ieeg'].T@centered['meg']/(n-1)
@@ -527,7 +527,7 @@ def _evaluate_fixed_model(datasets, scores, model, predictors):
 def _across_split_stability(all_scores, k):
     """Descriptive component matching across fits; never changes test evaluation."""
     from itertools import combinations
-    from coverage_stability import matched_correlation
+    from vs1_coverage_stability import matched_correlation
     rows, pairs = [], []
     for a, b in combinations(range(len(all_scores)), 2):
         for part in ('train', 'test'):
@@ -575,7 +575,7 @@ def _validate_iteration(trials,meg_kind,options=None,output_dir='out/plssvd_eval
     if matching_seed is None:
         matching_seed = int(np.random.default_rng(matching_seq).integers(2**31-1))
     split_rows = []
-    from plssvd_evaluation import collect_statistics
+    from vs2_1_plssvd_evaluation import collect_statistics
     rng = np.random.default_rng(split_seq)
     assignments = {m: {s.subject: _subject_folds(s, rng, options.split_unit, options.repeats)
                        for s in getattr(trials, m)} for m in ('ieeg','meg')}
@@ -629,7 +629,7 @@ def load_plssvd_results(output_dir, cache_dir=None, n_components=None):
     """
     root=Path(output_dir).expanduser().resolve()
     options=json.loads((root/'validation_options.json').read_text())
-    from plssvd_evaluation import selected_count, evaluate_iteration
+    from vs2_1_plssvd_evaluation import selected_count, evaluate_iteration
     k = selected_count(n_components, options['n_components'])
     if options.get('schema_version') == 5:
         if not (root/'COMPLETE.json').is_file():
@@ -888,7 +888,7 @@ def plot_test_score_correlations(output_dir, n_components=25, absolute=True):
     of each PLS pair using the largest absolute training iEEG score entry.
     Correlations are over held-out condition-averaged time courses, not trials.
     """
-    from compare_models import correlation_matrix
+    from vs2_0_compare_models import correlation_matrix
     root = Path(output_dir)
     options = json.loads((root/'validation_options.json').read_text())
     if not (root/'COMPLETE.json').exists():
@@ -1082,7 +1082,7 @@ def plot_iteration_summary(output_dir, n_components=None):
     with a shared sign for each pair determined from its training iEEG peak.
     No held-out alignment is used; near-degenerate components can still mix.
     """
-    from compare_models import correlation_matrix
+    from vs2_0_compare_models import correlation_matrix
     root = Path(output_dir)
     result = load_plssvd_results(root, n_components=n_components)
     config = result['iteration_options']

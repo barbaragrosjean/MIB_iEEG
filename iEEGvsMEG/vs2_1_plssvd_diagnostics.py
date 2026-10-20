@@ -47,8 +47,8 @@ def _check_matching(baseline, selected, ids):
 
 def _backfill_spectra(root, iteration, trials, scratch_dir=None, include_pca=False, fold_indices=None, compute_spectra=True):
     """Recreate folds for spectra/optional training PCA; never refit PLSSVD."""
-    from plssvd_eval_utils import ValidationOptions, _temporary_fold, _project, _saved_scores
-    from cov_models_utils import _gram
+    from vs2_1_plssvd_eval_utils import ValidationOptions, _temporary_fold, _project, _saved_scores
+    from vs2_0_cov_models_utils import _gram
     child = root/f'iteration_{iteration:03d}'
     config = json.loads((root/'validation_options.json').read_text())
     child_config = json.loads((child/'validation_options.json').read_text())
@@ -119,7 +119,7 @@ def _backfill_spectra(root, iteration, trials, scratch_dir=None, include_pca=Fal
 
 
 def _spectral_rows(root, ids, folds, k, full):
-    from plssvd_eval_utils import _saved_scores
+    from vs2_1_plssvd_eval_utils import _saved_scores
     rows=[]
     for iteration in ids:
         child=root/f'iteration_{iteration:03d}'
@@ -147,7 +147,7 @@ def _spectral_rows(root, ids, folds, k, full):
 
 
 def _has_full(root, ids, folds):
-    from plssvd_eval_utils import _saved_scores
+    from vs2_1_plssvd_eval_utils import _saved_scores
     for iteration in ids:
         for fold in range(folds):
             child=root/f'iteration_{iteration:03d}'
@@ -169,7 +169,7 @@ def permutation_diagnostics(runs_dir, perm, perm_type, n_components=None, cache_
     and are used for BOTH runs. They cannot establish full input dimensionality.
     Fold means are computed first; SDs describe variation across iterations.
     """
-    from plssvd_eval_utils import load_plssvd_results, validation_run_name, load_trial_cache
+    from vs2_1_plssvd_eval_utils import load_plssvd_results, validation_run_name, load_trial_cache
     name=validation_run_name(perm,perm_type)
     if name=='none':raise ValueError('Select PERM and PERM_TYPE to compare a permutation with baseline.')
     root=Path(runs_dir)

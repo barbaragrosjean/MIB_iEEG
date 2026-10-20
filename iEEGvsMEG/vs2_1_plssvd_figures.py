@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from plssvd_postprocess import snapshot_path
+from vs2_1_plssvd_postprocess import snapshot_path
 
 
 def load_evaluation(run_dir, n_components):
@@ -26,7 +26,7 @@ def load_evaluation(run_dir, n_components):
 
 def plot_first_iteration(data):
     """Reuse existing figure layouts with compact first-iteration metrics/scores."""
-    from plssvd_eval_utils import plot_plssvd_validation
+    from vs2_1_plssvd_eval_utils import plot_plssvd_validation
     meta=data['metadata'];first=meta['iterations'][0];k=meta['n_components']
     folds=data['fold_metrics'].query('iteration == @first').drop(columns='iteration')
     original=dict(validation_options=dict(meta['options'],n_components=k,schema_version=5),
@@ -37,7 +37,7 @@ def plot_first_iteration(data):
 
 
 def plot_correlation_matrix(mean, sd=None, title='Held-out mean |Pearson r|'):
-    from plssvd_eval_utils import _annotate_matrix
+    from vs2_1_plssvd_eval_utils import _annotate_matrix
     fig,ax=plt.subplots(figsize=(8,7),layout='constrained');k=len(mean)
     im=ax.imshow(mean,vmin=0,vmax=1,cmap='viridis')
     if k<=20:_annotate_matrix(ax,mean,sd)
@@ -47,7 +47,7 @@ def plot_correlation_matrix(mean, sd=None, title='Held-out mean |Pearson r|'):
 
 
 def plot_evaluation_summary(data):
-    from plssvd_eval_utils import _annotate_matrix
+    from vs2_1_plssvd_eval_utils import _annotate_matrix
     arrays=data['arrays'];meta=data['metadata'];k=meta['n_components'];n=len(meta['iterations'])
     fig=plt.figure(figsize=(20,12),layout='constrained')
     grid=fig.add_gridspec(3,2,width_ratios=[1,1.8],height_ratios=[1,1,.8])
@@ -89,7 +89,7 @@ def plot_evaluation_summary(data):
 
 
 def plot_prepared_permutations(runs_dir, n_components):
-    from plssvd_eval_utils import PERMUTATION_TYPES, validation_run_name
+    from vs2_1_plssvd_eval_utils import PERMUTATION_TYPES, validation_run_name
     def read(name):
         try:folder=snapshot_path(Path(runs_dir)/name,n_components)
         except FileNotFoundError:return None
@@ -128,7 +128,7 @@ def load_comparison(runs_dir, name, n_components):
 
 
 def plot_prepared_diagnostics(data):
-    from plssvd_diagnostics import plot_permutation_diagnostics
+    from vs2_1_plssvd_diagnostics import plot_permutation_diagnostics
     meta=data['metadata'];components=data['components']
     wide=components.pivot(index=['run','iteration','component'],columns='partition',values=['r','covariance'])
     wide.columns=[part+'_'+metric for metric,part in wide.columns]
@@ -145,7 +145,7 @@ def plot_prepared_diagnostics(data):
 
 
 def plot_prepared_pca(data, absolute=True, comparison=False):
-    from plssvd_pca import plot_plssvd_pca_comparison
+    from vs2_1_plssvd_pca import plot_plssvd_pca_comparison
     meta=data['metadata']
     if not meta['pca_available']:
         raise FileNotFoundError('PCA evaluation not prepared. Run plssvd_postprocess.py with --cache-dir outside the notebook.')
@@ -170,7 +170,7 @@ def plot_null_comparison(runs_dir, n_components, perm_type='phase', modes=('meg'
     repeated trial splits; surrogate spread also varies the selected permutation. These overlapping
     iterations are not independent observations; no inferential p-value is shown.
     """
-    from plssvd_eval_utils import PERMUTATION_TYPES
+    from vs2_1_plssvd_eval_utils import PERMUTATION_TYPES
     if perm_type == 'time_circular_shift':
         perm_type = 'time_cirular_shift'  # Existing output-folder spelling.
     if perm_type not in PERMUTATION_TYPES:
@@ -236,7 +236,7 @@ def plot_null_timecourses(runs_dir, n_components=3, perm='both', prepared_compon
     root=Path(runs_dir)
     comparison=load_comparison(root,perm+'__phase',prepared_components)
     ids=comparison['metadata']['iterations']
-    from plssvd_postprocess import Moments
+    from vs2_1_plssvd_postprocess import Moments
     stats={}
     times=None
     for label,name in [('Baseline','none'),('Phase null',perm+'__phase')]:

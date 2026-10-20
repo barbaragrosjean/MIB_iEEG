@@ -11,9 +11,9 @@ import argparse
 import json
 import numpy as np
 import pandas as pd
-from spatial_reliability import (fit_iterations, align_bundle, _load_bundle,
+from vs3_0_spatial_reliability import (fit_iterations, align_bundle, _load_bundle,
                                  across_iteration_correlations, LEVELS)
-from compare_subspace import MODELS, MODALITIES
+from vs3_0_compare_subspace import MODELS, MODALITIES
 
 CONDITIONS = ('trials', 'pairing', 'both')
 TITLES = dict(trials='Trials only', pairing='Pairing only', both='Trials and pairing')
@@ -31,7 +31,7 @@ def controlled_seeds(seed, iteration, variation):
 
 
 def half_trial_indices(trials, seed, split_unit):
-    from plssvd_eval_utils import _subject_folds
+    from vs2_1_plssvd_eval_utils import _subject_folds
     rng = np.random.default_rng(seed)
     result = {m: {} for m in MODALITIES}
     for m in MODALITIES:

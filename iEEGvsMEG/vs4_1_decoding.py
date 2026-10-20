@@ -68,7 +68,7 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
                out_path=OUT_PATH, iter_perm=50, cache_dir=CACHE_DIR, model_name='LR',
                crop_arg=None, n_tr=24, meg_kind=MEG_KIND, block_scaling=BLOCK_SCALING,
                seed=2026, classifier_params=None) :
-    from plssvd_eval_utils import (load_trial_cache, ValidationOptions,
+    from vs2_1_plssvd_eval_utils import (load_trial_cache, ValidationOptions,
         _temporary_fold, _fit, _raw_weights, _project)
 
     if method_pls not in ['mean', 'concat'] :
@@ -204,7 +204,7 @@ def mainTS(pc_use=0, model='LR', method_pls='mean', data_aug_method='mean',
     # Same mainTS entry-point style; data come from the shared MEG/iEEG trial cache.
     crop_arg = {'crop':False, 't_id_min':None, 't_id_max':None}
     if bs_decoding :
-        from plssvd_eval_utils import load_trial_cache
+        from vs2_1_plssvd_eval_utils import load_trial_cache
         time = load_trial_cache(kwargs.get('cache_dir',CACHE_DIR)).times
         crop_arg = {'crop':True, 't_id_min':0, 't_id_max':int(np.searchsorted(time,-0.5,side='right'))}
     return decodingTS(method_pls, data_aug_method, PC_use=pc_use,

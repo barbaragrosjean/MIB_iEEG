@@ -8,7 +8,7 @@ from pathlib import Path
 import json
 import numpy as np
 import pandas as pd
-from coverage_matching_utils import fit_block_pca, compare_pca_to_ieeg
+from vs1_coverage_matching_utils import fit_block_pca, compare_pca_to_ieeg
 
 
 class _SelectedChannels:
@@ -209,7 +209,7 @@ def main(argv=None):
         if out.exists() and any(out.iterdir()):
             raise FileExistsError('Choose a new --output-dir or use --plot-only for completed results.')
         for directory in (root,root.parent,root.parent/'LB'):sys.path.insert(0,str(directory))
-        from coverage_matching_utils import load_dataset
+        from vs1_coverage_matching_utils import load_dataset
         meg_dir=args.meg_dir or root/'MEG'/'dataMEG'
         ieeg_dir=args.ieeg_dir or root/'ieeg_shortWOBS_fs250'
         subjects=sorted(p.name.removesuffix('_epochs.p') for p in ieeg_dir.glob('*_epochs.p'))

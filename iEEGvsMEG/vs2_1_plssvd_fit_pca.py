@@ -3,9 +3,10 @@
 from pathlib import Path
 import argparse
 import json
-
-from plssvd_full_pca import fit_full_data_pca, correlate_full_pca, plot_full_pca_comparison
+import matplotlib.pyplot as plt
 import numpy as np
+
+from vs2_1_plssvd_pca import fit_full_data_pca, correlate_full_pca, plot_full_pca_comparison
 
 MEG_KIND = 'full_concatenated'
 N_COMPONENTS = 10  # An explicitly prepared component count (see evaluation command above)
@@ -13,7 +14,6 @@ N_COMPONENTS = 10  # An explicitly prepared component count (see evaluation comm
 ROOT = Path.cwd()
 OUTPUT_DIR = ROOT / 'out' / 'plssvd_eval' / MEG_KIND / 'ieeg__time_point'
 PCA_ABSOLUTE = True 
-
 
 def main():
     full_pca = fit_full_data_pca(ROOT / 'out' / 'trial_cache', n_components=N_COMPONENTS)

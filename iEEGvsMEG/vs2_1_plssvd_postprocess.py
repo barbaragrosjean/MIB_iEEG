@@ -86,21 +86,20 @@ def _source_paths(run, iteration, fold):
 
 def _metric_fingerprint(run, iteration, fold):
     paths=_source_paths(run,iteration,fold)
-    # PCA/spectrum sidecars do not affect reconstruction or ridge prediction.
     return _fingerprint([p for p in paths if not p.name.startswith(('pca_scores_','temporal_spectra_'))])
 
 
 def _scores(run, iteration, fold, k=None):
-    from plssvd_eval_utils import _saved_scores
+    from vs2_1_plssvd_eval_utils import _saved_scores
     with _saved_scores(run/f'iteration_{iteration:03d}',fold) as saved:
         return {p:{m:saved[f'{p}_{m}'][:,:k] for m in ('ieeg','meg')} for p in ('train','test')}
 
 
 def _common_fold(run, iteration, fold, destination, fingerprint):
     """All-rank correlations are computed once, independently of metric k."""
-    from plssvd_eval_utils import _saved_scores
-    from plssvd_pca import _pca_artifact
-    from compare_models import correlation_matrix
+    from vs2_1_plssvd_eval_utils import _saved_scores
+    from vs2_1_plssvd_pca import _pca_artifact
+    from vs2_0_compare_models import correlation_matrix
     child=run/f'iteration_{iteration:03d}'
     scores=_scores(run,iteration,fold)
     arrays={};x=scores['train']['ieeg'];k=x.shape[1]
@@ -152,7 +151,7 @@ def _common_fold(run, iteration, fold, destination, fingerprint):
 
 
 def _metric_fold(run, iteration, fold, k, destination, fingerprint, options):
-    from plssvd_evaluation import evaluate_statistics
+    from vs2_1_plssvd_evaluation import evaluate_statistics
     child=run/f'iteration_{iteration:03d}'
     if (child/f'scores_{fold:03d}.npz').exists():
         with np.load(child/f'scores_{fold:03d}.npz') as saved:
@@ -168,13 +167,13 @@ def _metric_fold(run, iteration, fold, k, destination, fingerprint, options):
 
 
 def _audit_hash(run, iteration):
-    from plssvd_diagnostics import _audit
+    from vs2_1_plssvd_diagnostics import _audit
     return hashlib.sha256(_audit(run,iteration).to_csv(index=False).encode()).hexdigest()
 
 
 def _stability(run, ids, folds, k, destination, signature):
     """Pairwise descriptions need only two folds in memory at once."""
-    from plssvd_eval_utils import _across_split_stability
+    from vs2_1_plssvd_eval_utils import _across_split_stability
     marker=destination/'stability.json'
     if marker.exists() and _json(marker).get('signature')==signature:
         return
@@ -267,10 +266,10 @@ def _publish(run, ids, folds, k, options, fingerprint, audits):
 
 def _evaluate_run(run_dir, components, cache_dir=None, scratch_dir=None):
     """Compute only missing/stale folds; save a new snapshot when inputs change."""
-    from plssvd_evaluation import selected_count
-    from plssvd_eval_utils import load_trial_cache
-    from plssvd_pca import _pca_artifact
-    from plssvd_diagnostics import _backfill_spectra
+    from vs2_1_plssvd_evaluation import selected_count
+    from vs2_1_plssvd_eval_utils import load_trial_cache
+    from vs2_1_plssvd_pca import _pca_artifact
+    from vs2_1_plssvd_diagnostics import _backfill_spectra
     run=Path(run_dir);options=_json(run/'validation_options.json')
     if options.get('schema_version') not in (4,6):raise ValueError('Expected a repeated PLSSVD fit directory.')
     counts=sorted({selected_count(k,options['n_components']) for k in components})
@@ -303,7 +302,7 @@ def _evaluate_run(run_dir, components, cache_dir=None, scratch_dir=None):
 
 def publish_available(run_dir, components):
     """Publish fully evaluated iterations after an interrupted worker, no refitting."""
-    from plssvd_evaluation import selected_count
+    from vs2_1_plssvd_evaluation import selected_count
     run=Path(run_dir);options=_json(run/'validation_options.json');folds=options['repeats']
     for requested in components:
         k=selected_count(requested,options['n_components']);ids=[];fingerprints=[];audits={}
@@ -337,7 +336,7 @@ def evaluate_run(run_dir, components, cache_dir=None, scratch_dir=None):
 
 
 def _has_full_fold(child, fold):
-    from plssvd_eval_utils import _saved_scores
+    from vs2_1_plssvd_eval_utils import _saved_scores
     with _saved_scores(child,fold) as saved:
         keys=set(saved.files)
     sidecar=child/f'temporal_spectra_{fold:03d}.npz'
@@ -418,7 +417,7 @@ def main():
     parser.add_argument('--cache-dir',type=Path,help='Optional original trial cache for missing PCA and full spectra.')
     parser.add_argument('--scratch-dir',type=Path)
     args=parser.parse_args()
-    from plssvd_eval_utils import validation_run_name
+    from vs2_1_plssvd_eval_utils import validation_run_name
     if args.all_runs:
         names=sorted(p.name for p in args.runs_dir.iterdir() if (p/'validation_options.json').exists()
                      and any(p.glob('iteration_*/COMPLETE.json')))

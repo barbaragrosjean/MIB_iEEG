@@ -18,8 +18,8 @@ import pandas as pd
 from scipy.optimize import linear_sum_assignment
 from scipy.stats import rankdata
 
-from compare_subspace import MODELS, MODALITIES, fit_models
-from compare_models import correlation_matrix
+from vs3_0_compare_subspace import MODELS, MODALITIES, fit_models
+from vs2_0_compare_models import correlation_matrix
 
 LEVELS = ('parcel', 'region', 'group')
 SPACES = ('weights', 'patterns')
@@ -79,7 +79,7 @@ def correlation_rows(a, b, **labels):
 
 def iteration_splits(trials, seed, split_unit='trial'):
     """Two independent half fits; each opposite half also has two test quarters."""
-    from plssvd_eval_utils import _subject_folds
+    from vs2_1_plssvd_eval_utils import _subject_folds
     rng = np.random.default_rng(seed)
     result = {half: {m: {} for m in MODALITIES} for half in ('A', 'B')}
     for m in MODALITIES:
@@ -108,8 +108,8 @@ def annotate_coordinates(xyz, atlas_image=None, atlas_labels=None, pool_hemisphe
     if (atlas_image is None) != (atlas_labels is None):
         raise ValueError('Provide both --atlas-image and --atlas-labels.')
     if atlas_image is None:
-        from region_labels import get_region_label
-        from modality_specificity import REGION_GROUPS
+        from vs0_region_labels import get_region_label
+        from vs3_1_modality_specificity import REGION_GROUPS
         parcel, region = get_region_label(pd.DataFrame(xyz)/1000., return_atlas_labels=True)
         grouping = {r: g for g, regions in REGION_GROUPS for r in regions}
         frame = pd.DataFrame(dict(parcel=parcel, region=region))
@@ -242,8 +242,8 @@ def inspect_comparison(directory):
 
 
 def fit_iterations(args):
-    from plssvd_eval_utils import load_trial_cache, _temporary_fold, _project, _patterns
-    from mni_coordinates import update_trial_coordinates
+    from vs2_1_plssvd_eval_utils import load_trial_cache, _temporary_fold, _project, _patterns
+    from iEEGvsMEG.vs0_mni_coordinates import update_trial_coordinates
     weight_only = getattr(args, 'weight_only', False)
     variation = getattr(args, 'variation', 'both')
     root = args.output_dir
@@ -302,7 +302,7 @@ def fit_iterations(args):
         dest.mkdir(parents=True, exist_ok=True)
         split_seed, pair_seed = [int(s.generate_state(1)[0]) for s in np.random.SeedSequence([args.seed, iteration]).spawn(2)]
         if weight_only:
-            from weight_stability import controlled_seeds, half_trial_indices
+            from vs3_0_weight_stability import controlled_seeds, half_trial_indices
             split_seed, pair_seed = controlled_seeds(args.seed, iteration, variation)
             indices = {'A': half_trial_indices(trials, split_seed, args.split_unit)}
         else:

@@ -67,11 +67,11 @@ def select_components(components, n_components=10, null_quantile=.95, min_suppor
 
 def prepare_selection(runs_dir, n_components=10, null_quantile=.95, min_support=.90,
                       recompute=False, recompute_evaluation=False, perm='both', perm_type='phase'):
-    from plssvd_figures import load_comparison
+    from vs2_1_plssvd_figures import load_comparison
     runs_dir = Path(runs_dir)
     name = _null_name(perm, perm_type)
     if recompute_evaluation:
-        from plssvd_postprocess import evaluate_run, prepare_comparison
+        from vs2_1_plssvd_postprocess import evaluate_run, prepare_comparison
         for run_name in ('none', name):
             evaluate_run(runs_dir/run_name, [n_components])
         prepare_comparison(runs_dir, name, n_components)
@@ -110,7 +110,7 @@ def load_selection(runs_dir, n_components=10, perm='both', perm_type='phase'):
     if summary['permutation'] != _null_name(perm, perm_type):
         raise ValueError('Saved selection uses a different null model.')
     # Reject stale results using the standard prepared-comparison provenance check.
-    from plssvd_figures import load_comparison
+    from vs2_1_plssvd_figures import load_comparison
     current = load_comparison(runs_dir, _null_name(perm, perm_type), n_components)
     if current['metadata']['signature'] != summary['source_signature']:
         raise ValueError('Selection is stale. Rerun plssvd_select_components.py --recompute.')

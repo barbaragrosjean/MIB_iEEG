@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial import cKDTree
-from coverage_matching_utils import Dataset, fit_block_pca
+from vs1_coverage_matching_utils import Dataset, fit_block_pca
 
 GROUP_KINDS = ('full_average', 'full_concatenated', 'coverage_average')
 
