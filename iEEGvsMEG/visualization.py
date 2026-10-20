@@ -9,13 +9,14 @@ import json
 import shutil
 import subprocess
 import numpy as np
+from nilearn.datasets import load_mni152_template
 
 # Analysis settings
 ROOT = Path(__file__).resolve().parent
 MODEL = 'plssvd'                    # separate_pca, joint_pca, plssvd
-MEG_KIND = 'full_concatenated'       # full_average, coverage_average, paired_coverage, random_control also supported
-COMPONENT = 1                      # one-based component index
-BLOCK_SCALING = 'none'              # none or equal_variance (whole-modality scaling)
+MEG_KIND = 'paired_coverage'       # full_average, coverage_average, paired_coverage, random_control also supported
+COMPONENT = 1                    # one-based component index
+BLOCK_SCALING = 'equal_variance'              # none or equal_variance (whole-modality scaling)
 CONDITION_MODE = 'average'          # average or stack
 SEED = 2026
 
@@ -25,9 +26,12 @@ IEEG_DIR = ROOT / 'ieeg_shortWOBS_fs250'
 METADATA_CSV = None                 # optional CSV; otherwise existing GetInfo loader
 MEG_TIMES_FILE = None
 MEG_TMIN = None                     # None uses first iEEG time; verify MEG alignment
-TEMPLATE_NIFTI = ROOT / 'templates' / 'MNI_template.nii.gz'
-LEFT_SURFACE = ROOT / 'templates' / 'ParcellationPilot.L.midthickness.32k_fs_LR.surf.gii'
-RIGHT_SURFACE = ROOT / 'templates' / 'ParcellationPilot.R.midthickness.32k_fs_LR.surf.gii'
+
+# templates
+TEMPLATE_NIFTI = ROOT.parent / 'templates' / 'MNI_template.nii.gz'
+LEFT_SURFACE = ROOT.parent / 'templates'/ 'ParcellationPilot.L.midthickness.32k_fs_LR.surf.gii'
+RIGHT_SURFACE = ROOT.parent / 'templates' / 'ParcellationPilot.R.midthickness.32k_fs_LR.surf.gii'
+
 WB_COMMAND = 'wb_command'          # or absolute path to the executable
 RADIUS_MM = 4.                     # nearest-location display radius; no whole-brain extrapolation
 OUTPUT_DIR = ROOT / 'out' / 'workbench' / f'{MODEL}_{MEG_KIND}_{BLOCK_SCALING}_pc{COMPONENT:03d}'
@@ -141,8 +145,16 @@ def map_to_workbench(volumes, left_surface=LEFT_SURFACE, right_surface=RIGHT_SUR
 
 
 if __name__=='__main__':
+    template_path = TEMPLATE_NIFTI
+    template_path.parent.mkdir(parents=True, exist_ok=True)
+
+    template = load_mni152_template(resolution=2)  # 2-mm voxels
+    template.header.set_xyzt_units("mm")
+    template.to_filename(str(template_path))
+
     for required in (TEMPLATE_NIFTI,LEFT_SURFACE,RIGHT_SURFACE):
-        if not required.is_file():raise FileNotFoundError(f'Set the template paths at the top of visualization.py: {required}')
+        if not required.is_file():
+            raise FileNotFoundError(f'Set the template paths at the top of visualization.py: {required}')
     if shutil.which(str(WB_COMMAND)) is None:raise FileNotFoundError('Set WB_COMMAND to your Workbench executable.')
     weights=compute_weights()
     volumes=create_nifti(weights)
