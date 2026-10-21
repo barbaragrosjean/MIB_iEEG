@@ -3,11 +3,13 @@
 submit_to_cluster -n 2 -q short.q "python vs4_1_decoding.py --pc_use 0 --model LR --meg-kind paired_coverage --iteration 20" --project MINDLAB2021_MEG-TempSeqAges
 
 Two condition pseudo-trial decoding, separately within MEG and iEEG.
-PC_use is zero-based. PLSSVD is fitted on training condition averages only.
+PC_use is zero-based. PCA or PLSSVD is fitted on training condition data only.
 Repeated holdouts overlap: accuracy is descriptive, not independent-trial inference.
 Shuffled classifier labels are conditional controls, NOT full-pipeline null tests.
-Only original-format one-row summary CSVs are saved, separately by modality.
-Legacy pca_weight fields contain PLS projection weights; best_param contains
+One-row summary CSVs and first-iteration network time courses are saved by modality.
+Time-course NPZ files contain the actual centered decoder inputs before cropping,
+with training pseudo-trials ordered by condition and one held-out trace per condition.
+Legacy pca_weight fields contain the selected projection weights; best_param contains
 fixed classifier settings. entropy retains the original model-specific meaning
 (LR log loss, SVM hinge loss, RandomForest OOB score).
 """
@@ -73,13 +75,70 @@ def DataAugmentation(TFRtr, event_ids, data_aug_method='mean', nb_trials=23) :
     return np.concatenate(samples, axis=0), np.stack(truth, axis=1)
 
 
+def _fit_pca(train, n_components, options):
+    """Fit independent, centered, unwhitened PCA within each training modality."""
+    from vs2_0_cov_models_utils import _gram, _spectrum, _weights
+    from vs2_1_plssvd_eval_utils import _means
+
+    model = {'k_max': n_components}
+    for modality in ['ieeg', 'meg']:
+        dataset = train[modality]
+        n = dataset.n_observations
+        if 12*n*n*8/2**30 > options.max_gram_gib:
+            raise MemoryError('Increase max_gram_gib or shorten epochs.')
+        gram = _gram(dataset)
+        if options.block_scaling == 'none':
+            scale = 1.
+        elif options.block_scaling == 'equal_variance':
+            scale = np.sqrt((n-1)/np.trace(gram))
+        else:
+            raise ValueError('Unknown block scaling.')
+        temporal, singular = _spectrum(gram, dataset.n_features)
+        if n_components > len(singular):
+            raise ValueError(f'Requested PCA component exceeds {modality} training rank.')
+        # Scaling the whole modality does not change its PCA axes.
+        model[modality+'_weights'] = _weights(
+            dataset, temporal[:, :n_components]/singular[:n_components], 1.)
+        model[modality+'_mean'] = _means(dataset)
+        model[modality+'_scale'] = scale
+    return model
+
+
+def _save_network_time_courses(path, train, test, times, conditions, time_ids,
+                               method, component, seed):
+    """Save first-iteration, unshuffled decoder inputs in condition x trial x time order.
+
+    Traces sum participant projections after subtracting each participant's
+    training-only, condition-pooled mean time course. Training traces include
+    the same augmentation and pseudo-trial pairing used by the decoder.
+    Full epochs are retained; decoding_time_ids identifies the selected window.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    n_conditions = len(conditions)
+    train = np.asarray(train).reshape(n_conditions, -1, len(times))
+    np.savez_compressed(
+        path, times=np.asarray(times), conditions=np.asarray(conditions, dtype=str),
+        train_time_courses=train, test_time_courses=np.asarray(test),
+        train_condition_mean=train.mean(axis=1),
+        decoding_time_ids=np.asarray(time_ids), method=np.asarray(method),
+        pc_use=np.asarray(component), iteration=np.asarray(0), seed=np.asarray(seed),
+        description=np.asarray(
+            'Unshuffled decoder inputs; participant-summed projections centered by '
+            'training-only condition-pooled mean time courses. Training includes '
+            'augmentation and pseudo-trial pairing; test has one held-out trace per condition.'))
+
+
 def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
                out_path=OUT_PATH, iter_perm=50, cache_dir=CACHE_DIR, model_name='LR',
                crop_arg=None, n_tr=24, meg_kind=MEG_KIND, block_scaling=BLOCK_SCALING,
-               seed=2026, classifier_params=None, band='broadband') :
+               seed=2026, classifier_params=None, band='broadband', method='PLSSVD') :
     from vs2_1_plssvd_eval_utils import (load_trial_cache, ValidationOptions,
         _temporary_fold, _fit, _raw_weights, _project)
 
+    method = method.upper()
+    if method not in ['PCA', 'PLSSVD']:
+        raise ValueError('method must be PCA or PLSSVD.')
     if method_pls not in ['mean', 'concat'] :
         raise ValueError('method_pls must be mean or concat.')
     if min(iteration, n_tr-1) < 1 or iter_perm < 0 or PC_use < 0 :
@@ -110,10 +169,11 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
         l_crop = ('_crp'+str(crop_arg['t_id_min'])+'_'+str(crop_arg['t_id_max'])+'_'
                   if crop_arg['crop'] else '')
         for modality in ['ieeg','meg'] :
-            target = out_path / modality / band / 'fullmodel' / f'{method_pls}_{data_aug_method}_{PC_use}_{model_name}full{l_crop}.csv'
-            if target.exists() :
-                raise FileExistsError(f'Output already exists: {target}')
-    # Original decodingTS fields retained for compatibility. pca_weight contains PLS weights.
+            target = out_path / modality / band / 'fullmodel' / f'{method}_{method_pls}_{data_aug_method}_{PC_use}_{model_name}full{l_crop}.csv'
+            for output in [target, target.with_name(target.stem+'_iteration0_time_courses.npz')]:
+                if output.exists():
+                    raise FileExistsError(f'Output already exists: {output}')
+    # Original decodingTS fields retained; pca_weight contains the selected projection weights.
     # band is an output label: it must match the supplied cache; no filtering is done here.
     stored = {m: {key: [] for key in ['y_pred','y_pred_sh','y_test','entropy',
         'entropy_sh','weight','weight_sh','pca_weight','pca_weight_sh']}
@@ -137,9 +197,10 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
         with _temporary_fold(trials, meg_kind, indices, matching_seed,
                              condition_mode='average' if method_pls=='mean' else 'stack') as prepared :
             fold, scalers, audit, pairing = prepared
-            model = _fit(fold['train'], PC_use+1, options)
+            fit = _fit_pca if method == 'PCA' else _fit
+            model = fit(fold['train'], PC_use+1, options)
             if model['k_max'] <= PC_use :
-                raise ValueError('Requested PLS component exceeds training rank.')
+                raise ValueError(f'Requested {method} component exceeds training rank.')
             for modality in ['ieeg', 'meg'] :
                 weights = _raw_weights(trials, fold, model, scalers, audit,
                                        meg_kind, modality, PC_use+1)
@@ -171,7 +232,14 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
                 actual = raw_test.mean(axis=0) if method_pls=='mean' else raw_test.reshape(-1)
                 # Affine preprocessing contributes only a time-invariant offset.
                 if not np.allclose(actual-actual.mean(), expected-expected.mean(), rtol=1e-4, atol=1e-4*max(1.,np.max(abs(expected)))) :
-                    raise ValueError('Trial projection disagrees with fitted PLS mapping.')
+                    raise ValueError(f'Trial projection disagrees with fitted {method} mapping.')
+                if save and i == 0:
+                    folder = out_path / modality / band / 'fullmodel'
+                    filename = (f'{method}_{method_pls}_{data_aug_method}_{PC_use}_'
+                                f'{model_name}full{l_crop}_iteration0_time_courses.npz')
+                    _save_network_time_courses(
+                        folder / filename, Train_all, Test_all, trials.times,
+                        trials.conditions, time_ids, method, PC_use, seed)
                 Train_transformed = Train_all[:,time_ids]
                 Test_transformed = Test_all[:,time_ids]
                 y_train = np.repeat([0,1], n_tr-1)
@@ -198,7 +266,7 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
                         saved['entropy'+suffix].append(float(model_clf.oob_score_))
                         saved['weight'+suffix].append(model_clf.feature_importances_.copy())
                     if j >= 0 :
-                        # Conditional classifier null: PLS is not refitted after shuffling labels.
+                        # Conditional classifier null: projection is not refitted after shuffling labels.
                         saved['pca_weight_sh'].append(model[modality+'_weights'][:,PC_use].copy())
         print(f'Decoding iteration {i+1}/{iteration}',flush=True)
 
@@ -206,6 +274,7 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
     for modality in ['ieeg','meg'] :
         sumsum = pd.DataFrame()
         sumsum['band'] = [band]
+        sumsum['method'] = [method]
         sumsum['method_pca'] = [method_pls]
         sumsum['data_aug_method'] = [data_aug_method]
         sumsum['iter'] = [iteration]
@@ -223,12 +292,12 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
                       if crop_arg['crop'] else '')
             # Avoid numpy's default truncation of large weight arrays in CSV cells.
             with np.printoptions(threshold=np.inf) :
-                sumsum.to_csv(folder / f'{method_pls}_{data_aug_method}_{PC_use}_{model_name}full{l_crop}.csv')
+                sumsum.to_csv(folder / f'{method}_{method_pls}_{data_aug_method}_{PC_use}_{model_name}full{l_crop}.csv')
     return summaries
 
 
 def mainTS(pc_use=0, model='LR', method_pls='mean', data_aug_method='mean',
-           bs_decoding=False, **kwargs) :
+           bs_decoding=False, method='PLSSVD', **kwargs) :
     # Same mainTS entry-point style; data come from the shared MEG/iEEG trial cache.
     crop_arg = {'crop':False, 't_id_min':None, 't_id_max':None}
     if bs_decoding :
@@ -236,15 +305,18 @@ def mainTS(pc_use=0, model='LR', method_pls='mean', data_aug_method='mean',
         time = load_trial_cache(kwargs.get('cache_dir',CACHE_DIR)).times
         crop_arg = {'crop':True, 't_id_min':0, 't_id_max':int(np.searchsorted(time,-0.5,side='right'))}
     return decodingTS(method_pls, data_aug_method, PC_use=pc_use,
-                      model_name=model, crop_arg=crop_arg, **kwargs)
+                      model_name=model, crop_arg=crop_arg, method=method, **kwargs)
 
 
 if __name__ == '__main__' :
-    parser = argparse.ArgumentParser(description='Decode conditions using training-only MEG/iEEG PLSSVD.')
+    parser = argparse.ArgumentParser(description='Decode conditions using training-only MEG/iEEG PCA or PLSSVD.')
+    parser.add_argument('--method', type=str.upper, choices=['PCA', 'PLSSVD'], default='PLSSVD',
+                        help='Projection method (default: PLSSVD); PCA is fitted separately per modality.')
     parser.add_argument('--band',default='broadband',help='Output band label; must match cache contents.')
     parser.add_argument('--pc_use',type=int,default=0)
     parser.add_argument('--model',choices=['LR','SVC_linear','SVC_rbf','RandomForest'],default='LR')
-    parser.add_argument('--method_pls',choices=['mean','concat'],default='mean')
+    parser.add_argument('--method_pls',choices=['mean','concat'],default='mean',
+                        help='Condition representation for either method: average or stack conditions.')
     parser.add_argument('--method_data_aug',choices=['mean','duplicat'],default='mean')
     parser.add_argument('--iteration',type=int,default=100)
     parser.add_argument('--iter_perm',type=int,default=50)
@@ -258,4 +330,4 @@ if __name__ == '__main__' :
     mainTS(args.pc_use,args.model,args.method_pls,args.method_data_aug,
         iteration=args.iteration,iter_perm=args.iter_perm,n_tr=args.n_tr,
         cache_dir=args.cache_dir,out_path=args.out_path,meg_kind=args.meg_kind,
-        block_scaling=args.block_scaling,seed=args.seed,band=args.band)
+        block_scaling=args.block_scaling,seed=args.seed,band=args.band,method=args.method)
