@@ -83,14 +83,13 @@ For centered X and Y, PLSSVD decomposes C = XᵀY/(n−1) and selects unit vecto
 
 - abs cosinus as a function fo the distance show difference. **Can we find clusters or centroid with this?**
 
-- spatial patterns with mixing trials are stable but when we change the pairing they are not (in MEG) but still give the same dynamics **How much it is different grouped by ROIs**
+- spatial patterns with mixing trials are stable but when we change the pairing they are not (in MEG) but still give the same dynamics **How much it is different grouped by ROIs**. No Rois seems to be similars.
 
 
 ## 4. Physiology of the common networks
-### 4.1 Vizualisation
 
 
-### 4.2 Decoding
+### 4.1 Decoding
 
 
 ## CCL of evidences and take home message:
