@@ -44,8 +44,8 @@ def compute_weights(output_dir=OUTPUT_DIR):
     selects MODEL. Separate PCA component numbers are independent across modalities.
     Weights remain in the preprocessed/scaled feature basis, without sign flipping.
     """
-    from coverage_matching_utils import load_dataset
-    from cov_models_utils import fit_cov_models
+    from vs1_coverage_matching_utils import load_dataset
+    from vs2_0_cov_models_utils import fit_cov_models
     import sys
     for directory in (ROOT.parent, ROOT.parent/'LB'):
         sys.path.insert(0, str(directory))
@@ -143,8 +143,7 @@ def map_to_workbench(volumes, left_surface=LEFT_SURFACE, right_surface=RIGHT_SUR
         outputs[modality]={}
         for hemisphere,surface in [('L',left_surface),('R',right_surface)]:
             volume=Path(files[hemisphere]);target=volume.with_name(volume.name.removesuffix('.nii.gz')+'.func.gii')
-            subprocess.run([executable,'-volume-to-surface-mapping',str(volume),
-                            str(surface),str(target),'-trilinear'],check=True)
+            subprocess.run([executable,'-volume-to-surface-mapping',str(volume),str(surface),str(target),'-trilinear'],check=True)
             outputs[modality][hemisphere]=target
     return outputs
 
@@ -176,3 +175,5 @@ if __name__=='__main__':
                 'coverage': OUTPUT_DIR / 'meg_coverage.nii.gz'}}
         
     print(map_to_workbench(volumes))
+
+
