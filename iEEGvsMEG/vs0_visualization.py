@@ -89,10 +89,12 @@ def create_nifti(weight_files, template=TEMPLATE_NIFTI, radius_mm=RADIUS_MM):
     import nibabel as nib
     import pandas as pd
     from scipy.spatial import cKDTree
-    if not np.isfinite(radius_mm) or radius_mm<=0:raise ValueError('radius_mm must be positive.')
+    if not np.isfinite(radius_mm) or radius_mm<=0:
+        raise ValueError('radius_mm must be positive.')
     ref=nib.load(str(template))
     if len(ref.shape)!=3:raise ValueError('Use a 3D MNI template.')
-    if ref.header.get_xyzt_units()[0]!='mm':raise ValueError('Template spatial units must be mm.')
+    if ref.header.get_xyzt_units()[0]!='mm':
+        raise ValueError('Template spatial units must be mm.')
     outputs={}
     for modality,path in weight_files.items():
         path=Path(path);table=pd.read_csv(path)
@@ -117,7 +119,9 @@ def create_nifti(weight_files, template=TEMPLATE_NIFTI, radius_mm=RADIUS_MM):
             header=ref.header.copy();header.set_data_dtype(values.dtype)
             image=nib.Nifti1Image(values.reshape(ref.shape),ref.affine,header)
             image.header.set_slope_inter(1,0)
-            nib.save(image,str(target));files[name]=target
+            nib.save(image,str(target))
+            files[name]=target
+
         outputs[modality]=files
     return outputs
 
@@ -130,7 +134,8 @@ def map_to_workbench(volumes, left_surface=LEFT_SURFACE, right_surface=RIGHT_SUR
     in wb_view. This exports surface data, not rendered screenshots.
     """
     executable=shutil.which(str(wb_command))
-    if executable is None:raise FileNotFoundError(f'Workbench executable not found: {wb_command}')
+    if executable is None:
+        raise FileNotFoundError(f'Workbench executable not found: {wb_command}')
     for surface in (left_surface,right_surface):
         if not Path(surface).is_file():raise FileNotFoundError(surface)
     outputs={}
@@ -155,7 +160,19 @@ if __name__=='__main__':
     for required in (TEMPLATE_NIFTI,LEFT_SURFACE,RIGHT_SURFACE):
         if not required.is_file():
             raise FileNotFoundError(f'Set the template paths at the top of visualization.py: {required}')
-    if shutil.which(str(WB_COMMAND)) is None:raise FileNotFoundError('Set WB_COMMAND to your Workbench executable.')
-    weights=compute_weights()
-    volumes=create_nifti(weights)
+    
+    if shutil.which(str(WB_COMMAND)) is None:
+        raise FileNotFoundError('Set WB_COMMAND to your Workbench executable.')
+    
+    #weights=compute_weights()
+    #volumes=create_nifti(weights)
+
+    volumes = {
+        'ieeg' : {'L': OUTPUT_DIR / 'ieeg_L.nii.gz', 
+                'R': OUTPUT_DIR / 'ieeg_R.nii.gz', 
+                'coverage': OUTPUT_DIR / 'ieeg_coverage.nii.gz'},
+        'meg':{'L': OUTPUT_DIR / 'meg_L.nii.gz', 
+                'R': OUTPUT_DIR / 'meg_R.nii.gz', 
+                'coverage': OUTPUT_DIR / 'meg_coverage.nii.gz'}}
+        
     print(map_to_workbench(volumes))

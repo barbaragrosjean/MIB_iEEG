@@ -7,7 +7,8 @@ PC_use is zero-based. PCA or PLSSVD is fitted on training condition data only.
 Repeated holdouts overlap: accuracy is descriptive, not independent-trial inference.
 Shuffled classifier labels are conditional controls, NOT full-pipeline null tests.
 One-row summary CSVs and first-iteration network time courses are saved by modality.
-Time-course NPZ files contain the actual centered decoder inputs before cropping,
+Time-course NPZ files contain the actual decoder inputs before cropping,
+with the same training-feature centering and block scaling as evaluation,
 with training pseudo-trials ordered by condition and one held-out trace per condition.
 Legacy pca_weight fields contain the selected projection weights; best_param contains
 fixed classifier settings. entropy retains the original model-specific meaning
@@ -104,12 +105,23 @@ def _fit_pca(train, n_components, options):
     return model
 
 
+def _projection_offset(model, scalers, weights, modality, component):
+    """Return the constant raw-space offset in evaluation's affine projection."""
+    # Raw weights already include source mapping, preprocessing scale, and block scale.
+    preprocessing = sum(
+        scalers[modality][subject][0] @ value[:, component]
+        for subject, value in weights.items())
+    feature_center = (model[modality+'_mean'] @
+                      model[modality+'_weights'][:, component]) * model[modality+'_scale']
+    return float(preprocessing + feature_center)
+
+
 def _save_network_time_courses(path, train, test, times, conditions, time_ids,
                                method, component, seed):
     """Save first-iteration, unshuffled decoder inputs in condition x trial x time order.
 
-    Traces sum participant projections after subtracting each participant's
-    training-only, condition-pooled mean time course. Training traces include
+    Traces sum participant projections and subtract the fitted, time-independent
+    preprocessing and feature-centering offset used by evaluation. Training traces include
     the same augmentation and pseudo-trial pairing used by the decoder.
     Full epochs are retained; decoding_time_ids identifies the selected window.
     """
@@ -124,8 +136,8 @@ def _save_network_time_courses(path, train, test, times, conditions, time_ids,
         decoding_time_ids=np.asarray(time_ids), method=np.asarray(method),
         pc_use=np.asarray(component), iteration=np.asarray(0), seed=np.asarray(seed),
         description=np.asarray(
-            'Unshuffled decoder inputs; participant-summed projections centered by '
-            'training-only condition-pooled mean time courses. Training includes '
+            'Unshuffled decoder inputs; participant-summed projections with evaluation '
+            'training-feature centering and block scaling; no time-course centering. Training includes '
             'augmentation and pseudo-trial pairing; test has one held-out trace per condition.'))
 
 
@@ -204,9 +216,10 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
             for modality in ['ieeg', 'meg'] :
                 weights = _raw_weights(trials, fold, model, scalers, audit,
                                        meg_kind, modality, PC_use+1)
+                projection_offset = _projection_offset(
+                    model, scalers, weights, modality, PC_use)
                 Train_all = np.zeros((2*(n_tr-1), len(trials.times)))
                 Test_all = np.zeros((2, len(trials.times)))
-                raw_test = np.zeros_like(Test_all)
                 for subject in getattr(trials, modality) :
                     parts = indices[modality][subject.subject]
                     # PROJECT before augmentation: linear averaging commutes with projection.
@@ -216,22 +229,21 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
                         # Read one trial at a time to bound memory use.
                         train_samples.append(np.stack([weights[subject.subject][:,PC_use] @ array[j] for j in train_id]))
                         test_samples.append(weights[subject.subject][:,PC_use] @ array[test_id[0]])
-                    raw_test += np.stack(test_samples)
-                    # Training-only per-participant temporal mean; cancels affine projection offsets.
-                    center = np.concatenate(train_samples).mean(axis=0)
                     joined = np.concatenate(train_samples)
                     events = [np.arange(len(train_samples[0])),
                               np.arange(len(train_samples[0]), len(joined))]
                     augmented, true_trials = DataAugmentation(joined, events, data_aug_method, n_tr-1)
                     for condition in range(2) :
                         values = augmented[condition*(n_tr-1):(condition+1)*(n_tr-1)]
-                        Train_all[condition*(n_tr-1):(condition+1)*(n_tr-1)] += values[rng.permutation(n_tr-1)] - center
-                    Test_all += np.stack(test_samples) - center
+                        Train_all[condition*(n_tr-1):(condition+1)*(n_tr-1)] += values[rng.permutation(n_tr-1)]
+                    Test_all += np.stack(test_samples)
+                # Apply the same affine projection to every trial and time point.
+                Train_all -= projection_offset
+                Test_all -= projection_offset
                 # Verify raw-space mapping against the fixed fitted feature-space projection.
                 expected = _project(fold['test'][modality], model, modality)[:,PC_use]
-                actual = raw_test.mean(axis=0) if method_pls=='mean' else raw_test.reshape(-1)
-                # Affine preprocessing contributes only a time-invariant offset.
-                if not np.allclose(actual-actual.mean(), expected-expected.mean(), rtol=1e-4, atol=1e-4*max(1.,np.max(abs(expected)))) :
+                actual = Test_all.mean(axis=0) if method_pls=='mean' else Test_all.reshape(-1)
+                if not np.allclose(actual, expected, rtol=1e-4, atol=1e-4*max(1.,np.max(abs(expected)))) :
                     raise ValueError(f'Trial projection disagrees with fitted {method} mapping.')
                 if save and i == 0:
                     folder = out_path / modality / band / 'fullmodel'
