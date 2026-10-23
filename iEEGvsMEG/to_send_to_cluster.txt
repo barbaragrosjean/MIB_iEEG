@@ -1,0 +1,6 @@
+
+submit_to_cluster -n 2 -q short.q "python vs4_1_decoding.py --pc_use 0 --model LR --meg-kind paired_coverage --iteration 100 --method PLSSVD"  --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q short.q "python vs4_1_decoding.py --pc_use 0 --model RandomForest --meg-kind paired_coverage --iteration 100 --method PLSSVD"  --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q short.q "python vs4_1_decoding.py --pc_use 0 --model LR --meg-kind paired_coverage --iteration 100 --method PCA"  --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q short.q "python vs4_1_decoding.py --pc_use 0 --model RandomForest --meg-kind paired_coverage --iteration 100 --method PCA"  --project MINDLAB2021_MEG-TempSeqAges
+ 
