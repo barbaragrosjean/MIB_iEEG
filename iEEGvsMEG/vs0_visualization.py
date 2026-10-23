@@ -32,7 +32,7 @@ TEMPLATE_NIFTI = ROOT.parent / 'templates' / 'MNI_template.nii.gz'
 LEFT_SURFACE = ROOT.parent / 'templates'/ 'ParcellationPilot.L.midthickness.32k_fs_LR.surf.gii'
 RIGHT_SURFACE = ROOT.parent / 'templates' / 'ParcellationPilot.R.midthickness.32k_fs_LR.surf.gii'
 
-WB_COMMAND = 'wb_command'          # or absolute path to the executable
+WB_COMMAND = '/Applications/ConnectomeWorkbench.app/Contents/usr/bin/wb_command'          # or absolute path to the executable
 RADIUS_MM = 4.                     # nearest-location display radius; no whole-brain extrapolation
 OUTPUT_DIR = ROOT / 'out' / 'workbench' / f'{MODEL}_{MEG_KIND}_{BLOCK_SCALING}_pc{COMPONENT:03d}'
 
