@@ -782,7 +782,7 @@ def plot_kmeans_cluster_polars(summary, title='', regions=None):
     return fig
 
 
-def plot_kmeans_hemisphere_centroids(summary, title=''):
+def plot_kmeans_hemisphere_centroids(summary, title='', *, cluster_label='K-means'):
     """Large brain map: all features and cluster-coloured left/right spatial means."""
     from matplotlib.colors import to_hex
     from matplotlib.lines import Line2D
@@ -794,7 +794,7 @@ def plot_kmeans_hemisphere_centroids(summary, title=''):
     target = members.hemisphere.iloc[0] if folded else None
     label = f'both hemispheres folded to {target}' if folded else 'left/right'
     brain=plotting.plot_glass_brain(None,figure=fig,display_mode=target[0] if folded else 'lyrz',
-        title=f'{title} · {label} spatial centroids (stars); K-means labels unchanged')
+        title=f'{title} · {label} spatial centroids (stars); {cluster_label} labels unchanged')
     brain.add_markers(members[['x','y','z']].to_numpy(),marker_color='lightgray',marker_size=5,alpha=.2)
     for cluster_id in clusters:
         group=members[members.cluster_id==cluster_id]
