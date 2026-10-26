@@ -182,9 +182,6 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
                   if crop_arg['crop'] else '')
         for modality in ['ieeg','meg'] :
             target = out_path / modality / band / 'fullmodel' / f'{method}_{method_pls}_{data_aug_method}_{PC_use}_{model_name}full{l_crop}.csv'
-            for output in [target, target.with_name(target.stem+'_iteration0_time_courses.npz')]:
-                if output.exists():
-                    raise FileExistsError(f'Output already exists: {output}')
     # Original decodingTS fields retained; pca_weight contains the selected projection weights.
     # band is an output label: it must match the supplied cache; no filtering is done here.
     stored = {m: {key: [] for key in ['y_pred','y_pred_sh','y_test','entropy',
