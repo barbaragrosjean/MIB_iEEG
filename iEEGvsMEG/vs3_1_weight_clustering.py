@@ -40,12 +40,17 @@ def input_signature(directory):
 
 
 def cluster_weights(weights, metadata, *, method='kmeans', n_clusters=5,
-                    use_thresholded=False, seed=2026, birch_threshold=0.1):
+                    use_thresholded=False, seed=2026, birch_threshold=0.1,
+                    k_min=2, k_max=10, silhouette_sample_size=2000):
     """Cluster |components 1–3| only, with no spatial input or axis scaling.
 
     BIRCH's radius is a fraction of the RMS input-vector norm, making its
     threshold interpretable across weight units without changing axis geometry.
     """
+    if n_clusters == 'auto':
+        return select_cluster_count(weights, metadata, method=method,
+            use_thresholded=use_thresholded, seed=seed, birch_threshold=birch_threshold,
+            k_min=k_min, k_max=k_max, silhouette_sample_size=silhouette_sample_size)
     from sklearn.cluster import KMeans, MiniBatchKMeans, Birch
     from sklearn.mixture import GaussianMixture
     from vs3_1_modality_specificity import spatial_metadata, threshold_weights, summarize_kmeans_regions_hemispheres
@@ -99,6 +104,73 @@ def cluster_weights(weights, metadata, *, method='kmeans', n_clusters=5,
     return summary
 
 
+def select_cluster_count(weights, metadata, *, method='kmeans', use_thresholded=False,
+                         seed=2026, birch_threshold=0.1, k_min=2, k_max=10,
+                         silhouette_sample_size=2000):
+    """Fit all candidates on all features; score a fixed seeded sample for memory bounds.
+
+    Maximize Euclidean silhouette; exact ties favor smaller k. This assesses
+    separation, not evidence against a single population or biological validity.
+    """
+    from sklearn.metrics import silhouette_score
+    from vs3_1_modality_specificity import threshold_weights
+    if not (isinstance(k_min, int) and isinstance(k_max, int) and 2 <= k_min <= k_max):
+        raise ValueError('Require 2 <= k_min <= k_max.')
+    if not isinstance(silhouette_sample_size, int) or silhouette_sample_size < 3:
+        raise ValueError('silhouette_sample_size must be at least 3.')
+    w = np.asarray(weights, float)
+    if w.ndim != 2 or w.shape[1] < 3 or not np.isfinite(w).all():
+        raise ValueError('Finite weights with at least three components are required.')
+    x = threshold_weights(w[:, :3])[0] if use_thresholded else np.abs(w[:, :3])
+    active = np.any(x != 0, axis=1)
+    x = x[active]
+    limit = min(len(x)-1, len(np.unique(x, axis=0)))
+    sample = np.sort(np.random.default_rng(seed).choice(len(x), min(len(x), silhouette_sample_size), replace=False))
+    rows, best, best_score = [], None, -np.inf
+    for k in range(k_min, k_max+1):
+        row = dict(k=k, actual_k=0, silhouette=np.nan, selected=False,
+                   n_scored=len(sample), status='too few distinct/nonzero profiles')
+        if k <= limit:
+            result = cluster_weights(weights, metadata, method=method, n_clusters=k,
+                use_thresholded=use_thresholded, seed=seed, birch_threshold=birch_threshold)
+            labels = result['memberships'].loc[active, 'cluster_id'].to_numpy()
+            row['actual_k'] = len(np.unique(labels))
+            sampled_labels = labels[sample]
+            if row['actual_k'] != k:
+                row['status'] = 'method returned fewer clusters than requested'
+            elif not 1 < len(np.unique(sampled_labels)) < len(sample):
+                row['status'] = 'silhouette undefined on scoring sample'
+            else:
+                score = float(silhouette_score(x[sample], sampled_labels))
+                row.update(silhouette=score, status='ok')
+                if score > best_score:
+                    best, best_score = result, score
+                    best_k = k
+        rows.append(row)
+    if best is None:
+        raise ValueError('No valid cluster-count candidate. Adjust range, sample size, thresholding or BIRCH threshold.')
+    for row in rows:
+        row['selected'] = row['k'] == best_k
+    best['cluster_selection'] = pd.DataFrame(rows)
+    if best_k in (k_min, k_max):
+        warnings.warn(f'Selected k={best_k} lies at the search boundary; inspect the score curve.')
+    print(f'{method}: selected k={best_k}, silhouette={best_score:.3f}', flush=True)
+    return best
+
+
+def plot_cluster_selection(result, title=''):
+    """Plot saved candidate scores without fitting."""
+    import matplotlib.pyplot as plt
+    table = result['cluster_selection']
+    fig, ax = plt.subplots(figsize=(7,4), layout='constrained')
+    ax.plot(table.k, table.silhouette, 'o-')
+    selected = table[table.selected]
+    ax.scatter(selected.k, selected.silhouette, marker='*', s=180, label='Selected k')
+    ax.set(xlabel='Number of clusters', ylabel='Mean silhouette', title=title, xticks=table.k)
+    ax.legend()
+    return fig
+
+
 def run_clustering(directory, methods=METHODS, **options):
     """Persist results under parameter-specific folders; never refit the group model."""
     directory = Path(directory)
@@ -132,7 +204,8 @@ def load_results(directory, method='kmeans', n_clusters=5, use_thresholded=False
     if config['input_signature'] != input_signature(directory):
         raise ValueError('Clustering inputs changed. Rerun vs3_1_weight_clustering.py.')
     return {m: {name: pd.read_csv(folder / m / f'{name}.csv') for name in
-                ('memberships', 'hemisphere_centroids', 'region_contributions')}
+                (('memberships', 'hemisphere_centroids', 'region_contributions', 'cluster_selection')
+                 if n_clusters == 'auto' else ('memberships', 'hemisphere_centroids', 'region_contributions'))}
             for m in config['modalities']}
 
 
@@ -169,10 +242,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input-dir', type=Path, default='/users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/modality_specificity/paired_coverage/plssvd/absolute_weight_clustering' )
     parser.add_argument('--methods', nargs='+', choices=METHODS, default=list(METHODS))
-    parser.add_argument('--n-clusters', type=int, default=5)
+    parser.add_argument('--n-clusters', type=lambda value: 'auto' if value == 'auto' else int(value), default='auto')
+    parser.add_argument('--k-min', type=int, default=2)
+    parser.add_argument('--k-max', type=int, default=10)
+    parser.add_argument('--silhouette-sample-size', type=int, default=2000)
     parser.add_argument('--threshold', action='store_true')
     parser.add_argument('--seed', type=int, default=2026)
     parser.add_argument('--birch-threshold', type=float, default=0.1)
     args = parser.parse_args()
     run_clustering(args.input_dir, args.methods, n_clusters=args.n_clusters,
-                   use_thresholded=args.threshold, seed=args.seed, birch_threshold=args.birch_threshold)
+                   use_thresholded=args.threshold, seed=args.seed, birch_threshold=args.birch_threshold,
+                   k_min=args.k_min, k_max=args.k_max, silhouette_sample_size=args.silhouette_sample_size)
