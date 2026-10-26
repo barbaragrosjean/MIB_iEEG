@@ -711,7 +711,7 @@ def plot_modality_glasser(datasets, values, *, ieeg_radius_mm=0., sigma=4., view
 
 
 def summarize_kmeans_regions_hemispheres(result, labelled_metadata, *,
-                                       fold_hemispheres=False, target_hemisphere='left'):
+                                       fold_hemispheres=False, target_hemisphere='left', components=(1,2,3)):
     """Summarize existing K-means labels without refitting or relabelling.
 
     Polar means use absolute selected-input weights (three components). Spatial
@@ -742,7 +742,7 @@ def summarize_kmeans_regions_hemispheres(result, labelled_metadata, *,
             n_left=int((frame.original_hemisphere=='left').sum()),n_right=int((frame.original_hemisphere=='right').sum()),
             n_midline=int((frame.original_hemisphere=='midline').sum())))
         for region, group in frame.groupby('region_shared',sort=False):
-            for component in (1,2,3):
+            for component in components:
                 region_rows.append(dict(cluster_id=cluster_id,region=region,component=component,
                     n_channels=len(group),mean_abs_weight=float(group[f'input_weight_{component}'].abs().mean())))
         for hemisphere in ((target_hemisphere,) if fold_hemispheres else ('left','right')):
@@ -752,7 +752,7 @@ def summarize_kmeans_regions_hemispheres(result, labelled_metadata, *,
             center_rows.append(dict(cluster_id=cluster_id,hemisphere=hemisphere,n_sources=len(group),
                 n_subjects=group.subject.nunique(),centroid_x=center[0],centroid_y=center[1],centroid_z=center[2],
                 spatial_rms_mm=float(np.sqrt(np.mean(np.sum((xyz-center)**2,axis=1)))) if len(xyz) else np.nan,
-                **{f'weight_centroid_{c}':group[f'input_weight_{c}'].mean() for c in (1,2,3)}))
+                **{f'weight_centroid_{c}':group[f'input_weight_{c}'].mean() for c in components}))
     return dict(regional_weights=pd.DataFrame(region_rows),hemisphere_centroids=pd.DataFrame(center_rows),
                 hemisphere_audit=pd.DataFrame(audit_rows),memberships=members)
 
