@@ -1,6 +1,6 @@
 """Offline clustering of absolute model weights; notebook-facing export/load/plots.
 
-Run: python vs3_1_weight_clustering.py --input-dir PATH --methods kmeans gmm birch minibatch
+Run: python vs3_1_weight_clustering.py --methods kmeans gmm birch minibatch" --project MINDLAB2021_MEG-TempSeqAges
 """
 from pathlib import Path
 import argparse
@@ -167,7 +167,7 @@ def plot_results(result, title=''):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--input-dir', type=Path, required=True)
+    parser.add_argument('--input-dir', type=Path, default='/users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/modality_specificity/paired_coverage/plssvd/absolute_weight_clustering' )
     parser.add_argument('--methods', nargs='+', choices=METHODS, default=list(METHODS))
     parser.add_argument('--n-clusters', type=int, default=5)
     parser.add_argument('--threshold', action='store_true')
