@@ -43,7 +43,9 @@ def _mean(values, axis=0):
 def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=None,
                              n_permutations=199, n_bootstrap=500, seed=2026,
                              patch_radius_mm=15., patch_similarity=.9, min_patch_size=3,
-                             patch_resamples=30, min_norm_quantile=0.):
+                             patch_resamples=30, min_norm_quantile=0.,
+                             spatial_scope="within_participant", fold_hemispheres=False,
+                             target_hemisphere="left"):
     """Matched-pair curves, paired participant bootstrap, and hemisphere patches.
 
     weights has iEEG and MEG entries from the same selected group-model fit.
@@ -52,8 +54,22 @@ def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=
     Curves use only pairs in the same distance bin in both modalities. All
     nonempty participant curves receive equal weight. Patch stability is source
     deletion stability (80% retained), NOT trial-bootstrap fit reproducibility.
+    spatial_scope='pooled' treats retained participants as one analysis block:
+    cross-participant pairs and patches are allowed, separately per hemisphere.
+    Shuffling and magnitude variance use that pooled hemisphere. Every pair has
+    equal weight; participant bootstrap intervals are unavailable. Deduplication
+    remains within original participants because their measurements are distinct.
+    fold_hemispheres reflects x to -abs(x) (left) or abs(x) (right), after
+    original-coordinate matching exclusions and deduplication. Original sides
+    then share distance, shuffle, variance and patch groups within each block.
+    Weights and input metadata are unchanged; zero folded distances are excluded.
+
     """
-    from vs3_1_modality_specificity import spatial_metadata
+    from vs3_1_modality_specificity import spatial_metadata, fold_coordinates
+    if target_hemisphere not in ('left', 'right'):
+        raise ValueError("target_hemisphere must be 'left' or 'right'.")
+    if spatial_scope not in ('within_participant', 'pooled'):
+        raise ValueError("spatial_scope must be 'within_participant' or 'pooled'.")
     edges = np.asarray(np.arange(0, 101, 10) if bin_edges is None else bin_edges, float)
     if edges.ndim != 1 or len(edges)<2 or edges[0]!=0 or np.any(np.diff(edges)<=0) or not np.isfinite(edges).all():
         raise ValueError('Distance edges must be finite, start at zero, and strictly increase.')
@@ -86,13 +102,19 @@ def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=
     original = np.flatnonzero(keep)
     im,mm=im.loc[keep].reset_index(drop=True),mm.loc[keep].reset_index(drop=True)
     xyz={m:a[keep] for m,a in xyz.items()};norm={m:a[keep] for m,a in norm.items()}
+    original_xyz={m:a.copy() for m,a in xyz.items()}
+    if fold_hemispheres:
+        xyz={m:fold_coordinates(a, target_hemisphere) for m,a in xyz.items()}
     unit={m:w[m][keep]/norm[m][:,None] for m in w}
-    subjects=im.subject.to_numpy(); hemisphere=np.where(xyz['iEEG'][:,0]<0,'left','right')
+    owners=im.subject.to_numpy()
+    subjects=owners if spatial_scope == 'within_participant' else np.full(len(im), 'pooled', dtype=object)
+    hemisphere=np.where(xyz['iEEG'][:,0]<0,'left','right')
     names=list(pd.unique(subjects));nb=len(edges)-1
     if not names:raise ValueError('No valid matched features remain.')
     curves=np.full((2,len(names),n_permutations+1,2,nb),np.nan)
     counts=np.zeros((len(names),nb),int); rng=np.random.default_rng(seed)
     audit=[];patches=[];membership=[]
+    contributing_subjects=[set() for _ in range(nb)]
     for si,subject in enumerate(names):
         total=np.zeros((2,n_permutations+1,2,nb));number=np.zeros(nb,int)
         for side in ('left','right'):
@@ -106,6 +128,9 @@ def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=
             good &= (distances['iEEG']>0)&(distances['MEG']>0)
             a,b,bi=a[good],b[good],bins['iEEG'][good]
             number+=np.bincount(bi,minlength=nb)
+            for bin_index in np.unique(bi):
+                selected=bi==bin_index
+                contributing_subjects[bin_index].update(owners[rows[np.r_[a[selected],b[selected]]]])
             for mi,m in enumerate(('iEEG','MEG')):
                 u=unit[m][rows];mag=norm[m][rows];variance=np.var(mag)
                 for repeat in range(n_permutations+1):
@@ -144,11 +169,17 @@ def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=
                         medoid_x=xyz[m][rows][medoid,0],medoid_y=xyz[m][rows][medoid,1],medoid_z=xyz[m][rows][medoid,2]))
                     for loc in local:
                         idx=rows[loc]
-                        membership.append(dict(modality=m,subject=subject,patch_id=patch_id,feature_row=original[idx],
+                        membership.append(dict(modality=m,subject=subject,participant=owners[idx],patch_id=patch_id,feature_row=original[idx],
+                            original_hemisphere='left' if original_xyz[m][idx,0]<0 else 'right',
+                            original_x=original_xyz[m][idx,0],original_y=original_xyz[m][idx,1],original_z=original_xyz[m][idx,2],
                             x=xyz[m][idx,0],y=xyz[m][idx,1],z=xyz[m][idx,2]))
         counts[si]=number
         curves[:,si]=np.divide(total,number[None,None,None,:],out=np.full_like(total,np.nan),where=number[None,None,None,:]>0)
-        audit.append(dict(subject=subject,n_original_features=int((spatial_metadata(ieeg_metadata).subject.astype(str)==subject).sum()),n_matched_features=int((subjects==subject).sum()),n_matched_pairs=int(number.sum())))
+        audit.append(dict(subject=subject,spatial_scope=spatial_scope,
+            fold_hemispheres=bool(fold_hemispheres),target_hemisphere=target_hemisphere if fold_hemispheres else 'native',
+            n_participants=len(pd.unique(owners[subjects==subject])),
+            n_original_features=len(ieeg_metadata) if spatial_scope == 'pooled' else int((spatial_metadata(ieeg_metadata).subject.astype(str)==subject).sum()),
+            n_matched_features=int((subjects==subject).sum()),n_matched_pairs=int(number.sum())))
     table=[];subject_table=[]
     excess=curves[:,:,0,0]-_mean(curves[:,:,1:,0],axis=2)
     boot=rng.integers(0,len(names),(n_bootstrap,len(names)))
@@ -158,7 +189,8 @@ def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=
                 subject_table.append(dict(modality=m,subject=sub,bin=b,n_pairs=counts[si,b],excess_similarity=excess[mi,si,b]))
             observed=_mean(curves[mi,:,0,0,b]);null=_mean(curves[mi,:,1:,0,b],axis=0)
             bs=_mean(excess[mi,:,b][boot],axis=1);finite=bs[np.isfinite(bs)]
-            table.append(dict(modality=m,distance_mm=(edges[b]+edges[b+1])/2,n_subjects=int(np.isfinite(excess[mi,:,b]).sum()),
+            table.append(dict(modality=m,distance_mm=(edges[b]+edges[b+1])/2,n_subjects=len(contributing_subjects[b]),
+                n_analysis_units=int(np.isfinite(excess[mi,:,b]).sum()),
                 similarity=observed,null_mean=_mean(null),excess_similarity=_mean(excess[mi,:,b]),
                 ci_low=np.quantile(finite,.025) if len(finite) and np.isfinite(excess[mi,:,b]).sum()>1 else np.nan,
                 ci_high=np.quantile(finite,.975) if len(finite) and np.isfinite(excess[mi,:,b]).sum()>1 else np.nan,
@@ -171,7 +203,7 @@ def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=
             ci_high=np.quantile(finite,.975) if len(finite) and np.isfinite(delta[:,b]).sum()>1 else np.nan))
     return dict(curves=pd.DataFrame(table),subject_curves=pd.DataFrame(subject_table),difference=pd.DataFrame(difference),
         patches=pd.DataFrame(patches,columns=['modality','subject','hemisphere','patch_id','n_sources','coherence','boundary_similarity','contrast','radius_rms_mm','diameter_mm','stability','medoid_x','medoid_y','medoid_z']),
-        memberships=pd.DataFrame(membership,columns=['modality','subject','patch_id','feature_row','x','y','z']),audit=pd.DataFrame(audit))
+        memberships=pd.DataFrame(membership,columns=['modality','subject','participant','patch_id','feature_row','original_hemisphere','original_x','original_y','original_z','x','y','z']),audit=pd.DataFrame(audit))
 
 
 def run_analysis(ieeg, *, model='plssvd', n_components=3, seed=2026,
@@ -182,7 +214,7 @@ def run_analysis(ieeg, *, model='plssvd', n_components=3, seed=2026,
     if model not in ('plssvd','separate_pca','joint_pca'):raise ValueError('Select plssvd, separate_pca or joint_pca.')
     if not isinstance(n_components,int) or n_components<2:raise ValueError('Select at least two components.')
     meg=load_dataset('paired_coverage',reference=ieeg,seed=seed,condition_mode='average')
-    config=dict(model=model,n_components=n_components,seed=seed,block_scaling=block_scaling,options=options,meg_kind='paired_coverage',version=1)
+    config=dict(model=model,n_components=n_components,seed=seed,block_scaling=block_scaling,options=options,meg_kind='paired_coverage',version=3)
     digest=hashlib.sha256(json.dumps(config,sort_keys=True,default=lambda v:np.asarray(v).tolist()).encode())
     for dataset in (ieeg,meg):
         digest.update(dataset.metadata.to_csv(index=False).encode())
@@ -204,6 +236,9 @@ def run_analysis(ieeg, *, model='plssvd', n_components=3, seed=2026,
 def plot_analysis(result, title=''):
     import matplotlib.pyplot as plt
     from nilearn import plotting
+    folded=('fold_hemispheres' in result['audit'] and result['audit'].fold_hemispheres.eq(True).all())
+    if folded:
+        title += f" · folded to {result['audit'].target_hemisphere.iloc[0]}"
     fig,axes=plt.subplots(2,2,figsize=(13,9),layout='constrained')
     for m,color in [('iEEG','navy'),('MEG','darkorange')]:
         t=result['curves'].query('modality == @m')
@@ -217,7 +252,9 @@ def plot_analysis(result, title=''):
     axes[1,1].fill_between(t.distance_mm,t.ci_low,t.ci_high,color='gray',alpha=.25)
     for ax,ylabel in zip(axes.flat,['Absolute-profile cosine similarity','Excess similarity over spatial shuffle','Normalized magnitude semivariance','Excess similarity: MEG − iEEG']):
         ax.set(xlabel='Distance (mm; matched bins)',ylabel=ylabel);ax.axhline(0,color='gray',lw=.7)
-    axes[0,0].legend();fig.suptitle(title+' · dashed: shuffled baseline; bands: paired-participant bootstrap')
+    pooled=('spatial_scope' in result['audit'] and result['audit'].spatial_scope.eq('pooled').all())
+    uncertainty='pooled hemispheres; no participant confidence intervals' if pooled else 'bands: paired-participant bootstrap'
+    axes[0,0].legend();fig.suptitle(title+' · dashed: shuffled baseline; '+uncertainty)
     brainfig=plt.figure(figsize=(16,7));brain=plotting.plot_glass_brain(None,figure=brainfig,display_mode='lyrz',title=title+' · MEG weight patches; stars: spatial medoids')
     members=result['memberships'].query("modality == 'MEG'");patches=result['patches'].query("modality == 'MEG'")
     from matplotlib.colors import to_hex

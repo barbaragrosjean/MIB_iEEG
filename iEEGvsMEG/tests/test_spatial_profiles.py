@@ -27,6 +27,87 @@ class SpatialProfilesTests(unittest.TestCase):
         self.assertTrue(r['curves'].magnitude_semivariance.isna().all())
 
 
+    def test_pooled_scope_pairs_and_uncertainty(self):
+        # Two nearby left-hemisphere pairs belonging to different participants;
+        # right-hemisphere points must never form pairs with the left cloud.
+        im=pd.DataFrame(dict(subject=['a','a','b','b','a','b'],
+            x=[-20.,-20.,-20.,-20.,20.,20.], y=[0.,2.,4.,6.,0.,3.], z=np.zeros(6)))
+        mm=im.copy();mm['ieeg_subject']=im.subject
+        w=np.array([[1.,0.],[1.,0.],[0.,1.],[0.,1.],[1.,1.],[1.,1.]])
+        options=dict(bin_edges=[0,10,100],n_permutations=3,n_bootstrap=4,patch_resamples=0)
+        within=analyze_spatial_profiles({'iEEG':w,'MEG':w},im,mm,**options)
+        pooled=analyze_spatial_profiles({'iEEG':w,'MEG':w},im,mm,spatial_scope='pooled',**options)
+        self.assertEqual(within['audit'].n_matched_pairs.sum(),2)
+        self.assertEqual(pooled['audit'].n_matched_pairs.sum(),7)  # C(4,2) + C(2,2)
+        first=pooled['curves'].query("modality == 'iEEG'").iloc[0]
+        self.assertAlmostEqual(first.similarity,3/7)
+        self.assertEqual(first.n_subjects,2)
+        self.assertEqual(first.n_analysis_units,1)
+        self.assertTrue(pooled['curves'][['ci_low','ci_high']].isna().all().all())
+        self.assertTrue(pooled['difference'][['ci_low','ci_high']].isna().all().all())
+        self.assertEqual(pooled['audit'].iloc[0].n_original_features,6)
+        displaced=mm.copy();displaced.loc[5,'y']=12.
+        matched=analyze_spatial_profiles({'iEEG':w,'MEG':w},im,displaced,spatial_scope='pooled',**options)
+        self.assertEqual(matched['audit'].n_matched_pairs.sum(),6)
+        self.assertAlmostEqual(matched['curves'].iloc[0].similarity,2/6)
+        explicit=analyze_spatial_profiles({'iEEG':w,'MEG':w},im,mm,spatial_scope='within_participant',**options)
+        for key in within:
+            pd.testing.assert_frame_equal(within[key],explicit[key])
+
+    def test_pooled_patches_preserve_participant_ownership(self):
+        # Identical coordinates in different people remain distinct measurements.
+        im=pd.DataFrame(dict(subject=['a','a','b','b'],x=[-20.]*4,
+                             y=[0.,2.,0.,4.],z=[0.]*4))
+        mm=im.copy();mm['ieeg_subject']=im.subject
+        result=analyze_spatial_profiles({'iEEG':np.ones((4,2)),'MEG':np.ones((4,2))},
+            im,mm,spatial_scope='pooled',n_permutations=3,n_bootstrap=3,patch_resamples=0)
+        self.assertEqual(result['audit'].n_matched_features.iloc[0],4)
+        self.assertEqual(result['audit'].n_matched_pairs.iloc[0],5)  # exclude co-located pair
+        self.assertEqual(set(result['memberships'].participant),{'a','b'})
+        self.assertTrue(result['patches'].subject.eq('pooled').all())
+        self.assertTrue(result['patches'].n_sources.eq(4).all())
+        with self.assertRaisesRegex(ValueError,'spatial_scope'):
+            analyze_spatial_profiles({},im,mm,spatial_scope='invalid')
+
+    def test_hemisphere_folding_coordinates_pairs_and_scopes(self):
+        im=pd.DataFrame(dict(subject=['a','a','b','b'],x=[-20.,20.,-20.,20.],
+                             y=[0.,2.,4.,6.],z=[1.]*4))
+        mm=im.copy();mm['ieeg_subject']=im.subject
+        before_im=im.copy(deep=True);before_mm=mm.copy(deep=True)
+        weights={'iEEG':np.ones((4,2)), 'MEG':np.ones((4,2))}
+        options=dict(bin_edges=[0,10,100],n_permutations=3,n_bootstrap=3,patch_resamples=0)
+        native=analyze_spatial_profiles(weights,im,mm,**options)
+        explicit=analyze_spatial_profiles(weights,im,mm,fold_hemispheres=False,**options)
+        for key in native:
+            pd.testing.assert_frame_equal(native[key],explicit[key])
+        self.assertEqual(native['audit'].n_matched_pairs.sum(),0)
+        within=analyze_spatial_profiles(weights,im,mm,fold_hemispheres=True,**options)
+        self.assertEqual(within['audit'].n_matched_pairs.sum(),2)
+        results=[]
+        for target,sign in [('left',-1),('right',1)]:
+            r=analyze_spatial_profiles(weights,im,mm,spatial_scope='pooled',
+                fold_hemispheres=True,target_hemisphere=target,**options)
+            results.append(r)
+            self.assertEqual(r['audit'].n_matched_pairs.sum(),6)
+            self.assertTrue(r['patches'].hemisphere.eq(target).all())
+            self.assertTrue(r['patches'].n_sources.eq(4).all())
+            members=r['memberships']
+            np.testing.assert_allclose(members.x,sign*np.abs(members.original_x))
+            np.testing.assert_allclose(members.y,members.original_y)
+            np.testing.assert_allclose(members.z,members.original_z)
+            self.assertEqual(set(members.original_hemisphere),{'left','right'})
+            np.testing.assert_allclose(r['patches'].medoid_x,sign*20.)
+        pd.testing.assert_frame_equal(results[0]['curves'],results[1]['curves'])
+        pd.testing.assert_frame_equal(im,before_im)
+        pd.testing.assert_frame_equal(mm,before_mm)
+        # Reflection-created co-locations must not be mistaken for duplicate sources.
+        im.loc[1,'y']=0.;mm.loc[1,'y']=0.
+        r=analyze_spatial_profiles(weights,im,mm,spatial_scope='pooled',fold_hemispheres=True,**options)
+        self.assertEqual(r['audit'].n_matched_features.sum(),4)
+        self.assertEqual(r['audit'].n_matched_pairs.sum(),5)
+        with self.assertRaisesRegex(ValueError,'target_hemisphere'):
+            analyze_spatial_profiles(weights,im,mm,target_hemisphere='invalid',**options)
+
     def test_no_chaining(self):
         theta=np.array([0,.35,.7]);unit=np.c_[np.cos(theta),np.sin(theta)]
         labels,_,_= _patch_labels(np.c_[np.arange(3),np.zeros((3,2))],unit,1.1,.9)
