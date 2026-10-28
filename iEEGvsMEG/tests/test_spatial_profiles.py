@@ -113,4 +113,32 @@ class SpatialProfilesTests(unittest.TestCase):
         labels,_,_= _patch_labels(np.c_[np.arange(3),np.zeros((3,2))],unit,1.1,.9)
         self.assertGreater(len(np.unique(labels)),1)
 
+    def test_magnitude_patches_compare_norms_not_component_proportions(self):
+        im=pd.DataFrame(dict(subject=['a']*6,x=[-20.]*6,y=np.arange(6)*2.,z=[0.]*6))
+        mm=im.copy();mm['ieeg_subject']=im.subject
+        w=np.array([[1.,0.],[0.,-1.],[1.,0.],[10.,0.],[0.,10.],[10.,0.]])
+        result=analyze_spatial_profiles({'iEEG':w,'MEG':w},im,mm,
+            patch_metric='magnitude_semivariance',patch_max_semivariance=.1,
+            n_permutations=3,n_bootstrap=3,patch_resamples=3)
+        self.assertEqual(len(result['patches']),4)
+        self.assertTrue(result['patches'].n_sources.eq(3).all())
+        np.testing.assert_allclose(result['patches'].within_magnitude_semivariance,0)
+        self.assertTrue((result['patches'].magnitude_contrast>0).all())
+        self.assertTrue((result['patches'].coherence<.9).all())
+        saved=result['weights'].query("modality == 'iEEG'").sort_values('feature_row')
+        np.testing.assert_allclose(saved[['weight_1','weight_2']],w)
+        for row in result['patches'].itertuples():
+            members=result['memberships'].query('modality == @row.modality and patch_id == @row.patch_id')
+            self.assertEqual(len(np.unique(np.linalg.norm(w[members.feature_row],axis=1))),1)
+
+    def test_magnitude_no_chaining_and_zero_variance(self):
+        xyz=np.c_[np.arange(3),np.zeros((3,2))]
+        unit=np.tile([1.,0.],(3,1))
+        labels,_,_=_patch_labels(xyz,unit,1.1,.9,metric='magnitude_semivariance',
+            magnitude=np.array([1.,2.,3.]),magnitude_variance=1.,max_semivariance=.6)
+        self.assertEqual(len(np.unique(labels)),2)  # Adjacent pairs pass; endpoints fail.
+        labels,_,_=_patch_labels(xyz,unit,1.1,.9,metric='magnitude_semivariance',
+            magnitude=np.ones(3),magnitude_variance=0.,max_semivariance=.6)
+        self.assertEqual(len(np.unique(labels)),3)
+
 if __name__=='__main__':unittest.main()
