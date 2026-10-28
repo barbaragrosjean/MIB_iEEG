@@ -199,7 +199,8 @@ def plot_gradients(result, title=''):
         ax.axvspan(0, result['fit_radius_mm'], alpha=.05, color='black', label='Fit range (peak excluded)')
         ax.set(xlabel=f'Euclidean distance from {peak.peak_id} (mm)', ylabel='Component weight norm',
                title=f'{title} · {peak.peak_id} · feature row {peak.feature_row} · {fit.fit_status}',
-               xlim=(-1, max(1, profile.distance_mm.max()) * 1.02))
+               xlim=(-1, max(1, profile.distance_mm.max()) * 1.02),
+               ylim=(0, 1.05 * profile.weight_norm.max()))
         ax.grid(alpha=.15)
         ax.legend(fontsize=8)
         figures[peak.peak_id] = fig
