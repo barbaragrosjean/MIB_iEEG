@@ -6,6 +6,39 @@ from vs3_1_gradients import (analyze_gradients, fit_decay, gaussian_decay,
 
 
 class GradientTests(unittest.TestCase):
+    def test_folding_retains_features_and_changes_distance_geometry(self):
+        m = pd.DataFrame(dict(x=[-30., 30., -30., 30.], y=[0., 0., 10., 20.],
+                              z=[0.] * 4, subject=['a', 'b', 'a', 'b']))
+        before = m.copy(deep=True)
+        w = np.array([[4.], [3.], [2.], [1.]])
+        options = dict(n_components=1, neighborhood_mm=None, top_percent=50)
+        native = analyze_gradients(w, m, **options)['pooled']
+        left = analyze_gradients(w, m, fold_hemispheres=True, **options)['pooled']
+        right = analyze_gradients(w, m, fold_hemispheres=True,
+                                  target_hemisphere='right', **options)['pooled']
+        pd.testing.assert_frame_equal(m, before)
+        self.assertEqual(len(left['features']), 4)
+        np.testing.assert_array_equal(left['features'].original_x, m.x)
+        np.testing.assert_array_equal(left['features'].weight_norm, w[:, 0])
+        np.testing.assert_array_equal(left['features'].x, -30.)
+        np.testing.assert_array_equal(right['features'].x, 30.)
+        self.assertEqual(native['profiles']['P1'].distance_mm.iloc[1], 60.)
+        np.testing.assert_allclose(left['profiles']['P1'].distance_mm, [0., 0., 10., 20.])
+        np.testing.assert_allclose(left['profiles']['P1'].distance_mm,
+                                   right['profiles']['P1'].distance_mm)
+        self.assertFalse(left['profiles']['P1'].in_fit_radius.iloc[1])
+        self.assertEqual(left['other_maxima']['P1'].distance_mm.iloc[0], 0.)
+        # Reflection also changes which features compete for a local maximum.
+        local = analyze_gradients(w, m, n_components=1, fold_hemispheres=True,
+                                  neighborhood_mm=15.)['pooled']
+        self.assertEqual(local['maxima'].feature_row.tolist(), [0])
+        within = analyze_gradients(w, m, spatial_scope='within_subject',
+                                   fold_hemispheres=True, **options)
+        self.assertEqual(set(within), {'a', 'b'})
+        self.assertEqual(len(within['a']['features']), 2)
+        with self.assertRaisesRegex(ValueError, 'target_hemisphere'):
+            analyze_gradients(w, m, target_hemisphere='invalid', **options)
+
     def test_subject_summary_equal_weight_and_shared_range(self):
         def result(baseline, distances, status='ok'):
             return dict(profiles={'P1': pd.DataFrame(dict(

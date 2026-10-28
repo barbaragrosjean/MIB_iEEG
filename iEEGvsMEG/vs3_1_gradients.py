@@ -65,7 +65,7 @@ def fit_decay(distance, amplitude):
 
 def analyze_gradients(weights, metadata, *, n_components=3, spatial_scope='pooled',
                       neighborhood_mm=15., top_percent=5., max_peaks=None, min_neighbors=1,
-                      fit_radius_mm=60.):
+                      fit_radius_mm=60., fold_hemispheres=False, target_hemisphere='left'):
     """Find local maxima, rank them, and fit their radial amplitude profiles.
 
     A maximum has no larger norm within neighborhood_mm. Equal-norm neighbors
@@ -76,12 +76,17 @@ def analyze_gradients(weights, metadata, *, n_components=3, spatial_scope='poole
     Distances to *all* other detected maxima are retained for red plot lines.
     Within-subject analysis restricts features from the same group fit; it does
     not refit the model separately. Input rows must remain in weight row order.
+    Folding reflects x to -abs(x) (left) or abs(x) (right) before peak detection
+    and distance computation. All rows/weights are retained, including locations
+    that coincide after reflection. Original coordinates remain in original_*.
     """
     w = np.asarray(weights, float)
     if w.ndim != 2 or not isinstance(n_components, (int, np.integer)) or not 1 <= n_components <= w.shape[1]:
         raise ValueError('n_components must be between 1 and the fitted component count.')
     if spatial_scope not in ('pooled', 'within_subject'):
         raise ValueError("spatial_scope must be 'pooled' or 'within_subject'.")
+    if target_hemisphere not in ('left', 'right'):
+        raise ValueError("target_hemisphere must be 'left' or 'right'.")
     if ((neighborhood_mm is not None and (not np.isfinite(neighborhood_mm) or neighborhood_mm <= 0))
             or not np.isfinite(fit_radius_mm) or fit_radius_mm <= 0):
         raise ValueError('Neighborhood and fit radii must be finite and positive.')
@@ -97,6 +102,12 @@ def analyze_gradients(weights, metadata, *, n_components=3, spatial_scope='poole
     xyz = table[['x', 'y', 'z']].to_numpy(float)
     if not np.isfinite(xyz).all() or not np.isfinite(w[:, :n_components]).all():
         raise ValueError('Selected weights and MNI coordinates must be finite.')
+    for index, axis in enumerate(('x', 'y', 'z')):
+        table[f'original_{axis}'] = xyz[:, index]
+    table['original_hemisphere'] = np.where(xyz[:, 0] < 0, 'left',
+                                          np.where(xyz[:, 0] > 0, 'right', 'midline'))
+    if fold_hemispheres:
+        table['x'] = (-1 if target_hemisphere == 'left' else 1) * np.abs(xyz[:, 0])
     table['feature_row'] = np.arange(len(table))
     table['weight_norm'] = np.linalg.norm(w[:, :n_components], axis=1)
     if spatial_scope == 'within_subject':
@@ -153,7 +164,9 @@ def analyze_gradients(weights, metadata, *, n_components=3, spatial_scope='poole
             other_peaks[peak.peak_id] = others
         results[str(scope)] = dict(features=group, maxima=peaks, selected_maxima=selected,
                                    profiles=profiles, fits=pd.DataFrame(fits), other_maxima=other_peaks,
-                                   fit_radius_mm=fit_radius_mm, n_components=n_components)
+                                   fit_radius_mm=fit_radius_mm, n_components=n_components,
+                                   fold_hemispheres=bool(fold_hemispheres),
+                                   target_hemisphere=target_hemisphere if fold_hemispheres else 'native')
     return results
 
 
@@ -163,6 +176,8 @@ def plot_gradients(result, title='', *, include_profiles=True):
     from nilearn import plotting
 
     figures = {}
+    if result.get('fold_hemispheres', False):
+        title += f' · folded {result["target_hemisphere"]}'
     features, peaks = result['features'], result['selected_maxima']
     fig = plt.figure(figsize=(12, 4))
     brain = plotting.plot_glass_brain(None, figure=fig, display_mode='ortho',
@@ -253,6 +268,10 @@ def plot_subject_gradients(scopes, title='', *, show_other_maxima=True):
     from matplotlib.lines import Line2D
 
     subjects = list(scopes)
+    folded_sides = {r['target_hemisphere'] for r in scopes.values()
+                    if r.get('fold_hemispheres', False)}
+    if folded_sides:
+        title += ' · folded ' + '/'.join(sorted(folded_sides))
     cmap = plt.get_cmap('tab20' if len(subjects) <= 20 else 'turbo')
     colors = {subject: cmap(i if len(subjects) <= 20 else i / max(1, len(subjects) - 1))
               for i, subject in enumerate(subjects)}
