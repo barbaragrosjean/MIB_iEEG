@@ -157,7 +157,7 @@ def analyze_gradients(weights, metadata, *, n_components=3, spatial_scope='poole
     return results
 
 
-def plot_gradients(result, title=''):
+def plot_gradients(result, title='', *, include_profiles=True):
     """One brain overview and one radial scatter plot per selected maximum."""
     import matplotlib.pyplot as plt
     from nilearn import plotting
@@ -177,6 +177,8 @@ def plot_gradients(result, title=''):
         fig.text(.02 + .19 * (index % 5), .02 - .04 * (index // 5),
                  f'{peak.peak_id}: row {peak.feature_row}', color=colors(index % 10), fontsize=9)
     figures['brain'] = fig
+    if not include_profiles:
+        return figures
     for index, peak in enumerate(peaks.itertuples()):
         profile = result['profiles'][peak.peak_id]
         fit = result['fits'].set_index('peak_id').loc[peak.peak_id]
@@ -204,4 +206,109 @@ def plot_gradients(result, title=''):
         ax.grid(alpha=.15)
         ax.legend(fontsize=8)
         figures[peak.peak_id] = fig
+    return figures
+
+
+def summarize_subject_gradients(scopes, peak_id, n_points=200):
+    """Equal-subject mean and sample SD of same-rank Gaussian fits.
+
+    Only fits with status 'ok' contribute. Predictions are restricted to the
+    intersection of the subjects' observed positive-distance fitting ranges.
+    Thus the contributing subjects are constant along the summary curve, with
+    no extrapolation. Peak ranks do not establish anatomical correspondence.
+    """
+    fits, ranges, subjects = [], [], []
+    for subject, result in scopes.items():
+        if peak_id not in result['profiles']:
+            continue
+        fit = result['fits'].set_index('peak_id').loc[peak_id]
+        if fit.fit_status != 'ok' or not np.isfinite(
+                [fit.baseline, fit.amplitude, fit.sigma_mm]).all():
+            continue
+        profile = result['profiles'][peak_id]
+        distances = profile.loc[profile.in_fit_radius, 'distance_mm']
+        if distances.empty:
+            continue
+        subjects.append(subject)
+        fits.append(fit)
+        ranges.append((distances.min(), distances.max()))
+    empty = dict(distance_mm=np.array([]), mean=np.array([]), std=np.array([]),
+                 subjects=subjects, n_subjects=len(subjects))
+    if not fits:
+        return empty
+    start, end = max(r[0] for r in ranges), min(r[1] for r in ranges)
+    if start >= end:
+        return empty
+    distance = np.linspace(start, end, n_points)
+    curves = np.array([gaussian_decay(distance, f.baseline, f.amplitude, f.sigma_mm)
+                       for f in fits])
+    return dict(distance_mm=distance, mean=curves.mean(axis=0),
+                std=curves.std(axis=0, ddof=1) if len(curves) > 1 else np.full(n_points, np.nan),
+                subjects=subjects, n_subjects=len(subjects))
+
+
+def plot_subject_gradients(scopes, title='', *, show_other_maxima=True):
+    """Overlay subjects by peak rank, with matching scatter/fit colors."""
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    subjects = list(scopes)
+    cmap = plt.get_cmap('tab20' if len(subjects) <= 20 else 'turbo')
+    colors = {subject: cmap(i if len(subjects) <= 20 else i / max(1, len(subjects) - 1))
+              for i, subject in enumerate(subjects)}
+    peak_ids = sorted({p for r in scopes.values() for p in r['profiles']},
+                      key=lambda p: int(p[1:]))
+    figures = {}
+    for peak_id in peak_ids:
+        fig, ax = plt.subplots(figsize=(12, 6), layout='constrained')
+        ymax, xmax, n_valid, n_plotted = 0., 0., 0, 0
+        has_other_maxima = False
+        for subject, result in scopes.items():
+            if peak_id not in result['profiles']:
+                continue
+            n_plotted += 1
+            profile = result['profiles'][peak_id]
+            fit = result['fits'].set_index('peak_id').loc[peak_id]
+            color = colors[subject]
+            valid = fit.fit_status == 'ok' and np.isfinite(
+                [fit.baseline, fit.amplitude, fit.sigma_mm]).all()
+            label = str(subject) if valid else f'{subject} ({fit.fit_status})'
+            ax.scatter(profile.distance_mm, profile.weight_norm, color=color,
+                       s=12, alpha=.3, label=label)
+            ymax = max(ymax, profile.weight_norm.max())
+            xmax = max(xmax, profile.distance_mm.max())
+            distances = profile.loc[profile.in_fit_radius, 'distance_mm']
+            if valid and len(distances):
+                d = np.linspace(distances.min(), distances.max(), 200)
+                ax.plot(d, gaussian_decay(d, fit.baseline, fit.amplitude, fit.sigma_mm),
+                        color=color, linewidth=1.6, alpha=.85)
+                n_valid += 1
+            if show_other_maxima:
+                for other in result['other_maxima'][peak_id].itertuples():
+                    ax.axvline(other.distance_mm, color='red', alpha=.12,
+                               linewidth=.7, linestyle='--', zorder=0)
+                    has_other_maxima = True
+        summary = summarize_subject_gradients(scopes, peak_id)
+        if len(summary['distance_mm']):
+            ax.plot(summary['distance_mm'], summary['mean'], color='black', linewidth=2.8,
+                    label=f'Mean fitted curve (n={summary["n_subjects"]})', zorder=5)
+            if summary['n_subjects'] >= 2:
+                ax.fill_between(summary['distance_mm'], summary['mean'] - summary['std'],
+                                summary['mean'] + summary['std'], color='black', alpha=.15,
+                                label='Between-subject ±1 SD', zorder=1)
+        else:
+            ax.text(.98, .97, 'No valid fits with a shared distance range',
+                    transform=ax.transAxes, ha='right', va='top', fontsize=9)
+        ax.set(xlabel=f'Euclidean distance from each subject’s {peak_id} (mm)',
+               ylabel='Component weight norm',
+               title=f'{title} · {peak_id} (within-subject rank) · {n_valid}/{n_plotted} valid fits',
+               xlim=(-1, max(1, xmax) * 1.02), ylim=(0, 1.05 * ymax))
+        ax.grid(alpha=.15)
+        handles, labels = ax.get_legend_handles_labels()
+        if has_other_maxima:
+            handles.append(Line2D([], [], color='red', linestyle='--', linewidth=.7))
+            labels.append('Other maxima: within-subject distances')
+        ax.legend(handles, labels, loc='upper left', bbox_to_anchor=(1.01, 1),
+                  fontsize=8, frameon=False)
+        figures[peak_id] = fig
     return figures

@@ -1,10 +1,33 @@
 import unittest
 import numpy as np
 import pandas as pd
-from vs3_1_gradients import analyze_gradients, fit_decay, gaussian_decay
+from vs3_1_gradients import (analyze_gradients, fit_decay, gaussian_decay,
+                           summarize_subject_gradients)
 
 
 class GradientTests(unittest.TestCase):
+    def test_subject_summary_equal_weight_and_shared_range(self):
+        def result(baseline, distances, status='ok'):
+            return dict(profiles={'P1': pd.DataFrame(dict(
+                distance_mm=distances, in_fit_radius=np.ones(len(distances), dtype=bool)))},
+                fits=pd.DataFrame([dict(peak_id='P1', fit_status=status,
+                                        baseline=baseline, amplitude=2., sigma_mm=10.)]))
+        # Different numbers of observations must not alter subject weights.
+        scopes = {'a': result(1., [1., 10., 20.]),
+                  'b': result(3., np.arange(5., 31.)),
+                  'bad': result(100., [1., 20.], 'weakly_identified_or_boundary'),
+                  'missing_rank': dict(profiles={})}
+        s = summarize_subject_gradients(scopes, 'P1')
+        self.assertEqual(s['subjects'], ['a', 'b'])
+        self.assertEqual((s['distance_mm'][0], s['distance_mm'][-1]), (5., 20.))
+        np.testing.assert_allclose(s['mean'], gaussian_decay(s['distance_mm'], 2., 2., 10.))
+        np.testing.assert_allclose(s['std'], np.sqrt(2.))
+        single = summarize_subject_gradients({'a': scopes['a']}, 'P1')
+        self.assertTrue(np.isnan(single['std']).all())
+        self.assertEqual(len(summarize_subject_gradients(scopes, 'P2')['mean']), 0)
+        scopes['b'] = result(3., [21., 30.])
+        self.assertEqual(len(summarize_subject_gradients(scopes, 'P1')['mean']), 0)
+
     def metadata(self, n):
         return pd.DataFrame(dict(x=np.arange(n, dtype=float), y=np.zeros(n),
                                  z=np.zeros(n), subject=['a'] * n))
