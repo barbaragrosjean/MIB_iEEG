@@ -411,7 +411,7 @@ def plot_pooled_gradients(result, title=''):
 GRADIENT_MODELS = ('linear', 'quadratic', 'gaussian', 'exponential')
 GRADIENT_PARAMETERS = {
     'linear': ('slope', 'Slope (weight norm / mm)'),
-    'quadratic': ('curvature', 'Curvature 2q (weight norm / mm²)'),
+    'quadratic': ('curvature', 'Curvature −2c (weight norm / mm²)'),
     'gaussian': ('sigma_mm', 'Gaussian σ (mm)'),
     'exponential': ('tau_mm', 'Exponential τ (mm)'),
 }
@@ -420,9 +420,11 @@ GRADIENT_PARAMETERS = {
 def fit_gradient_models(distance, amplitude, models=GRADIENT_MODELS):
     """Fit identical positive-distance observations with four descriptive models.
 
-    Linear: b + m*d; quadratic: b + m*d + q*d²; Gaussian:
+    Linear: b + m*d; quadratic: b - c*d² (c >= 0); Gaussian:
     b + a*exp(-d²/(2*sigma²)); exponential: b + a*exp(-d/tau).
-    Decay models constrain b,a >= 0 and width > 0. Polynomials are unconstrained.
+    Decay models constrain b,a >= 0 and width > 0. Linear is unconstrained.
+    Quadratic has its vertex at zero; its height b is fitted, not fixed to the
+    excluded peak observation. A flat boundary solution is flagged, not a decay.
     Adjusted R² = 1 - (1-R²)*(n-1)/(n-p), where p includes the intercept.
     This is an in-sample complexity adjustment, not spatial validation.
     """
@@ -436,7 +438,7 @@ def fit_gradient_models(distance, amplitude, models=GRADIENT_MODELS):
     x, y = x[keep], y[keep]
     rows = []
     for model in models:
-        p = 2 if model == 'linear' else 3
+        p = 2 if model in ('linear', 'quadratic') else 3
         row = dict(model=model, n_parameters=p, n_fit=len(x),
                    fit_status='insufficient_data', r_squared=np.nan,
                    adjusted_r_squared=np.nan, rmse=np.nan,
@@ -448,23 +450,36 @@ def fit_gradient_models(distance, amplitude, models=GRADIENT_MODELS):
             row['fit_status'] = 'constant_amplitude'
         elif model in ('gaussian', 'exponential'):
             row.update(fit_decay(x, y, model=model))
+        elif model == 'quadratic':
+            # With a free intercept, bounded least squares has a closed form:
+            # regress on squared distance and project its coefficient onto q<=0.
+            # Scaling changes units only; do not shift the vertex away from zero.
+            scale = np.max(x)
+            z = (x/scale)**2
+            centered = z-z.mean()
+            coefficient = min(0., float(centered @ (y-y.mean()) / (centered @ centered)))
+            baseline = y.mean()-coefficient*z.mean()
+            predicted = baseline+coefficient*z
+            error = np.sum((y-predicted)**2)
+            row.update(fit_status='ok' if coefficient < 0 else 'no_decay_boundary',
+                       baseline=baseline, slope=0., curvature=2*coefficient/scale**2,
+                       r_squared=1-error/np.sum((y-y.mean())**2),
+                       rmse=np.sqrt(error/len(y)))
         else:
             # Center/scale distance for numerical stability, then restore mm units.
             center, scale = x.mean(), np.ptp(x)
             z = (x - center) / scale
-            degree = 1 if model == 'linear' else 2
-            design = np.polynomial.polynomial.polyvander(z, degree)
+            design = np.polynomial.polynomial.polyvander(z, 1)
             coefficients, _, rank, _ = np.linalg.lstsq(design, y, rcond=None)
             if rank < p:
                 row['fit_status'] = 'rank_deficient'
             else:
                 predicted = design @ coefficients
                 error = np.sum((y - predicted) ** 2)
-                q = coefficients[2] / scale**2 if degree == 2 else 0.
-                slope = coefficients[1] / scale - 2 * q * center
-                baseline = coefficients[0] - coefficients[1] * center / scale + q * center**2
+                slope = coefficients[1] / scale
+                baseline = coefficients[0] - slope * center
                 row.update(fit_status='ok', baseline=baseline, slope=slope,
-                           curvature=2*q if degree == 2 else np.nan,
+                           curvature=np.nan,
                            r_squared=1-error/np.sum((y-y.mean())**2),
                            rmse=np.sqrt(error/len(y)))
         if np.isfinite(row['r_squared']):
@@ -576,7 +591,7 @@ def predict_gradient_fit(distance, fit, model):
     if model == 'linear':
         return fit.baseline + fit.slope*d
     if model == 'quadratic':
-        return fit.baseline + fit.slope*d + .5*fit.curvature*d*d
+        return fit.baseline + .5*fit.curvature*d*d
     raise ValueError(f'Unknown model: {model}')
 
 

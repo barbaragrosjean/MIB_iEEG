@@ -57,7 +57,7 @@ class RadiusSearchTests(unittest.TestCase):
     def test_actual_grid_and_subject_aggregation(self):
         x = np.tile(np.arange(40.), 2)
         metadata = pd.DataFrame(dict(x=x, y=0., z=0., subject=['a']*40+['b']*40))
-        weights = np.r_[5-.03*np.arange(40.), 9-.05*np.arange(40.)][:, None]
+        weights = np.r_[5-.001*np.arange(40.)**2, 9-.002*np.arange(40.)**2][:, None]
         for metric in ('quadratic', 'semivariance'):
             out = radius_search(weights, metadata, neighborhood_radii=[5, 10], fit_radii=[10, 20],
                 n_components=1, spatial_scope='within_subject', fold_hemispheres=True,

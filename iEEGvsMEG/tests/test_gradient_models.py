@@ -41,11 +41,29 @@ class GradientModelTests(unittest.TestCase):
                 fig.canvas.draw()
                 plt.close(fig)
 
+    def test_quadratic_vertex_and_no_decay_boundary(self):
+        from vs3_1_gradients import predict_gradient_fit
+        x = np.linspace(1, 40, 80)
+        y = 5-.001*x*x + np.random.default_rng(12).normal(0, .02, len(x))
+        fit = fit_gradient_models(x, y, ['quadratic']).iloc[0]
+        self.assertEqual(fit.n_parameters, 2)
+        self.assertEqual(fit.slope, 0.)
+        self.assertLess(fit.curvature, 0.)
+        d = np.linspace(0, 40, 200)
+        predictions = predict_gradient_fit(d, fit, 'quadratic')
+        self.assertEqual(np.argmax(predictions), 0)
+        self.assertTrue((np.diff(predictions) < 0).all())
+        self.assertAlmostEqual(fit.adjusted_r_squared, 1-(1-fit.r_squared)*79/78)
+        rising = fit_gradient_models(x, 2+.001*x*x, ['quadratic']).iloc[0]
+        self.assertEqual(rising.fit_status, 'no_decay_boundary')
+        self.assertEqual(rising.curvature, 0.)
+        self.assertAlmostEqual(rising.baseline, np.mean(2+.001*x*x))
+
     def test_parameter_recovery_and_adjustment(self):
         x = np.linspace(1, 50, 80)
         cases = [
             ('linear', 4-.03*x, 'slope', -.03),
-            ('quadratic', 4-.03*x+.0004*x*x, 'curvature', .0008),
+            ('quadratic', 4-.0004*x*x, 'curvature', -.0008),
             ('gaussian', gaussian_decay(x, .2, 2, 12), 'sigma_mm', 12),
             ('exponential', exponential_decay(x, .2, 2, 12), 'tau_mm', 12),
         ]
