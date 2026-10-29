@@ -167,7 +167,7 @@ def plot_radius_search(results, *, candidates=None, title=''):
     lo, hi = (float(values.min()), float(values.max())) if len(values) else (0., 1.)
     if lo == hi:
         hi = lo+max(1e-6, abs(lo)*.01)
-    norm = Normalize(lo, hi)
+    norm = Normalize(0, 1)
     for ax, (modality, result) in zip(axes.flat, results.items()):
         grid = result['grid'].copy()
         matrix = grid.pivot(index='neighborhood_mm', columns='fit_radius_mm', values='value').sort_index().sort_index(axis=1)
