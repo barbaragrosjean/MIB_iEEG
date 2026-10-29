@@ -15,18 +15,26 @@ def gaussian_decay(distance, baseline, amplitude, sigma):
     return baseline + amplitude * np.exp(-0.5 * (distance / sigma) ** 2)
 
 
-def fit_decay(distance, amplitude):
+def exponential_decay(distance, baseline, amplitude, tau):
+    return baseline + amplitude * np.exp(-distance / tau)
+
+
+def fit_decay(distance, amplitude, *, model='gaussian'):
     """Fit nonnegative baseline/amplitude and positive width, excluding the peak.
 
     R² and RMSE are in-sample descriptive diagnostics, not normality tests.
     Excluding zero-distance points avoids forcing the fit through the selected
     maximum. Multiple starts reduce sensitivity to the initial width.
     """
+    if model not in ('gaussian', 'exponential'):
+        raise ValueError("model must be 'gaussian' or 'exponential'.")
+    decay = gaussian_decay if model == 'gaussian' else exponential_decay
+    width_name = 'sigma_mm' if model == 'gaussian' else 'tau_mm'
     distance, amplitude = np.asarray(distance), np.asarray(amplitude)
     keep = (distance > 0) & np.isfinite(distance) & np.isfinite(amplitude)
     x, y = distance[keep], amplitude[keep]
     result = dict(fit_status='insufficient_data', n_fit=len(x), baseline=np.nan,
-                  amplitude=np.nan, sigma_mm=np.nan, r_squared=np.nan, rmse=np.nan)
+                  amplitude=np.nan, r_squared=np.nan, rmse=np.nan, **{width_name: np.nan})
     if len(x) < 6 or len(np.unique(x)) < 4:
         return result
     if np.ptp(y) <= np.finfo(float).eps * max(1., np.max(y)):
@@ -40,11 +48,11 @@ def fit_decay(distance, amplitude):
             with warnings.catch_warnings():
                 warnings.simplefilter('error', OptimizeWarning)
                 pars, _ = curve_fit(
-                    gaussian_decay, x, y / scale,
+                    decay, x, y / scale,
                     p0=(np.min(y) / scale, np.ptp(y) / scale, width),
                     bounds=([0, 0, 1e-6], [np.inf, np.inf, upper]),
                     maxfev=20000)
-            error = np.sum((y / scale - gaussian_decay(x, *pars)) ** 2)
+            error = np.sum((y / scale - decay(x, *pars)) ** 2)
             candidates.append((error, pars))
         except (RuntimeError, ValueError, OptimizeWarning):
             continue
@@ -57,7 +65,7 @@ def fit_decay(distance, amplitude):
     if sigma >= upper * .99 or sigma <= 1e-5 or height < 1e-6:
         status = 'weakly_identified_or_boundary'
     result.update(fit_status=status, baseline=baseline * scale,
-                  amplitude=height * scale, sigma_mm=sigma,
+                  amplitude=height * scale, **{width_name: sigma},
                   r_squared=1 - error / np.sum((y / scale - np.mean(y / scale)) ** 2),
                   rmse=np.sqrt(error / len(y)) * scale)
     return result
@@ -359,7 +367,7 @@ def plot_pooled_gradients(result, title=''):
         valid = fit.fit_status == 'ok' and np.isfinite(
             [fit.baseline, fit.amplitude, fit.sigma_mm]).all()
         label = peak.peak_id if valid else f'{peak.peak_id} ({fit.fit_status})'
-        ax.scatter(profile.distance_mm, profile.weight_norm, s=12, alpha=.25,
+        ax.scatter(profile.distance_mm, profile.weight_norm, s=3, alpha=.25,
                    color=color, label=label, rasterized=True)
         ax.scatter([0], [peak.weight_norm], marker='*', s=140,
                    color=color, edgecolors='black', zorder=4)
@@ -394,3 +402,164 @@ def plot_pooled_gradients(result, title=''):
     if len(peaks):
         ax.legend(loc='upper left', bbox_to_anchor=(1.01, 1), fontsize=8, frameon=False)
     return fig
+
+
+GRADIENT_MODELS = ('linear', 'quadratic', 'gaussian', 'exponential')
+GRADIENT_PARAMETERS = {
+    'linear': ('slope', 'Slope (weight norm / mm)'),
+    'quadratic': ('curvature', 'Curvature 2q (weight norm / mm²)'),
+    'gaussian': ('sigma_mm', 'Gaussian σ (mm)'),
+    'exponential': ('tau_mm', 'Exponential τ (mm)'),
+}
+
+
+def fit_gradient_models(distance, amplitude, models=GRADIENT_MODELS):
+    """Fit identical positive-distance observations with four descriptive models.
+
+    Linear: b + m*d; quadratic: b + m*d + q*d²; Gaussian:
+    b + a*exp(-d²/(2*sigma²)); exponential: b + a*exp(-d/tau).
+    Decay models constrain b,a >= 0 and width > 0. Polynomials are unconstrained.
+    Adjusted R² = 1 - (1-R²)*(n-1)/(n-p), where p includes the intercept.
+    This is an in-sample complexity adjustment, not spatial validation.
+    """
+    models = tuple(models)
+    if not models or len(set(models)) != len(models) or set(models) - set(GRADIENT_MODELS):
+        raise ValueError(f'Choose distinct models from {GRADIENT_MODELS}.')
+    x, y = np.asarray(distance, float), np.asarray(amplitude, float)
+    if x.ndim != 1 or x.shape != y.shape:
+        raise ValueError('Distances and amplitudes must be matching 1D arrays.')
+    keep = (x > 0) & np.isfinite(x) & np.isfinite(y)
+    x, y = x[keep], y[keep]
+    rows = []
+    for model in models:
+        p = 2 if model == 'linear' else 3
+        row = dict(model=model, n_parameters=p, n_fit=len(x),
+                   fit_status='insufficient_data', r_squared=np.nan,
+                   adjusted_r_squared=np.nan, rmse=np.nan,
+                   slope=np.nan, curvature=np.nan, sigma_mm=np.nan, tau_mm=np.nan)
+        if len(x) < 6 or len(np.unique(x)) < 4:
+            rows.append(row)
+            continue
+        if np.ptp(y) <= np.finfo(float).eps * max(1., np.max(np.abs(y))):
+            row['fit_status'] = 'constant_amplitude'
+        elif model in ('gaussian', 'exponential'):
+            row.update(fit_decay(x, y, model=model))
+        else:
+            # Center/scale distance for numerical stability, then restore mm units.
+            center, scale = x.mean(), np.ptp(x)
+            z = (x - center) / scale
+            degree = 1 if model == 'linear' else 2
+            design = np.polynomial.polynomial.polyvander(z, degree)
+            coefficients, _, rank, _ = np.linalg.lstsq(design, y, rcond=None)
+            if rank < p:
+                row['fit_status'] = 'rank_deficient'
+            else:
+                predicted = design @ coefficients
+                error = np.sum((y - predicted) ** 2)
+                q = coefficients[2] / scale**2 if degree == 2 else 0.
+                slope = coefficients[1] / scale - 2 * q * center
+                baseline = coefficients[0] - coefficients[1] * center / scale + q * center**2
+                row.update(fit_status='ok', baseline=baseline, slope=slope,
+                           curvature=2*q if degree == 2 else np.nan,
+                           r_squared=1-error/np.sum((y-y.mean())**2),
+                           rmse=np.sqrt(error/len(y)))
+        if np.isfinite(row['r_squared']):
+            row['adjusted_r_squared'] = 1-(1-row['r_squared'])*(len(x)-1)/(len(x)-p)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def compare_gradient_models(gradient_results, models=GRADIENT_MODELS):
+    """Reuse stored peak selection, fitting masks, scope and hemisphere geometry."""
+    frames = []
+    models = tuple(models)
+    for modality, scopes in gradient_results.items():
+        for scope, result in scopes.items():
+            within_subject = not result['features']['scope'].eq('pooled').all()
+            for peak in result['selected_maxima'].itertuples():
+                profile = result['profiles'][peak.peak_id]
+                selected = profile.loc[profile.in_fit_radius & (profile.distance_mm > 0)]
+                frame = fit_gradient_models(selected.distance_mm, selected.weight_norm, models)
+                frame['modality'], frame['scope'], frame['peak_id'] = modality, scope, peak.peak_id
+                frame['within_subject'] = within_subject
+                frame['fold_hemispheres'] = result.get('fold_hemispheres', False)
+                frame['target_hemisphere'] = result.get('target_hemisphere', 'native')
+                frame['fit_radius_mm'] = result['fit_radius_mm']
+                frame['n_components'] = result['n_components']
+                frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    table = pd.concat(frames, ignore_index=True)
+    table['valid_fit'] = table.fit_status.eq('ok') & np.isfinite(table.adjusted_r_squared)
+    # All model plots use the same peaks, avoiding different failure subsets.
+    table['matched_peak'] = table.groupby(['modality', 'scope', 'peak_id']).valid_fit.transform('all')
+    return table
+
+
+def plot_gradient_model_comparison(table, models=GRADIENT_MODELS, title=''):
+    """One shared fit-quality figure and one parameter figure per model.
+
+    Only peaks valid for every requested model enter the plots. Within-subject
+    results use subject medians over those matched peaks; pooled results use
+    individual peaks. Dots show analysis units, boxes their distribution.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    models = tuple(models)
+    modalities = list(table.modality.unique()) if not table.empty else ['iEEG', 'MEG']
+    colors = {m: {'iEEG': 'navy', 'MEG': 'darkorange'}.get(m, f'C{i}')
+              for i, m in enumerate(modalities)}
+    metrics = ['adjusted_r_squared'] + [GRADIENT_PARAMETERS[m][0] for m in models]
+    units = []
+    if not table.empty:
+        for (modality, within), frame in table[table.matched_peak].groupby(['modality', 'within_subject']):
+            if within:
+                frame = frame.groupby(['scope', 'model'])[metrics].median().reset_index()
+            else:
+                frame = frame.copy()
+            frame['modality'] = modality
+            units.append(frame)
+    data = pd.concat(units, ignore_index=True) if units else pd.DataFrame()
+    rng = np.random.default_rng(2026)
+
+    def draw(ax, values, position, color):
+        values = np.asarray(values, float)
+        values = values[np.isfinite(values)]
+        if len(values):
+            ax.boxplot([values], positions=[position], widths=.22, showfliers=False,
+                       manage_ticks=False, patch_artist=True,
+                       boxprops=dict(facecolor=color, alpha=.18),
+                       medianprops=dict(color=color, linewidth=2))
+            ax.scatter(position + rng.uniform(-.07, .07, len(values)), values,
+                       s=8, alpha=.5, color=color, rasterized=True)
+        ax.text(position, .02, f'n={len(values)}', transform=ax.get_xaxis_transform(),
+                ha='center', fontsize=8, color=color)
+
+    fig, ax = plt.subplots(figsize=(11, 5), layout='constrained')
+    for i, model in enumerate(models):
+        for j, modality in enumerate(modalities):
+            position = i + (j-(len(modalities)-1)/2) * .3
+            values = (data.loc[(data.model == model) & (data.modality == modality), 'adjusted_r_squared']
+                      if not data.empty else [])
+            draw(ax, values, position, colors[modality])
+    ax.set(xticks=range(len(models)), xticklabels=[m.capitalize() for m in models],
+           ylabel='Adjusted R² (in-sample)', title=f'{title} · goodness of fit',
+           xlim=(-.6, len(models)-.4))
+    ax.axhline(0, color='gray', linewidth=.7, linestyle='--')
+    ax.legend(handles=[Line2D([], [], marker='o', linestyle='', color=colors[m], label=m)
+                       for m in modalities])
+    ax.grid(axis='y', alpha=.15)
+    figures = {'goodness_of_fit': fig}
+    for model in models:
+        metric, label = GRADIENT_PARAMETERS[model]
+        fig, ax = plt.subplots(figsize=(7, 5), layout='constrained')
+        for j, modality in enumerate(modalities):
+            values = (data.loc[(data.model == model) & (data.modality == modality), metric]
+                      if not data.empty else [])
+            draw(ax, values, j, colors[modality])
+        ax.set(xticks=range(len(modalities)), xticklabels=modalities, ylabel=label,
+               title=f'{title} · {model.capitalize()}', xlim=(-.6, len(modalities)-.4))
+        ax.grid(axis='y', alpha=.15)
+        figures[f'{model}_parameter'] = fig
+    return figures
