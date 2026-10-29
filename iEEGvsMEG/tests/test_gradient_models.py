@@ -11,6 +11,36 @@ from vs3_1_gradients import (fit_gradient_models, exponential_decay, gaussian_de
 
 
 class GradientModelTests(unittest.TestCase):
+    def test_selected_model_and_combined_subject_plots(self):
+        from unittest.mock import patch, MagicMock
+        from vs3_1_gradients import analyze_gradients, plot_combined_gradients
+        x = np.tile(np.arange(30.), 2)
+        metadata = pd.DataFrame(dict(x=x, y=np.zeros(60), z=np.zeros(60),
+                                     subject=['a']*30 + ['b']*30))
+        weights = np.r_[4-.03*np.arange(30.), 6-.05*np.arange(30.)][:, None]
+        for model in ('linear', 'quadratic', 'gaussian', 'exponential'):
+            scopes = analyze_gradients(weights, metadata, n_components=1,
+                spatial_scope='within_subject', neighborhood_mm=None, top_percent=10,
+                fit_radius_mm=20, fit_model=model)
+            self.assertTrue(all(r['fit_model'] == model for r in scopes.values()))
+            self.assertTrue(all(r['fits'].model.eq(model).all() for r in scopes.values()))
+            brain = MagicMock()
+            with patch('nilearn.plotting.plot_glass_brain', return_value=brain):
+                figures = plot_combined_gradients(scopes)
+            self.assertEqual(set(figures), {'brain', 'all_peak_fits'})
+            calls = brain.add_markers.call_args_list
+            self.assertEqual(len(calls), 4)  # Features + stars for each subject.
+            self.assertEqual(calls[0].kwargs['marker_color'], calls[1].kwargs['marker_color'])
+            self.assertNotEqual(calls[0].kwargs['marker_color'], calls[2].kwargs['marker_color'])
+            if model == 'linear':
+                ax = figures['all_peak_fits'].axes[0]
+                self.assertEqual(len(ax.lines), 7)  # Six peak curves and one mean.
+                mean = next(line for line in ax.lines if line.get_label().startswith('Mean fit'))
+                self.assertIn('2 subjects', mean.get_label())
+            for fig in figures.values():
+                fig.canvas.draw()
+                plt.close(fig)
+
     def test_parameter_recovery_and_adjustment(self):
         x = np.linspace(1, 50, 80)
         cases = [

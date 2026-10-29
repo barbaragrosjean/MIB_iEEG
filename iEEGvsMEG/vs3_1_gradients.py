@@ -73,7 +73,8 @@ def fit_decay(distance, amplitude, *, model='gaussian'):
 
 def analyze_gradients(weights, metadata, *, n_components=3, spatial_scope='pooled',
                       neighborhood_mm=15., top_percent=5., max_peaks=None, min_neighbors=1,
-                      fit_radius_mm=60., fold_hemispheres=False, target_hemisphere='left'):
+                      fit_radius_mm=60., fold_hemispheres=False, target_hemisphere='left',
+                      fit_model='gaussian'):
     """Find local maxima, rank them, and fit their radial amplitude profiles.
 
     A maximum has no larger norm within neighborhood_mm. Equal-norm neighbors
@@ -88,6 +89,8 @@ def analyze_gradients(weights, metadata, *, n_components=3, spatial_scope='poole
     and distance computation. All rows/weights are retained, including locations
     that coincide after reflection. Original coordinates remain in original_*.
     """
+    if fit_model not in GRADIENT_MODELS:
+        raise ValueError(f'Choose fit_model from {GRADIENT_MODELS}.')
     w = np.asarray(weights, float)
     if w.ndim != 2 or not isinstance(n_components, (int, np.integer)) or not 1 <= n_components <= w.shape[1]:
         raise ValueError('n_components must be between 1 and the fitted component count.')
@@ -164,7 +167,8 @@ def analyze_gradients(weights, metadata, *, n_components=3, spatial_scope='poole
             profile['distance_mm'] = distance
             profile['in_fit_radius'] = (distance > 0) & (distance <= fit_radius_mm)
             profiles[peak.peak_id] = profile
-            fit = fit_decay(distance[distance <= fit_radius_mm], norms[distance <= fit_radius_mm])
+            fit = fit_gradient_models(distance[distance <= fit_radius_mm],
+                                      norms[distance <= fit_radius_mm], [fit_model]).iloc[0].to_dict()
             fits.append(dict(peak_id=peak.peak_id, feature_row=peak.feature_row, **fit))
             others = peaks.loc[peaks.peak_id != peak.peak_id].copy()
             others['distance_mm'] = np.linalg.norm(
@@ -172,7 +176,7 @@ def analyze_gradients(weights, metadata, *, n_components=3, spatial_scope='poole
             other_peaks[peak.peak_id] = others
         results[str(scope)] = dict(features=group, maxima=peaks, selected_maxima=selected,
                                    profiles=profiles, fits=pd.DataFrame(fits), other_maxima=other_peaks,
-                                   fit_radius_mm=fit_radius_mm, n_components=n_components,
+                                   fit_radius_mm=fit_radius_mm, n_components=n_components, fit_model=fit_model,
                                    fold_hemispheres=bool(fold_hemispheres),
                                    target_hemisphere=target_hemisphere if fold_hemispheres else 'native')
     return results
@@ -560,3 +564,112 @@ def plot_gradient_model_comparison(table, models=GRADIENT_MODELS, title=''):
         ax.grid(axis='y', alpha=.15)
         figures[f'{model}_parameter'] = fig
     return figures
+
+
+def predict_gradient_fit(distance, fit, model):
+    """Evaluate the selected radial model in native distance/weight units."""
+    d = np.asarray(distance)
+    if model == 'gaussian':
+        return gaussian_decay(d, fit.baseline, fit.amplitude, fit.sigma_mm)
+    if model == 'exponential':
+        return exponential_decay(d, fit.baseline, fit.amplitude, fit.tau_mm)
+    if model == 'linear':
+        return fit.baseline + fit.slope*d
+    if model == 'quadratic':
+        return fit.baseline + fit.slope*d + .5*fit.curvature*d*d
+    raise ValueError(f'Unknown model: {model}')
+
+
+def plot_combined_gradients(scopes, title='', *, show_other_maxima=False):
+    """One subject-colored brain and one all-peak radial overlay per modality.
+
+    Within-subject summaries first average peaks per subject, then average
+    subjects equally; pooled summaries weight peaks equally. All summary
+    predictions use the common observed fitting interval. SD is descriptive.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.colors import to_hex
+    from nilearn import plotting
+
+    models = {r.get('fit_model', 'gaussian') for r in scopes.values()}
+    if len(models) != 1:
+        raise ValueError('All scopes must use the same fit model.')
+    model = next(iter(models))
+    within = any(not r['features'].scope.eq('pooled').all() for r in scopes.values())
+
+    def owners(frame):
+        if within:
+            return frame.scope.astype(str)
+        key = next((c for c in ('meg_subject', 'subject', 'ieeg_subject') if c in frame), None)
+        return frame[key].fillna('Unassigned').astype(str) if key else pd.Series('Unassigned', index=frame.index)
+
+    subjects = list(dict.fromkeys(s for r in scopes.values() for s in owners(r['features'])))
+    cmap = plt.get_cmap('tab20' if len(subjects) <= 20 else 'turbo')
+    colors = {s: to_hex(cmap(i if len(subjects) <= 20 else i/max(1, len(subjects)-1)))
+              for i, s in enumerate(subjects)}
+    folded = {r['target_hemisphere'] for r in scopes.values() if r.get('fold_hemispheres')}
+    heading = f'{title} · {model}' + (' · folded ' + '/'.join(sorted(folded)) if folded else '')
+    brain_fig = plt.figure(figsize=(14, 6))
+    brain = plotting.plot_glass_brain(None, figure=brain_fig, display_mode='ortho',
+                                      title=f'{heading} · all subjects and selected peaks')
+    fig, ax = plt.subplots(figsize=(12, 6), layout='constrained')
+    entries, xmax, ymax, total = [], 1., 0., 0
+    for scope, result in scopes.items():
+        features, peaks = result['features'], result['selected_maxima']
+        for subject, color in colors.items():
+            points = features.loc[owners(features).eq(subject), ['x', 'y', 'z']]
+            stars = peaks.loc[owners(peaks).eq(subject), ['x', 'y', 'z']]
+            if len(points):
+                brain.add_markers(points.to_numpy(), marker_color=color, marker_size=5, alpha=.3)
+            if len(stars):
+                brain.add_markers(stars.to_numpy(), marker_color=color, marker='*', marker_size=140)
+        fits = result['fits'].set_index('peak_id') if len(peaks) else None
+        for peak in peaks.itertuples():
+            total += 1
+            profile = result['profiles'][peak.peak_id]
+            fit = fits.loc[peak.peak_id]
+            # Points use the observed feature's subject, curves the peak's subject.
+            owner = owners(peaks.loc[peaks.peak_id.eq(peak.peak_id)]).iloc[0]
+            for subject, group in profile.groupby(owners(profile), sort=False):
+                ax.scatter(group.distance_mm, group.weight_norm, color=colors[subject],
+                           s=3, alpha=.25, rasterized=True)
+            ax.scatter([0], [peak.weight_norm], color=colors[owner], marker='*', s=100, edgecolors='black')
+            xmax = max(xmax, profile.distance_mm.max())
+            ymax = max(ymax, profile.weight_norm.max())
+            distances = profile.loc[profile.in_fit_radius & (profile.distance_mm > 0), 'distance_mm']
+            if fit.fit_status == 'ok' and len(distances) and distances.min() < distances.max():
+                d = np.linspace(distances.min(), distances.max(), 200)
+                y = predict_gradient_fit(d, fit, model)
+                if np.isfinite(y).all():
+                    ax.plot(d, y, color=colors[owner], alpha=.8, linewidth=1.3)
+                    entries.append((str(scope), fit, distances.min(), distances.max()))
+            if show_other_maxima:
+                for distance in result['other_maxima'][peak.peak_id].distance_mm:
+                    ax.axvline(distance, color='red', alpha=.1, linewidth=.5, linestyle='--')
+    if entries and max(e[2] for e in entries) < min(e[3] for e in entries):
+        d = np.linspace(max(e[2] for e in entries), min(e[3] for e in entries), 200)
+        curves = np.array([predict_gradient_fit(d, e[1], model) for e in entries])
+        if within:
+            ids = np.array([e[0] for e in entries])
+            curves = np.array([curves[ids == s].mean(axis=0) for s in dict.fromkeys(ids)])
+        mean = curves.mean(axis=0)
+        unit = 'subjects' if within else 'peaks'
+        ax.plot(d, mean, color='black', linewidth=2.8, zorder=5, label=f'Mean fit ({len(curves)} {unit})')
+        if len(curves) > 1:
+            sd = curves.std(axis=0, ddof=1)
+            ax.fill_between(d, mean-sd, mean+sd, color='black', alpha=.15, label=f'±1 SD across {unit}')
+    else:
+        ax.text(.98, .97, 'No valid fits with a shared distance range', transform=ax.transAxes,
+                ha='right', va='top')
+    handles = [Line2D([], [], marker='o', linestyle='', color=c, label=s) for s, c in colors.items()]
+    brain_fig.legend(handles=handles, loc='lower center', ncol=min(6, max(1, len(handles))), fontsize=8)
+    lines, _ = ax.get_legend_handles_labels()
+    ax.legend(handles=handles+lines, loc='upper left', bbox_to_anchor=(1.01, 1), fontsize=8)
+    ax.set(xlabel='Euclidean distance from each selected peak (mm)', ylabel='Component weight norm',
+           title=f'{heading} · all peaks · {len(entries)}/{total} valid fits',
+           xlim=(-1, xmax*1.02))
+    # Retain negative polynomial predictions and the full summary band if present.
+    ax.set_ylim(min(0, ax.get_ylim()[0]), max(ymax*1.05, ax.get_ylim()[1]))
+    ax.grid(alpha=.15)
+    return {'brain': brain_fig, 'all_peak_fits': fig}
