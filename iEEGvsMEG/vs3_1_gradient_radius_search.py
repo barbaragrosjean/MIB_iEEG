@@ -2,11 +2,11 @@
 import numpy as np
 import pandas as pd
 
-from vs3_1_gradients import analyze_gradients, fit_gradient_models
+from vs3_1_gradients import analyze_gradients, fit_gradient_models, GRADIENT_MODELS
 
 
 def radius_search(weights, metadata, *, neighborhood_radii, fit_radii,
-                  metric='semivariance', n_components=2, spatial_scope='pooled',
+                  metric='quadratic', n_components=2, spatial_scope='pooled',
                   fold_hemispheres=True, target_hemisphere='left', max_peaks=None,
                   min_points=6, min_peaks=3, min_valid_fraction=.8, progress=None):
     """Evaluate radius pairs with equal-peak / equal-subject aggregation.
@@ -23,21 +23,21 @@ def radius_search(weights, metadata, *, neighborhood_radii, fit_radii,
         if (values.ndim != 1 or not len(values) or not np.isfinite(values).all()
                 or np.any(values <= 0) or np.any(np.diff(values) <= 0)):
             raise ValueError('Radius grids must be finite, positive, and strictly increasing.')
-    if metric not in ('semivariance', 'quadratic'):
-        raise ValueError('metric must be semivariance or quadratic.')
+    if metric not in ('semivariance', *GRADIENT_MODELS):
+        raise ValueError(f'Choose a fit model from {GRADIENT_MODELS}.')
     if not isinstance(min_points, int) or min_points < 6 or not isinstance(min_peaks, int) or min_peaks < 1:
         raise ValueError('Require integer min_points >= 6 and min_peaks >= 1.')
     if not 0 < min_valid_fraction <= 1:
         raise ValueError('min_valid_fraction must be in (0, 1].')
     rows, details = [], []
     for neighborhood in neighborhoods:
-        # Select once per neighborhood. Quadratic fitting at the largest radius
+        # Select once per neighborhood. Fitting at the largest radius
         # also uses the standard geometry/ownership validation and peak handling.
         scopes = analyze_gradients(weights, metadata, n_components=n_components,
             spatial_scope=spatial_scope, neighborhood_mm=neighborhood,
             fit_radius_mm=float(radii[-1]), max_peaks=max_peaks,
             fold_hemispheres=fold_hemispheres, target_hemisphere=target_hemisphere,
-            fit_model='quadratic')
+            fit_model=metric if metric in GRADIENT_MODELS else 'quadratic')
         selected_count = sum(len(r['selected_maxima']) for r in scopes.values())
         for radius in radii:
             records = []
@@ -55,7 +55,7 @@ def radius_search(weights, metadata, *, neighborhood_radii, fit_radii,
                             else:
                                 status = 'constant_scope_magnitude'
                         else:
-                            fit = fit_gradient_models(local.distance_mm, y, ['quadratic'], min_points=3, min_distances=2).iloc[0]
+                            fit = fit_gradient_models(local.distance_mm, y, [metric], min_points=3, min_distances=2).iloc[0]
                             status = fit.fit_status
                             if status == 'ok':
                                 value = fit.adjusted_r_squared
@@ -97,7 +97,7 @@ def select_radius_candidates(grid, *, plateau_fraction=.9, plateau_tolerance=.1,
     radius whose entire eligible suffix lies between fraction*tail and
     (1+tolerance)*tail. Require a positive rise of min_rise_fraction*tail.
     Rank neighborhoods by relative rise, then smaller radii for exact ties.
-    Quadratic candidates rank by mean adjusted R², then smaller radii.
+    Fit-model candidates rank by mean adjusted R², then smaller radii.
     """
     if not (0 < plateau_fraction <= 1 and 0 < plateau_tolerance < 1
             and 0 <= min_rise_fraction < 1 and isinstance(tail_bins, int) and tail_bins >= 2):
@@ -109,7 +109,7 @@ def select_radius_candidates(grid, *, plateau_fraction=.9, plateau_tolerance=.1,
     if len(metric) != 1:
         raise ValueError('Select one metric/modality at a time.')
     candidates = []
-    if metric[0] == 'quadratic':
+    if metric[0] in GRADIENT_MODELS:
         for row in grid.loc[grid.eligible & np.isfinite(grid.value)].itertuples():
             candidates.append(dict(neighborhood_mm=row.neighborhood_mm,
                 fit_radius_mm=row.fit_radius_mm, score=row.value,
@@ -194,7 +194,7 @@ def plot_radius_search(results, *, candidates=None, title=''):
         if not np.isfinite(matrix.to_numpy()).any():
             ax.text(.5, .5, 'No computable estimates', transform=ax.transAxes, ha='center')
     label = ('Normalized local magnitude semivariance' if metric == 'semivariance'
-             else 'Mean adjusted R² of quadratic fits')
+             else f'Mean adjusted R² of {metric} fits')
     fig.colorbar(mesh, ax=list(axes.flat), label=label, shrink=.85)
     fig.suptitle(title or f'{label} · × = limited support; gray = undefined')
     return fig

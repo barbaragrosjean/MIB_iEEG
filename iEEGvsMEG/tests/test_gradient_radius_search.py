@@ -9,6 +9,28 @@ from vs3_1_gradient_radius_search import radius_search, select_radius_candidates
 
 
 class RadiusSearchTests(unittest.TestCase):
+    def test_radius_search_all_fit_models(self):
+        x = np.arange(61.)
+        metadata = pd.DataFrame(dict(x=x, y=0., z=0., subject='a'))
+        models = {
+            'linear': 5-.02*x,
+            'quadratic': 5-.0005*x*x,
+            'gaussian': .2+2*np.exp(-.5*(x/12)**2),
+            'exponential': .2+2*np.exp(-x/12),
+        }
+        for model, y in models.items():
+            with self.subTest(model=model):
+                result = radius_search(y[:, None], metadata, neighborhood_radii=[10],
+                    fit_radii=[30, 50], metric=model, n_components=1, min_peaks=1)
+                self.assertTrue(result['grid'].metric.eq(model).all())
+                np.testing.assert_allclose(result['grid'].value, 1., atol=1e-8)
+                candidates = select_radius_candidates(result['grid'])
+                self.assertFalse(candidates.empty)
+                self.assertTrue(candidates.selection_rule.eq('maximum mean adjusted R²').all())
+                fig = plot_radius_search({'iEEG': result})
+                self.assertIn(model, fig.axes[-1].get_ylabel())
+                plt.close(fig)
+
     def test_semivariance_matches_explicit_pairs(self):
         y = np.array([8., 1., 2., 4., 3., 7., 5., 9.])
         d = np.arange(8.)
@@ -17,7 +39,7 @@ class RadiusSearchTests(unittest.TestCase):
                       profiles={'P1': profile})
         with patch('vs3_1_gradient_radius_search.analyze_gradients', return_value={'pooled': result}):
             out = radius_search(y[:, None], pd.DataFrame(), neighborhood_radii=[10],
-                fit_radii=[6, 7], min_peaks=1)
+                fit_radii=[6, 7], min_peaks=1, metric='semivariance')
         for row in out['grid'].itertuples():
             local = y[(d > 0) & (d <= row.fit_radius_mm)]
             pairs = [.5*(local[i]-local[j])**2 for i in range(len(local)) for j in range(i+1, len(local))]
