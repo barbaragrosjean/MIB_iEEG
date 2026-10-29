@@ -24,6 +24,27 @@ class RadiusSearchTests(unittest.TestCase):
             self.assertAlmostEqual(row.value, np.mean(pairs)/np.var(y))
         self.assertTrue(out['grid'].eligible.all())
 
+    def test_sparse_estimates_shown_but_not_recommended(self):
+        d = np.arange(8.)
+        y = 8-.05*d*d
+        profile = pd.DataFrame(dict(distance_mm=d, weight_norm=y))
+        result = dict(features=profile, selected_maxima=pd.DataFrame(dict(peak_id=['P1'], feature_row=[0])),
+                      profiles={'P1': profile})
+        for metric in ('semivariance', 'quadratic'):
+            with patch('vs3_1_gradient_radius_search.analyze_gradients', return_value={'pooled': result}):
+                out = radius_search(y[:, None], pd.DataFrame(), neighborhood_radii=[10],
+                    fit_radii=[1, 2, 3], metric=metric)
+            grid = out['grid']
+            self.assertTrue(np.isnan(grid.iloc[0].value))
+            self.assertTrue(np.isfinite(grid.iloc[-1].value))
+            self.assertFalse(grid.eligible.any())
+            self.assertTrue(select_radius_candidates(grid).empty)
+            fig = plot_radius_search({'iEEG': out})
+            array = fig.axes[0].collections[0].get_array()
+            self.assertLess(np.ma.getmaskarray(array).sum(), array.size)
+            self.assertIn('Limited support', fig.axes[0].get_legend_handles_labels()[1])
+            plt.close(fig)
+
     def test_plateau_and_unresolved_cases(self):
         frame = pd.DataFrame(dict(neighborhood_mm=[10]*7, fit_radius_mm=np.arange(10, 80, 10),
             value=[.2, .5, .91, 1., .98, 1.01, 1.], eligible=True, metric='semivariance'))

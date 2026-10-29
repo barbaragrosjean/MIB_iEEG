@@ -417,7 +417,7 @@ GRADIENT_PARAMETERS = {
 }
 
 
-def fit_gradient_models(distance, amplitude, models=GRADIENT_MODELS):
+def fit_gradient_models(distance, amplitude, models=GRADIENT_MODELS, *, min_points=6, min_distances=4):
     """Fit identical positive-distance observations with four descriptive models.
 
     Linear: b + m*d; quadratic: b - c*d² (c >= 0); Gaussian:
@@ -428,6 +428,8 @@ def fit_gradient_models(distance, amplitude, models=GRADIENT_MODELS):
     Adjusted R² = 1 - (1-R²)*(n-1)/(n-p), where p includes the intercept.
     This is an in-sample complexity adjustment, not spatial validation.
     """
+    if not isinstance(min_points, int) or min_points < 3 or not isinstance(min_distances, int) or min_distances < 2:
+        raise ValueError('Require min_points >= 3 and min_distances >= 2.')
     models = tuple(models)
     if not models or len(set(models)) != len(models) or set(models) - set(GRADIENT_MODELS):
         raise ValueError(f'Choose distinct models from {GRADIENT_MODELS}.')
@@ -443,7 +445,7 @@ def fit_gradient_models(distance, amplitude, models=GRADIENT_MODELS):
                    fit_status='insufficient_data', r_squared=np.nan,
                    adjusted_r_squared=np.nan, rmse=np.nan,
                    slope=np.nan, curvature=np.nan, sigma_mm=np.nan, tau_mm=np.nan)
-        if len(x) < 6 or len(np.unique(x)) < 4:
+        if len(x) < min_points or len(x) <= p or len(np.unique(x)) < min_distances:
             rows.append(row)
             continue
         if np.ptp(y) <= np.finfo(float).eps * max(1., np.max(np.abs(y))):

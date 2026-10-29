@@ -48,14 +48,14 @@ def radius_search(weights, metadata, *, neighborhood_radii, fit_radii,
                     local = profile.loc[(profile.distance_mm > 0) & (profile.distance_mm <= radius)]
                     y = local.weight_norm.to_numpy(float)
                     value, status = np.nan, 'insufficient_data'
-                    if len(y) >= min_points:
+                    if len(y) >= (2 if metric == 'semivariance' else 3):
                         if metric == 'semivariance':
                             if variance > 0:
                                 value, status = np.var(y, ddof=1)/variance, 'ok'
                             else:
                                 status = 'constant_scope_magnitude'
                         else:
-                            fit = fit_gradient_models(local.distance_mm, y, ['quadratic']).iloc[0]
+                            fit = fit_gradient_models(local.distance_mm, y, ['quadratic'], min_points=3, min_distances=2).iloc[0]
                             status = fit.fit_status
                             if status == 'ok':
                                 value = fit.adjusted_r_squared
@@ -66,7 +66,9 @@ def radius_search(weights, metadata, *, neighborhood_radii, fit_radii,
                     details.append(record)
             valid = [r for r in records if r['status'] == 'ok' and np.isfinite(r['value'])]
             fraction = len(valid)/selected_count if selected_count else 0.
-            eligible = len(valid) >= min_peaks and fraction >= min_valid_fraction
+            supported = [r for r in valid if r['n_points'] >= min_points]
+            supported_fraction = len(supported)/selected_count if selected_count else 0.
+            eligible = len(supported) >= min_peaks and supported_fraction >= min_valid_fraction
             if valid:
                 frame = pd.DataFrame(valid)
                 # Equal subject weight after within-subject peak means.
@@ -79,6 +81,7 @@ def radius_search(weights, metadata, *, neighborhood_radii, fit_radii,
             rows.append(dict(neighborhood_mm=neighborhood, fit_radius_mm=radius,
                 metric=metric, value=value, eligible=eligible, n_selected_peaks=selected_count,
                 n_valid_peaks=len(valid), valid_fraction=fraction, n_units=units,
+                n_supported_peaks=len(supported), supported_fraction=supported_fraction,
                 mean_points=float(np.mean([r['n_points'] for r in valid])) if valid else np.nan))
         if progress:
             progress(f'{metric}: neighborhood {neighborhood:g} mm completed ({selected_count} selected peaks)')
@@ -159,7 +162,7 @@ def plot_radius_search(results, *, candidates=None, title=''):
     if len(metrics) != 1:
         raise ValueError('Use one metric for all panels.')
     metric = next(iter(metrics))
-    values = np.concatenate([r['grid'].loc[r['grid'].eligible, 'value'].to_numpy() for r in results.values()])
+    values = np.concatenate([r['grid']['value'].to_numpy() for r in results.values()])
     values = values[np.isfinite(values)]
     lo, hi = (float(values.min()), float(values.max())) if len(values) else (0., 1.)
     if lo == hi:
@@ -167,11 +170,14 @@ def plot_radius_search(results, *, candidates=None, title=''):
     norm = Normalize(lo, hi)
     for ax, (modality, result) in zip(axes.flat, results.items()):
         grid = result['grid'].copy()
-        grid.loc[~grid.eligible, 'value'] = np.nan
         matrix = grid.pivot(index='neighborhood_mm', columns='fit_radius_mm', values='value').sort_index().sort_index(axis=1)
         ax.set_facecolor('#eeeeee')
         mesh = ax.pcolormesh(edges(matrix.columns), edges(matrix.index),
                              np.ma.masked_invalid(matrix.to_numpy()), cmap='viridis', norm=norm)
+        low_support = grid.loc[~grid.eligible & np.isfinite(grid.value)]
+        if len(low_support):
+            ax.scatter(low_support.fit_radius_mm, low_support.neighborhood_mm, marker='x',
+                       s=30, color='black', linewidths=.8, label='Limited support')
         chosen = candidates.get(modality) if candidates else None
         if chosen is not None and not chosen.empty:
             if metric == 'semivariance':
@@ -180,14 +186,15 @@ def plot_radius_search(results, *, candidates=None, title=''):
             best = chosen.iloc[0]
             ax.scatter(best.fit_radius_mm, best.neighborhood_mm, marker='*', s=200,
                        facecolor='white', edgecolor='black', label='Suggested pair')
+        if ax.get_legend_handles_labels()[0]:
             ax.legend(fontsize=8, loc='upper right')
         ax.set(title=modality, xlabel='Fitting / inclusion radius (mm)',
                ylabel='Peak-selection neighborhood radius (mm)',
                xticks=matrix.columns, yticks=matrix.index)
         if not np.isfinite(matrix.to_numpy()).any():
-            ax.text(.5, .5, 'No supported estimates', transform=ax.transAxes, ha='center')
+            ax.text(.5, .5, 'No computable estimates', transform=ax.transAxes, ha='center')
     label = ('Normalized local magnitude semivariance' if metric == 'semivariance'
              else 'Mean adjusted R² of quadratic fits')
     fig.colorbar(mesh, ax=list(axes.flat), label=label, shrink=.85)
-    fig.suptitle(title or f'{label} · gray = insufficient support')
+    fig.suptitle(title or f'{label} · × = limited support; gray = undefined')
     return fig
