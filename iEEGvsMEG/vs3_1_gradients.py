@@ -331,3 +331,66 @@ def plot_subject_gradients(scopes, title='', *, show_other_maxima=True):
                   fontsize=8, frameon=False)
         figures[peak_id] = fig
     return figures
+
+
+def plot_pooled_gradients(result, title=''):
+    """Overlay pooled peak profiles and valid fits with an equal-peak mean ± SD.
+
+    The mean is a pointwise average of curves, not a newly fitted Gaussian.
+    Summary predictions use the shared observed fitting range, avoiding
+    extrapolation. The sample SD describes between-peak variation, not a CI.
+    """
+    import matplotlib.pyplot as plt
+
+    if not result['features']['scope'].eq('pooled').all():
+        raise ValueError('The pooled summary requires pooled gradient results.')
+    if result.get('fold_hemispheres', False):
+        title += f' · folded {result["target_hemisphere"]}'
+    fig, ax = plt.subplots(figsize=(12, 6), layout='constrained')
+    peaks = result['selected_maxima']
+    fits = result['fits'].set_index('peak_id') if len(peaks) else None
+    cmap = plt.get_cmap('tab10')
+    valid_fits, ranges = [], []
+    xmax, ymax = 1., 0.
+    for index, peak in enumerate(peaks.itertuples()):
+        profile = result['profiles'][peak.peak_id]
+        fit = fits.loc[peak.peak_id]
+        color = cmap(index % 10)  # Match the individual profiles and brain markers.
+        valid = fit.fit_status == 'ok' and np.isfinite(
+            [fit.baseline, fit.amplitude, fit.sigma_mm]).all()
+        label = peak.peak_id if valid else f'{peak.peak_id} ({fit.fit_status})'
+        ax.scatter(profile.distance_mm, profile.weight_norm, s=12, alpha=.25,
+                   color=color, label=label, rasterized=True)
+        ax.scatter([0], [peak.weight_norm], marker='*', s=140,
+                   color=color, edgecolors='black', zorder=4)
+        xmax = max(xmax, profile.distance_mm.max())
+        ymax = max(ymax, profile.weight_norm.max())
+        distances = profile.loc[profile.in_fit_radius & (profile.distance_mm > 0), 'distance_mm']
+        if valid and len(distances) and distances.min() < distances.max():
+            valid_fits.append(fit)
+            ranges.append((distances.min(), distances.max()))
+            d = np.linspace(distances.min(), distances.max(), 200)
+            ax.plot(d, gaussian_decay(d, fit.baseline, fit.amplitude, fit.sigma_mm),
+                    color=color, linewidth=1.5, alpha=.85)
+    if ranges and max(lo for lo, hi in ranges) < min(hi for lo, hi in ranges):
+        d = np.linspace(max(lo for lo, hi in ranges), min(hi for lo, hi in ranges), 200)
+        curves = np.array([gaussian_decay(d, f.baseline, f.amplitude, f.sigma_mm)
+                           for f in valid_fits])
+        mean = curves.mean(axis=0)
+        ax.plot(d, mean, color='black', linewidth=2.8, zorder=5,
+                label=f'Mean fitted curve (n={len(curves)} peaks)')
+        if len(curves) > 1:
+            std = curves.std(axis=0, ddof=1)
+            ax.fill_between(d, mean - std, mean + std, color='black', alpha=.15,
+                            label='Between-peak ±1 SD', zorder=1)
+    else:
+        ax.text(.98, .97, 'No valid fits with a shared distance range',
+                transform=ax.transAxes, ha='right', va='top', fontsize=9)
+    ax.set(xlabel='Euclidean distance from each selected peak (mm)',
+           ylabel='Component weight norm',
+           title=f'{title} · pooled peaks · {len(valid_fits)}/{len(peaks)} valid fits',
+           xlim=(-1, xmax * 1.02), ylim=(0, 1.05 * ymax if ymax > 0 else 1.))
+    ax.grid(alpha=.15)
+    if len(peaks):
+        ax.legend(loc='upper left', bbox_to_anchor=(1.01, 1), fontsize=8, frameon=False)
+    return fig

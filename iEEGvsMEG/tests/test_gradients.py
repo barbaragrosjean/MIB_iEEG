@@ -6,6 +6,42 @@ from vs3_1_gradients import (analyze_gradients, fit_decay, gaussian_decay,
 
 
 class GradientTests(unittest.TestCase):
+    def test_pooled_overlay_mean_and_sample_sd(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from vs3_1_gradients import plot_pooled_gradients
+        result = dict(features=pd.DataFrame({'scope': ['pooled']}),
+            selected_maxima=pd.DataFrame({'peak_id': ['P1', 'P2', 'P3'],
+                                           'weight_norm': [4., 6., 100.]}),
+            profiles={}, fits=pd.DataFrame([
+                dict(peak_id=p, baseline=b, amplitude=2., sigma_mm=10., fit_status=status)
+                for p, b, status in [('P1', 1., 'ok'), ('P2', 3., 'ok'),
+                                     ('P3', 100., 'weakly_identified_or_boundary')]]))
+        for p, distances in [('P1', [0., 1., 10., 20.]), ('P2', [0., 5., 20., 30.]),
+                             ('P3', [0., 1., 20.])]:
+            result['profiles'][p] = pd.DataFrame(dict(distance_mm=distances,
+                weight_norm=np.ones(len(distances)), in_fit_radius=np.array(distances) > 0))
+        fig = plot_pooled_gradients(result)
+        ax = fig.axes[0]
+        mean = next(line for line in ax.lines if line.get_label().startswith('Mean fitted'))
+        d, y = mean.get_data()
+        self.assertEqual((d[0], d[-1]), (5., 20.))
+        np.testing.assert_allclose(y, gaussian_decay(d, 2., 2., 10.))
+        band = next(c for c in ax.collections if c.get_label() == 'Between-peak ±1 SD')
+        vertices = band.get_paths()[0].vertices
+        np.testing.assert_allclose(sorted(set(vertices[vertices[:, 0] == d[0], 1])),
+                                   [y[0] - np.sqrt(2), y[0] + np.sqrt(2)])
+        plt.close(fig)
+        result['selected_maxima'] = result['selected_maxima'].iloc[:1]
+        fig = plot_pooled_gradients(result)
+        self.assertFalse(any(c.get_label() == 'Between-peak ±1 SD' for c in fig.axes[0].collections))
+        plt.close(fig)
+        result['selected_maxima'] = result['selected_maxima'].iloc[:0]
+        fig = plot_pooled_gradients(result)
+        self.assertTrue(any('No valid fits' in t.get_text() for t in fig.axes[0].texts))
+        plt.close(fig)
+
     def test_folding_retains_features_and_changes_distance_geometry(self):
         m = pd.DataFrame(dict(x=[-30., 30., -30., 30.], y=[0., 0., 10., 20.],
                               z=[0.] * 4, subject=['a', 'b', 'a', 'b']))
