@@ -31,6 +31,37 @@ class RadiusSearchTests(unittest.TestCase):
                 self.assertIn(model, fig.axes[-1].get_ylabel())
                 plt.close(fig)
 
+    def test_top_percentage_search_and_plot(self):
+        from vs3_1_gradients import analyze_gradients
+        x = np.tile(np.arange(40.), 2)
+        metadata = pd.DataFrame(dict(x=x, y=0., z=0., subject=['a']*40+['b']*40))
+        weights = np.r_[5-.001*np.arange(40.)**2, 9-.002*np.arange(40.)**2][:, None]
+        with patch('vs3_1_gradient_radius_search.analyze_gradients', wraps=analyze_gradients) as analyze:
+            result = radius_search(weights, metadata, top_percents=[2.5, 5., 10.],
+                fit_radii=[10, 20], metric='quadratic', n_components=1,
+                spatial_scope='within_subject', min_peaks=1)
+        self.assertTrue(all(c.kwargs['neighborhood_mm'] is None for c in analyze.call_args_list))
+        grid = result['grid']
+        self.assertEqual(len(grid), 6)
+        self.assertNotIn('neighborhood_mm', grid.columns)
+        self.assertEqual(grid.groupby('top_percent').n_selected_peaks.first().tolist(), [2, 4, 8])
+        self.assertEqual(result['details'].groupby('top_percent').feature_row.nunique().tolist(), [2, 4, 8])
+        chosen = select_radius_candidates(grid)
+        self.assertIn('top_percent', chosen)
+        self.assertTrue(chosen.selected.sum() == 1)
+        fig = plot_radius_search({'iEEG': result, 'MEG': result},
+                                 candidates={'iEEG': chosen, 'MEG': chosen})
+        self.assertIn('(%)', fig.axes[0].get_ylabel())
+        self.assertEqual(fig.axes[0].collections[0].norm.vmin, 0.)
+        self.assertEqual(fig.axes[0].collections[0].norm.vmax, 1.)
+        fig.canvas.draw()
+        plt.close(fig)
+        for bad in ([0, 1], [1, 101], [2, 1]):
+            with self.assertRaises(ValueError):
+                radius_search(weights, metadata, top_percents=bad, fit_radii=[10])
+        with self.assertRaises(ValueError):
+            radius_search(weights, metadata, top_percents=[1], neighborhood_radii=[10], fit_radii=[10])
+
     def test_semivariance_matches_explicit_pairs(self):
         y = np.array([8., 1., 2., 4., 3., 7., 5., 9.])
         d = np.arange(8.)

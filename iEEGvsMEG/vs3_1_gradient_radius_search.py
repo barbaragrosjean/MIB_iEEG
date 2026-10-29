@@ -5,7 +5,7 @@ import pandas as pd
 from vs3_1_gradients import analyze_gradients, fit_gradient_models, GRADIENT_MODELS
 
 
-def radius_search(weights, metadata, *, neighborhood_radii, fit_radii,
+def radius_search(weights, metadata, *, neighborhood_radii=None, fit_radii, top_percents=None,
                   metric='quadratic', n_components=2, spatial_scope='pooled',
                   fold_hemispheres=True, target_hemisphere='left', max_peaks=None,
                   min_points=6, min_peaks=3, min_valid_fraction=.8, progress=None):
@@ -16,13 +16,23 @@ def radius_search(weights, metadata, *, neighborhood_radii, fit_radii,
     Its exact value is sample variance inside the ball / scope variance.
     This is cumulative local dispersion, NOT a lag-binned semivariogram.
     Zero-distance observations are excluded as in the gradient fits.
+    Provide top_percents instead of neighborhood_radii to select top-magnitude
+    features (neighborhood_mm=None), independently within each scope.
     """
-    neighborhoods = np.asarray(neighborhood_radii, float)
+    if (neighborhood_radii is None) == (top_percents is None):
+        raise ValueError('Provide exactly one of neighborhood_radii or top_percents.')
+    percent_mode = top_percents is not None
+    selection_column = 'top_percent' if percent_mode else 'neighborhood_mm'
+    neighborhoods = np.asarray(top_percents if percent_mode else neighborhood_radii, float)
+    if percent_mode and np.any(neighborhoods > 100):
+        raise ValueError('Top percentages must be <= 100.')
     radii = np.asarray(fit_radii, float)
     for values in (neighborhoods, radii):
         if (values.ndim != 1 or not len(values) or not np.isfinite(values).all()
                 or np.any(values <= 0) or np.any(np.diff(values) <= 0)):
             raise ValueError('Radius grids must be finite, positive, and strictly increasing.')
+    if percent_mode and metric == 'semivariance':
+        raise ValueError('Top-percentage search requires a fit model.')
     if metric not in ('semivariance', *GRADIENT_MODELS):
         raise ValueError(f'Choose a fit model from {GRADIENT_MODELS}.')
     if not isinstance(min_points, int) or min_points < 6 or not isinstance(min_peaks, int) or min_peaks < 1:
@@ -34,7 +44,8 @@ def radius_search(weights, metadata, *, neighborhood_radii, fit_radii,
         # Select once per neighborhood. Fitting at the largest radius
         # also uses the standard geometry/ownership validation and peak handling.
         scopes = analyze_gradients(weights, metadata, n_components=n_components,
-            spatial_scope=spatial_scope, neighborhood_mm=neighborhood,
+            spatial_scope=spatial_scope, neighborhood_mm=None if percent_mode else neighborhood,
+            top_percent=float(neighborhood) if percent_mode else 5.,
             fit_radius_mm=float(radii[-1]), max_peaks=max_peaks,
             fold_hemispheres=fold_hemispheres, target_hemisphere=target_hemisphere,
             fit_model=metric if metric in GRADIENT_MODELS else 'quadratic')
@@ -59,7 +70,7 @@ def radius_search(weights, metadata, *, neighborhood_radii, fit_radii,
                             status = fit.fit_status
                             if status == 'ok':
                                 value = fit.adjusted_r_squared
-                    record = dict(neighborhood_mm=neighborhood, fit_radius_mm=radius,
+                    record = dict(**{selection_column: neighborhood}, fit_radius_mm=radius,
                         scope=scope, peak_id=peak.peak_id, feature_row=peak.feature_row,
                         n_points=len(y), value=value, status=status)
                     records.append(record)
@@ -78,13 +89,13 @@ def radius_search(weights, metadata, *, neighborhood_radii, fit_radii,
                 units = len(values)
             else:
                 value, units = np.nan, 0
-            rows.append(dict(neighborhood_mm=neighborhood, fit_radius_mm=radius,
+            rows.append(dict(**{selection_column: neighborhood}, fit_radius_mm=radius,
                 metric=metric, value=value, eligible=eligible, n_selected_peaks=selected_count,
                 n_valid_peaks=len(valid), valid_fraction=fraction, n_units=units,
                 n_supported_peaks=len(supported), supported_fraction=supported_fraction,
                 mean_points=float(np.mean([r['n_points'] for r in valid])) if valid else np.nan))
         if progress:
-            progress(f'{metric}: neighborhood {neighborhood:g} mm completed ({selected_count} selected peaks)')
+            progress(f'{metric}: {selection_column}={neighborhood:g} completed ({selected_count} selected peaks)')
     return {'grid': pd.DataFrame(rows), 'details': pd.DataFrame(details)}
 
 
@@ -102,7 +113,8 @@ def select_radius_candidates(grid, *, plateau_fraction=.9, plateau_tolerance=.1,
     if not (0 < plateau_fraction <= 1 and 0 < plateau_tolerance < 1
             and 0 <= min_rise_fraction < 1 and isinstance(tail_bins, int) and tail_bins >= 2):
         raise ValueError('Invalid plateau settings.')
-    columns = ['neighborhood_mm', 'fit_radius_mm', 'score', 'selection_rule', 'boundary', 'selected']
+    selection_column = 'top_percent' if 'top_percent' in grid.columns else 'neighborhood_mm'
+    columns = [selection_column, 'fit_radius_mm', 'score', 'selection_rule', 'boundary', 'selected']
     if grid.empty:
         return pd.DataFrame(columns=columns)
     metric = grid.metric.unique()
@@ -111,7 +123,7 @@ def select_radius_candidates(grid, *, plateau_fraction=.9, plateau_tolerance=.1,
     candidates = []
     if metric[0] in GRADIENT_MODELS:
         for row in grid.loc[grid.eligible & np.isfinite(grid.value)].itertuples():
-            candidates.append(dict(neighborhood_mm=row.neighborhood_mm,
+            candidates.append(dict(**{selection_column: getattr(row, selection_column)},
                 fit_radius_mm=row.fit_radius_mm, score=row.value,
                 selection_rule='maximum mean adjusted R²'))
     else:
@@ -137,8 +149,8 @@ def select_radius_candidates(grid, *, plateau_fraction=.9, plateau_tolerance=.1,
     if not candidates:
         return pd.DataFrame(columns=columns)
     result = pd.DataFrame(candidates).sort_values(
-        ['score', 'neighborhood_mm', 'fit_radius_mm'], ascending=[False, True, True]).reset_index(drop=True)
-    result['boundary'] = (result.neighborhood_mm.isin([grid.neighborhood_mm.min(), grid.neighborhood_mm.max()])
+        ['score', selection_column, 'fit_radius_mm'], ascending=[False, True, True]).reset_index(drop=True)
+    result['boundary'] = (result[selection_column].isin([grid[selection_column].min(), grid[selection_column].max()])
                           | result.fit_radius_mm.isin([grid.fit_radius_mm.min(), grid.fit_radius_mm.max()]))
     result['selected'] = result.index == 0
     return result
@@ -162,6 +174,8 @@ def plot_radius_search(results, *, candidates=None, title=''):
     if len(metrics) != 1:
         raise ValueError('Use one metric for all panels.')
     metric = next(iter(metrics))
+    selection_column = 'top_percent' if 'top_percent' in next(iter(results.values()))['grid'].columns else 'neighborhood_mm'
+    selection_label = 'Top-magnitude features selected (%)' if selection_column == 'top_percent' else 'Peak-selection neighborhood radius (mm)'
     values = np.concatenate([r['grid']['value'].to_numpy() for r in results.values()])
     values = values[np.isfinite(values)]
     lo, hi = (float(values.min()), float(values.max())) if len(values) else (0., 1.)
@@ -170,13 +184,13 @@ def plot_radius_search(results, *, candidates=None, title=''):
     norm = Normalize(0, 1)
     for ax, (modality, result) in zip(axes.flat, results.items()):
         grid = result['grid'].copy()
-        matrix = grid.pivot(index='neighborhood_mm', columns='fit_radius_mm', values='value').sort_index().sort_index(axis=1)
+        matrix = grid.pivot(index=selection_column, columns='fit_radius_mm', values='value').sort_index().sort_index(axis=1)
         ax.set_facecolor('#eeeeee')
         mesh = ax.pcolormesh(edges(matrix.columns), edges(matrix.index),
                              np.ma.masked_invalid(matrix.to_numpy()), cmap='viridis', norm=norm)
         low_support = grid.loc[~grid.eligible & np.isfinite(grid.value)]
         if len(low_support):
-            ax.scatter(low_support.fit_radius_mm, low_support.neighborhood_mm, marker='x',
+            ax.scatter(low_support.fit_radius_mm, low_support[selection_column], marker='x',
                        s=30, color='black', linewidths=.8, label='Limited support')
         chosen = candidates.get(modality) if candidates else None
         if chosen is not None and not chosen.empty:
@@ -184,12 +198,12 @@ def plot_radius_search(results, *, candidates=None, title=''):
                 ax.plot(chosen.fit_radius_mm, chosen.neighborhood_mm, 'wo', markersize=4,
                         label='Plateau candidates')
             best = chosen.iloc[0]
-            ax.scatter(best.fit_radius_mm, best.neighborhood_mm, marker='*', s=200,
+            ax.scatter(best.fit_radius_mm, best[selection_column], marker='*', s=200,
                        facecolor='white', edgecolor='black', label='Suggested pair')
         if ax.get_legend_handles_labels()[0]:
             ax.legend(fontsize=8, loc='upper right')
         ax.set(title=modality, xlabel='Fitting / inclusion radius (mm)',
-               ylabel='Peak-selection neighborhood radius (mm)',
+               ylabel=selection_label,
                xticks=matrix.columns, yticks=matrix.index)
         if not np.isfinite(matrix.to_numpy()).any():
             ax.text(.5, .5, 'No computable estimates', transform=ax.transAxes, ha='center')
