@@ -531,10 +531,8 @@ def plot_gradient_model_comparison(table, models=GRADIENT_MODELS, title=''):
                        manage_ticks=False, patch_artist=True,
                        boxprops=dict(facecolor=color, alpha=.18),
                        medianprops=dict(color=color, linewidth=2))
-            ax.scatter(position + rng.uniform(-.07, .07, len(values)), values,
-                       s=8, alpha=.5, color=color, rasterized=True)
-        ax.text(position, .02, f'n={len(values)}', transform=ax.get_xaxis_transform(),
-                ha='center', fontsize=8, color=color)
+            ax.scatter(position + rng.uniform(-.07, .07, len(values)), values,s=8, alpha=.5, color=color, rasterized=True)
+        ax.text(position, .02, f'n={len(values)}', transform=ax.get_xaxis_transform(),ha='center', fontsize=8, color=color)
 
     fig, ax = plt.subplots(figsize=(11, 5), layout='constrained')
     for i, model in enumerate(models):
@@ -543,13 +541,12 @@ def plot_gradient_model_comparison(table, models=GRADIENT_MODELS, title=''):
             values = (data.loc[(data.model == model) & (data.modality == modality), 'adjusted_r_squared']
                       if not data.empty else [])
             draw(ax, values, position, colors[modality])
-    ax.set(xticks=range(len(models)), xticklabels=[m.capitalize() for m in models],
-           ylabel='Adjusted R² (in-sample)', title=f'{title} · goodness of fit',
-           xlim=(-.6, len(models)-.4))
+    ax.set(xticks=range(len(models)), xticklabels=[m.capitalize() for m in models],ylabel='Adjusted R² (in-sample)', title=f'{title} · goodness of fit', xlim=(-.6, len(models)-.4))
     ax.axhline(0, color='gray', linewidth=.7, linestyle='--')
-    ax.legend(handles=[Line2D([], [], marker='o', linestyle='', color=colors[m], label=m)
-                       for m in modalities])
+    ax.legend(handles=[Line2D([], [], marker='o', linestyle='', color=colors[m], label=m) for m in modalities])
     ax.grid(axis='y', alpha=.15)
+    ax.set_ylim(-0.2, 1)
+    
     figures = {'goodness_of_fit': fig}
     for model in models:
         metric, label = GRADIENT_PARAMETERS[model]
