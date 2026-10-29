@@ -213,22 +213,73 @@ def load_results(directory, method='kmeans', n_clusters=5, use_thresholded=False
             for m in config['modalities']}
 
 
+def summarize_clustering(directory, component_counts, methods=METHODS, *, use_thresholded=False):
+    """Collect selected automatic-count results; missing runs remain explicit gaps."""
+    modalities = json.loads((Path(directory) / 'inputs.json').read_text())
+    rows = []
+    for method in methods:
+        for dimensions in component_counts:
+            folder = result_directory(directory, method, 'auto', use_thresholded, dimensions)
+            results = (load_results(directory, method, 'auto', use_thresholded, dimensions)
+                       if (folder / 'configuration.json').exists() else {})
+            for modality in modalities:
+                row = dict(modality=modality, method=method, n_components=dimensions,
+                           n_clusters=np.nan, silhouette=np.nan, status='missing run')
+                if modality in results:
+                    selected = results[modality]['cluster_selection'].query('selected')
+                    if len(selected) != 1:
+                        raise ValueError(f'Expected one selected candidate in {folder / modality}.')
+                    row.update(n_clusters=int(selected.iloc[0].actual_k),
+                               silhouette=float(selected.iloc[0].silhouette), status='ok')
+                rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def plot_clustering_summary(table, title=''):
+    """Selected cluster count and silhouette versus dimensions, by modality/method."""
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MaxNLocator
+    modalities = table.modality.unique()
+    methods = table.method.unique()
+    fig, axes = plt.subplots(2, len(modalities), figsize=(6*len(modalities), 8),
+                             squeeze=False, sharex=True, sharey='row', layout='constrained')
+    for col, modality in enumerate(modalities):
+        for index, method in enumerate(methods):
+            frame = table[(table.modality == modality) & (table.method == method)].sort_values('n_components')
+            for row, metric in enumerate(('n_clusters', 'silhouette')):
+                axes[row, col].plot(frame.n_components, frame[metric], 'o-',
+                                    color=f'C{index}', label=method)
+        axes[0, col].set(title=modality, ylabel='Selected number of clusters')
+        axes[0, col].yaxis.set_major_locator(MaxNLocator(integer=True))
+        axes[1, col].set(xlabel='Number of components', ylabel='Mean silhouette', ylim=(-1, 1),
+                         xticks=sorted(table.n_components.unique()))
+        axes[0, col].legend()
+    fig.suptitle(title or 'Automatic cluster selection across component counts')
+    return fig
+
+
 def plot_results(result, title=''):
     """Exactly three figures: weight-space cloud, bilateral brain centroids, regions."""
     import matplotlib.pyplot as plt
     from vs3_1_modality_specificity import plot_kmeans_hemisphere_centroids, ordered_regions
     members = result['memberships']
     dimensions = sum(name.startswith('input_weight_') for name in members.columns)
-    title = f'{title} · clustering uses {dimensions} components; display: first three (unused axes zero)'
+    display_dimensions = 2 if dimensions <= 2 else 3
+    title = f'{title} · clustering uses {dimensions} components'
+    if dimensions > 3:
+        title += '; display: first three'
     clusters = sorted(members.loc[members.cluster_id >= 0, 'cluster_id'].unique())
     colors = {c: plt.get_cmap('turbo')(i / max(len(clusters)-1, 1)) for i, c in enumerate(clusters)}
     fig = plt.figure(figsize=(10, 8), layout='constrained')
-    ax = fig.add_subplot(projection='3d')
+    ax = fig.add_subplot(projection='3d' if display_dimensions == 3 else None)
     for c in clusters:
-        xyz = members.loc[members.cluster_id == c].reindex(columns=[f'input_weight_{i}' for i in (1,2,3)], fill_value=0).to_numpy()
+        xyz = members.loc[members.cluster_id == c].reindex(columns=[f'input_weight_{i}' for i in range(1, display_dimensions+1)], fill_value=0).to_numpy()
         ax.scatter(*xyz.T, s=9, alpha=.4, color=colors[c], label=f'C{c} (n={len(xyz)})', rasterized=True)
         ax.scatter(*xyz.mean(axis=0), s=180, marker='*', color=colors[c], edgecolor='black')
-    ax.set(xlabel='|Weight 1|', ylabel='|Weight 2|', zlabel='|Weight 3|', title=f'{title} · stars: member means')
+    ax.set(xlabel='|Weight 1|', ylabel='|Weight 2|' if dimensions >= 2 else 'Unused axis (zero)',
+           title=f'{title} · stars: member means')
+    if display_dimensions == 3:
+        ax.set_zlabel('|Weight 3|')
     ax.legend()
     brain = plot_kmeans_hemisphere_centroids(result, title=title, cluster_label='Weight-space')
     table = result['region_contributions']
@@ -241,7 +292,7 @@ def plot_results(result, title=''):
         ax.set(title=f'Cluster {c}', ylabel='% of cluster sources', ylim=(0,100))
         ax.tick_params(axis='x', rotation=65, labelsize=8)
     hist.suptitle(f'{title} · regional composition (source counts, not weight magnitude)')
-    return {'weights_3d': fig, 'brain_centroids': brain, 'region_contributions': hist}
+    return {f'weights_{display_dimensions}d': fig, 'brain_centroids': brain, 'region_contributions': hist}
 
 
 if __name__ == '__main__':
