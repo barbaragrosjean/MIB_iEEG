@@ -242,9 +242,11 @@ def inspect_comparison(directory):
 
 def fit_iterations(args):
     from vs2_1_plssvd_eval_utils import load_trial_cache, _temporary_fold, _project, _patterns
-    from iEEGvsMEG.vs0_mni_coordinates import update_trial_coordinates
+    from vs0_mni_coordinates import update_trial_coordinates
     weight_only = getattr(args, 'weight_only', False)
     variation = getattr(args, 'variation', 'both')
+    meg_kind = getattr(args, 'meg_kind', 'paired_coverage')
+    model_names = tuple(getattr(args, 'models', MODELS))
     root = args.output_dir
     root.mkdir(parents=True, exist_ok=True)
     trials = load_trial_cache(args.cache_dir)
@@ -266,8 +268,8 @@ def fit_iterations(args):
     provenance += [_fingerprint(args.cache_dir/f) for record in manifest['records'] for f in record['files']]
     provenance += [_fingerprint(path) for path in coordinate_sources.path]
     provenance += [_fingerprint(p) for p in (args.atlas_image, args.atlas_labels) if p is not None]
-    config = dict(schema_version=1, meg_kind='paired_coverage', iterations=args.iterations,
-                  components=args.components, models=list(MODELS), seed=args.seed,
+    config = dict(schema_version=1, meg_kind=meg_kind, iterations=args.iterations,
+                  components=args.components, models=list(model_names), seed=args.seed,
                   split_unit=args.split_unit, block_scaling=args.block_scaling,
                   pool_hemispheres=args.pool_hemispheres, condition_mode='average',
                   coordinate_units=dict(ieeg=args.ieeg_coords_unit, meg=args.meg_coords_unit),
@@ -286,11 +288,11 @@ def fit_iterations(args):
     coordinate_sources.to_csv(root/'coordinate_sources.csv', index=False)
     for iteration in range(args.iterations):
         dest = root/f'iteration_{iteration:03d}'
-        expected = [f'{model}_{half}.npz' for model in MODELS for half in ('A', 'B')] + [
+        expected = [f'{model}_{half}.npz' for model in model_names for half in ('A', 'B')] + [
             'ieeg_features.csv', 'meg_features.csv', 'pairing.json', 'matching.csv', 'splits.json',
             'preprocessing_A.npz', 'preprocessing_B.npz']
         if weight_only:
-            expected = [f'{model}_A.npz' for model in MODELS] + [
+            expected = [f'{model}_A.npz' for model in model_names] + [
                 'ieeg_features.csv', 'meg_features.csv', 'pairing.json', 'matching.csv',
                 'splits.json', 'preprocessing_A.npz']
         if (dest/'COMPLETE.json').exists():
@@ -309,7 +311,7 @@ def fit_iterations(args):
         (dest/'splits.json').write_text(json.dumps(indices, default=lambda a: a.tolist()))
         first_pairing = None
         for half in (('A',) if weight_only else ('A', 'B')):
-            with _temporary_fold(trials, 'paired_coverage', indices[half], pair_seed,
+            with _temporary_fold(trials, meg_kind, indices[half], pair_seed,
                                  args.scratch_dir, condition_mode='average') as prepared:
                 fold, scalers, audit, pairing = prepared
                 if half == 'A':
@@ -321,20 +323,29 @@ def fit_iterations(args):
                         if m == 'ieeg':
                             meta['subject'] = np.concatenate([np.repeat(str(s.subject), len(s.positions)) for s in trials.ieeg])
                             meta['source_index'] = np.concatenate([np.arange(len(s.positions)) for s in trials.ieeg])
+                        elif weight_only:
+                            # Keep one coefficient per fixed iEEG coverage slot for every MEG construction.
+                            meta = meta.iloc[fold['train'][m].electrode_to_feature].reset_index(drop=True)
+                            meta['native_subject'] = meta.meg_subject.astype(str)
+                            meta['subject'] = np.concatenate([np.repeat(str(s.subject), len(s.positions)) for s in trials.ieeg])
                         else:
                             meta['subject'] = meta.meg_subject.astype(str)
                         for level in LEVELS:
-                            meta[level] = [label_lookup[m, str(s)].iloc[int(i)][level]
-                                           for s, i in zip(meta.subject, meta.source_index)]
+                            if weight_only and m == 'meg':
+                                meta[level] = np.concatenate([label_lookup['ieeg', str(s.subject)][level].to_numpy() for s in trials.ieeg])
+                            else:
+                                meta[level] = [label_lookup[m, str(s)].iloc[int(i)][level]
+                                               for s, i in zip(meta.subject, meta.source_index)]
                         meta['coverage_row'] = np.arange(len(meta))
                         meta.to_csv(dest/f'{m}_features.csv', index=False)
                 elif pairing != first_pairing:
                     raise AssertionError('A/B pairing must be identical.')
-                fitted = fit_models(fold['train'], MODELS, args.components, args.block_scaling, args.max_gram_gib)
+                fitted = fit_models(fold['train'], model_names, args.components, args.block_scaling, args.max_gram_gib)
                 for name, model in fitted.items():
                     bundle = {'k_max': args.components}
                     for m in MODALITIES:
-                        bundle[m+'_weights'] = model[m+'_weights']
+                        bundle[m+'_weights'] = (model[m+'_weights'][fold['train'][m].electrode_to_feature]
+                                                if weight_only else model[m+'_weights'])
                         bundle[m+'_mean'] = model[m+'_mean']
                         bundle[m+'_scale'] = model[m+'_scale']
                         for part in fold:
@@ -346,7 +357,7 @@ def fit_iterations(args):
                 np.savez_compressed(dest/f'preprocessing_{half}.npz', **{
                     f'{m}_{s}_{label}': v for m, subjects in scalers.items() for s, vals in subjects.items()
                     for label, v in zip(('mean', 'std', 'multiplier'), vals)})
-            print(f'Iteration {iteration+1}/{args.iterations}, half {half}: fitted all three models', flush=True)
+            print(f'Iteration {iteration+1}/{args.iterations}, half {half}: fitted selected models', flush=True)
         (dest/'COMPLETE.json').write_text(json.dumps(dict(iteration=iteration, split_seed=split_seed, pair_seed=pair_seed)))
     return config
 

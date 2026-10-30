@@ -1,0 +1,660 @@
+#!/usr/bin/env python3
+"""Trial-held-out comparison of PCA, PLSSVD and joint PCA spaces.
+
+submit_to_cluster -n 2 -q short.q "python -u compare_subspace.py --meg-kind full_concatenated"  --project MINDLAB2021_MEG-TempSeqAges
+
+Input: the resumable cache produced by plssvd_eval.py (ROOT/out/trial_cache).
+Output: ROOT/out/compare_subspace/MEG_KIND. Read with compare_subspace.ipynb.
+All-data descriptive fit followed by shuffled folds with disjoint test trials.
+Conditions are averaged; participant/source assignments remain fixed across folds.
+Spatial tests concern new trials at the same locations, NOT new participants.
+"""
+from pathlib import Path
+import argparse
+import json
+import warnings
+import numpy as np
+import pandas as pd
+from scipy.linalg import orthogonal_procrustes, svd
+from sklearn.cluster import KMeans
+from sklearn.metrics import adjusted_rand_score, silhouette_score
+from sklearn.preprocessing import PolynomialFeatures
+
+
+MODALITIES = ('ieeg', 'meg')
+MODELS = ('separate_pca', 'plssvd', 'joint_pca')
+MEG_KINDS = ('full_average', 'full_concatenated', 'coverage_average',
+             'paired_coverage', 'random_control')
+
+
+def subspace_metrics(a, b):
+    """Centered column spaces, with equal nominal dimension and paired rows.
+
+    Missing numerical dimensions contribute zero to overlap (denominator k).
+    This avoids inflated overlap after rank loss. No n_locations² matrices.
+    """
+    if a.shape != b.shape or a.ndim != 2:
+        raise ValueError('Subspace inputs must have equal (paired rows, components) shape.')
+    bases = []
+    ranks = []
+    for values in (a, b):
+        x = values - values.mean(axis=0)
+        u, s, _ = svd(x, full_matrices=False, check_finite=True)
+        keep = s > (s[0] * np.finfo(float).eps * max(x.shape) if len(s) else 0)
+        bases.append(u[:, keep]); ranks.append(int(keep.sum()))
+    cosines = svd(bases[0].T @ bases[1], compute_uv=False) if min(ranks) else np.array([])
+    cosines = np.clip(cosines, 0, 1)
+    angles = np.degrees(np.arccos(cosines))
+    return dict(overlap=float(np.sum(cosines**2) / a.shape[1]),
+                rank_a=ranks[0], rank_b=ranks[1], angles_deg=angles.tolist())
+
+
+def fit_models(train, names, k, block_scaling='equal_variance', max_gram_gib=2.):
+    """Fit only requested models through observation Gram matrices."""
+    from vs2_0_cov_models_utils import _gram, _spectrum, _weights
+    from vs2_1_plssvd_eval_utils import _means
+    n = train['ieeg'].n_observations
+    if 12*n*n*8/2**30 > max_gram_gib:
+        raise MemoryError('Observation Gram matrices exceed --max-gram-gib.')
+    grams = {m: _gram(train[m]) for m in MODALITIES}
+    scales = {m: (np.sqrt((n-1)/np.trace(grams[m])) if block_scaling == 'equal_variance'
+                  else 1.) for m in MODALITIES}
+    grams = {m: grams[m]*scales[m]**2 for m in MODALITIES}
+    spectra = {m: _spectrum(grams[m], train[m].n_features) for m in MODALITIES}
+    if any(len(d) < k for u, d in spectra.values()):
+        raise ValueError(f'Training rank is below requested dimension {k}; reduce --dimensions.')
+    means = {m: _means(train[m]) for m in MODALITIES}
+    models = {}
+    for name in names:
+        if name == 'separate_pca':
+            coefficients = {m: u[:, :k]/d[:k] for m, (u, d) in spectra.items()}
+        elif name == 'joint_pca':
+            u, d = _spectrum(grams['ieeg']+grams['meg'], sum(v.n_features for v in train.values()))
+            coefficients = {m: u[:, :k]/d[:k] for m in MODALITIES}
+        elif name == 'plssvd':
+            ux, dx = spectra['ieeg']; uy, dy = spectra['meg']
+            cross = dx[:, None]*(ux.T@uy)*dy[None, :]/(n-1)
+            left, singular, right = svd(cross, full_matrices=False)
+            if singular[k-1] <= singular[0]*np.finfo(float).eps*max(cross.shape):
+                raise ValueError('PLSSVD cross-covariance rank is too low; reduce --dimensions.')
+            coefficients = {'ieeg': (ux/dx)@left[:, :k], 'meg': (uy/dy)@right[:k].T}
+        else:
+            raise ValueError(f'Unknown model: {name}')
+        model = {'k_max': k}
+        for m in MODALITIES:
+            model[m+'_weights'] = _weights(train[m], coefficients[m], scales[m])
+            model[m+'_mean'] = means[m]
+            model[m+'_scale'] = scales[m]
+        models[name] = model
+    return models
+
+
+def normalize_from_train(parts):
+    """One training center and scalar RMS per modality; preserve axis geometry."""
+    train = parts['train']
+    mean = train.mean(axis=0)
+    scale = np.sqrt(np.mean(np.sum((train-mean)**2, axis=1)))
+    if scale <= np.finfo(float).tiny:
+        raise ValueError('Representation has zero training spread.')
+    return {p: (x-mean)/scale for p, x in parts.items()}, mean, scale
+
+
+def _design(x, complexity):
+    return PolynomialFeatures(degree=2, include_bias=False).fit_transform(x) if complexity == 'quadratic' else x
+
+
+def fit_alignment(x, y, complexity, alpha=0.):
+    if complexity == 'identity':
+        return dict(complexity=complexity, coef=np.eye(x.shape[1]), intercept=np.zeros(y.shape[1]))
+    if complexity == 'orthogonal':
+        rotation, _ = orthogonal_procrustes(x, y)
+        return dict(complexity=complexity, coef=rotation, intercept=np.zeros(y.shape[1]))
+    design = _design(x, complexity)
+    mean_x, mean_y = design.mean(0), y.mean(0)
+    centered = design-mean_x
+    u, s, vt = svd(centered, full_matrices=False)
+    penalty = alpha * np.sum(s*s) / design.shape[1]
+    coef = (vt.T * (s/(s*s+max(penalty, np.finfo(float).eps)))) @ u.T @ (y-mean_y)
+    return dict(complexity=complexity, coef=coef, intercept=mean_y-mean_x@coef)
+
+
+def predict_alignment(model, x):
+    return _design(x, model['complexity'])@model['coef']+model['intercept']
+
+
+def alignment_error(y, predicted):
+    """Target already centered/scaled using TRAIN; zero is its train-mean baseline."""
+    error = float(np.sum((predicted-y)**2))
+    baseline = float(np.sum(y*y))
+    return dict(nrmse=float(np.sqrt(error/baseline)) if baseline > 0 else np.nan,
+                q2=1-error/baseline if baseline > 0 else np.nan)
+
+
+def evaluate_alignment(representations, ridge_grid):
+    normalized, centers, scales = {}, {}, {}
+    for m in MODALITIES:
+        normalized[m], centers[m], scales[m] = normalize_from_train(representations[m])
+    rows, artifacts = [], {}
+    for source, target in (('ieeg', 'meg'), ('meg', 'ieeg')):
+        x, y = normalized[source], normalized[target]
+        direction = source+'_to_'+target
+        for complexity in ('identity', 'orthogonal', 'affine', 'quadratic'):
+            alpha = ridge_grid[0] if complexity in ('affine', 'quadratic') else 0.
+            fitted = fit_alignment(x['train'], y['train'], complexity, alpha)
+            for part in x:
+                rows.append(dict(direction=direction, complexity=complexity, partition=part,
+                                 alpha=alpha, **alignment_error(y[part], predict_alignment(fitted, x[part]))))
+            prefix = direction+'_'+complexity
+            artifacts[prefix+'_coef'] = fitted['coef']
+            artifacts[prefix+'_intercept'] = fitted['intercept']
+            artifacts[prefix+'_alpha'] = alpha
+    for m in MODALITIES:
+        artifacts[m+'_center'] = centers[m]; artifacts[m+'_rms'] = scales[m]
+    return rows, artifacts
+
+
+def _silhouette(x, labels, seed):
+    count = len(np.unique(labels))
+    if count < 2 or count >= len(x):
+        return np.nan
+    # Bound the O(n²) distance allocation for large electrode collections.
+    try:
+        return float(silhouette_score(x, labels, sample_size=min(len(x), 2000), random_state=seed))
+    except ValueError:
+        return np.nan
+
+
+def evaluate_clusters(representations, cluster_counts, seed):
+    """Report every predeclared count; no tuning or test-driven selection."""
+    normalized = {m: normalize_from_train(representations[m])[0] for m in MODALITIES}
+    rows, artifacts = [], {}
+    for count in sorted(set(cluster_counts)):
+        if any(len(np.unique(normalized[m]['train'],axis=0)) < count for m in MODALITIES):
+            rows.append(dict(metric='unavailable', modality='both', partition='train', value=np.nan, n_clusters=count))
+            continue
+        fitted = {m: KMeans(n_clusters=count,n_init=20,random_state=seed).fit(normalized[m]['train']) for m in MODALITIES}
+        labels = {m: {p:fitted[m].predict(x) for p,x in normalized[m].items()} for m in MODALITIES}
+        for part in normalized['ieeg']:
+            rows.append(dict(metric='cross_modal_ari',modality='both',partition=part,
+                             value=adjusted_rand_score(labels['ieeg'][part],labels['meg'][part]),n_clusters=count))
+            for m in MODALITIES:
+                rows.append(dict(metric='silhouette',modality=m,partition=part,
+                                 value=_silhouette(normalized[m][part],labels[m][part],seed),n_clusters=count))
+                artifacts[f'c{count}_{m}_{part}'] = labels[m][part]
+        for m in MODALITIES: artifacts[f'c{count}_{m}_centers'] = fitted[m].cluster_centers_
+    for m in MODALITIES:
+        _,center,scale = normalize_from_train(representations[m])
+        artifacts[m+'_normalization_center'] = center
+        artifacts[m+'_normalization_rms'] = scale
+    return rows, artifacts
+
+
+def temporal_representations(scores, k):
+    """Use all latent time courses, independent of electrode maps/coordinates.
+
+    Each side has the same time rows, even when native feature counts differ.
+    Dataset construction may itself use pairing for paired_coverage/control;
+    full_concatenated temporal representations use every MEG source.
+    """
+    result={m:{p:values[m][:,:k] for p,values in scores.items()} for m in MODALITIES}
+    for p in scores:
+        if result['ieeg'][p].shape!=result['meg'][p].shape or result['ieeg'][p].shape[1]!=k:
+            raise ValueError('Temporal comparison requires common time rows and retained dimension.')
+    return result
+
+
+def _representations(fold, scores, k):
+    from vs2_1_plssvd_eval_utils import _patterns
+    temporal = temporal_representations(scores,k)
+    # Spatial comparisons alone use the explicit electrode/source map.
+    spatial = {m: {p: _patterns(fold[p][m], scores[p][m][:, :k])[
+        fold[p][m].electrode_to_feature] for p in fold} for m in MODALITIES}
+    return {'temporal_scores': temporal, 'spatial_patterns': spatial}
+
+
+def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MODELS,
+                   dimensions=(1, 2, 3, 5, 10), repeats=5, seed=2026,
+                   block_scaling='equal_variance', split_unit='trial',
+                   cluster_counts=(2, 3, 4, 5, 6), ridge_grid=(1e-2,),
+                   max_gram_gib=2., scratch_dir=None, cloud_prototypes=32,
+                   ieeg_coords_dir=None, meg_coords_dir=None, ieeg_coords_unit="mm", meg_coords_unit="mm"):
+    """Run/export comparison; reuse an already complete PLSSVD trial cache."""
+    from vs2_1_plssvd_eval_utils import load_trial_cache, _subject_folds, _temporary_fold, _project
+    from vs3_1_spatial_clouds import evaluate_clouds
+    from vs2_1_plssvd_eval_utils import _patterns
+    if not isinstance(cloud_prototypes,int) or cloud_prototypes < 2: raise ValueError('cloud_prototypes must be >=2.')
+    dimensions = sorted(set(dimensions))
+    if not dimensions or min(dimensions) < 1 or repeats < 2:
+        raise ValueError('Positive dimensions and at least two folds are required.')
+    if not models or not set(models) <= set(MODELS) or meg_kind not in MEG_KINDS:
+        raise ValueError('Unknown model or MEG dataset.')
+    if not cluster_counts or min(cluster_counts) < 2 or not ridge_grid or min(ridge_grid) <= 0:
+        raise ValueError('Cluster counts must be >=2 and ridge penalties >0.')
+    if len(ridge_grid) != 1:
+        raise ValueError('Use one fixed ridge penalty; tuning has been removed.')
+    out = Path(output_dir); out.mkdir(parents=True, exist_ok=True)
+    if (out/'config.json').exists():
+        raise FileExistsError('Results already exist. Choose a new --output-dir or use --plot-only.')
+    trials = load_trial_cache(cache_dir)
+    from vs0_mni_coordinates import update_trial_coordinates
+    coordinate_sources=update_trial_coordinates(trials,ieeg_dir=ieeg_coords_dir,meg_dir=meg_coords_dir,
+        ieeg_unit=ieeg_coords_unit,meg_unit=meg_coords_unit)
+    coordinate_sources.to_csv(out/'coordinate_sources.csv',index=False)
+    manifest = json.loads((Path(cache_dir)/'manifest.json').read_text())
+    for modality, subjects in (('ieeg', trials.ieeg), ('meg', trials.meg)):
+        if not subjects or {s.subject for s in subjects} != set(map(str, manifest['config'][modality+'_subjects'])):
+            raise ValueError('Trial cache is incomplete. Finish prepare_trial_cache first.')
+    config = dict(schema_version=3,cloud_prototypes=cloud_prototypes,condition_mode='average', full_data_repeat=-1, cache_dir=str(Path(cache_dir).resolve()), meg_kind=meg_kind, models=list(models),
+                  dimensions=dimensions, repeats=repeats, seed=seed, block_scaling=block_scaling,
+                  split_unit=split_unit, cluster_counts=list(cluster_counts), ridge_grid=list(ridge_grid),
+                  max_gram_gib=max_gram_gib, scope='new trials at fixed participant locations',
+                  spatial_representation='forward patterns on the electrode grid',
+                  normalization='training column means and one RMS per modality',
+                  temporal_correspondence='shared times only; no electrode/participant map used in temporal metrics',
+                  coordinate_sources=coordinate_sources.to_dict('records'),
+                  within_model_comparison='all model pairs within each modality; all native features',
+                  within_model_matching='Pearson Hungarian assignment/signs on training temporal scores, frozen across spaces and partitions',
+                  repetitions='disjoint test folds; fixed assignments; overlapping training sets')
+    (out/'config.json').write_text(json.dumps(config, indent=2))
+    (out/'cache_config.json').write_text(json.dumps(manifest['config'], indent=2))
+    np.savez_compressed(out/'axes.npz', times=trials.times, conditions=trials.conditions)
+    tables = {name: [] for name in ('overlap', 'alignment', 'clusters', 'splits', 'cloud_metrics',
+                                  'within_model_metrics', 'within_model_pairs', 'within_model_correlations')}
+    matching_seq, split_seq = np.random.SeedSequence(seed).spawn(2)
+    matching_seed = int(np.random.default_rng(matching_seq).integers(2**31-1))
+    rng = np.random.default_rng(split_seq)
+    assignments = {m:{s.subject:_subject_folds(s,rng,split_unit,repeats) for s in getattr(trials,m)} for m in MODALITIES}
+    # Descriptive all-data fit first; never used to initialize/select fold models.
+    for repeat in [-1] + list(range(repeats)):
+        analysis = 'in_sample' if repeat == -1 else 'cross_validation'
+        indices = {m:{s.subject:({'train':[np.arange(len(a)) for a in s.data]} if repeat == -1
+                                 else assignments[m][s.subject][repeat]) for s in getattr(trials,m)} for m in MODALITIES}
+        for m in MODALITIES:
+            for subject, partitions in indices[m].items():
+                for part, conditions in partitions.items():
+                    for condition, ix in zip(trials.conditions, conditions):
+                        tables['splits'].extend(dict(analysis=analysis, repeat=repeat, modality=m, subject=subject,
+                                                     partition='in_sample' if repeat == -1 else part, condition=condition, trial_index=int(i)) for i in ix)
+        with _temporary_fold(trials, meg_kind, indices, matching_seed, scratch_dir, condition_mode="average") as prepared_fold:
+            fold, scalers, audit, pairing = prepared_fold
+            audit.to_csv(out/f'matching_{repeat:03d}.csv', index=False)
+            (out/f'pairing_{repeat:03d}.json').write_text(json.dumps(pairing, indent=2))
+            np.savez_compressed(out/f'preprocessing_{repeat:03d}.npz', **{
+                f'{m}_{s}_{label}': value for m, subjects in scalers.items() for s, values in subjects.items()
+                for label, value in zip(('mean', 'std', 'multiplier'), values)})
+            for m in MODALITIES:
+                fold['train'][m].metadata.to_csv(out/f'{m}_features_{repeat:03d}.csv', index=False)
+                np.save(out/f'{m}_electrode_map_{repeat:03d}.npy', fold['train'][m].electrode_to_feature)
+            fitted = fit_models(fold['train'], models, max(dimensions), block_scaling, max_gram_gib)
+            for name, model in fitted.items():
+                print(f'{"All-data fit" if repeat == -1 else f"Fold {repeat+1}/{repeats}"}: {meg_kind}, {name}', flush=True)
+                scores = {p: {m: _project(fold[p][m], model, m) for m in MODALITIES} for p in fold}
+                np.savez_compressed(out/f'{name}_{repeat:03d}_model.npz', **model,
+                                    **{f'{p}_{m}_scores': a for p, modalities in scores.items() for m, a in modalities.items()})
+                for k in dimensions:
+                    base = dict(analysis=analysis, model=name, repeat=repeat, k=k)
+                    representations = _representations(fold, scores, k)
+                    native_patterns={m:{p:_patterns(fold[p][m],scores[p][m][:,:k]) for p in fold} for m in MODALITIES}
+                    selected_scores={p:{m:scores[p][m][:,:k] for m in MODALITIES} for p in fold}
+                    cloud_rows,cloud_artifacts=evaluate_clouds(native_patterns,selected_scores,
+                        prototypes=cloud_prototypes,seed=matching_seed)
+                    for key,rows in [('cloud_metrics',cloud_rows)]:
+                        if repeat == -1:
+                            for row in rows:row['partition']='in_sample'
+                        tables[key].extend(dict(**base,**row) for row in rows)
+                    np.savez_compressed(out/f'{name}_{repeat:03d}_k{k}_clouds.npz',**cloud_artifacts)
+                    del native_patterns
+
+                    for space, reps in representations.items():
+                        prefix = f'{name}_{repeat:03d}_k{k}_{space}'
+                        if space == 'spatial_patterns':
+                            np.savez_compressed(out/f'{prefix}.npz', **{m+'_'+p: x for m, parts in reps.items() for p, x in parts.items()})
+                        for part in fold:
+                            metrics = subspace_metrics(reps['ieeg'][part], reps['meg'][part])
+                            metrics['angles_deg'] = json.dumps(metrics['angles_deg'])
+                            tables['overlap'].append(dict(**base, space=space, partition='in_sample' if repeat == -1 else part, **metrics))
+                        rows, artifacts = evaluate_alignment(reps, ridge_grid)
+                        if repeat == -1:
+                            for row in rows: row['partition'] = 'in_sample'
+                        tables['alignment'].extend(dict(**base, space=space, **row) for row in rows)
+                        np.savez_compressed(out/f'{prefix}_alignment.npz', **artifacts)
+                    rows, artifacts = evaluate_clusters(representations['spatial_patterns'], cluster_counts, matching_seed)
+                    if repeat == -1:
+                        for row in rows: row['partition'] = 'in_sample'
+                    tables['clusters'].extend(dict(**base, **row) for row in rows)
+                    np.savez_compressed(out/f'{name}_{repeat:03d}_k{k}_clusters.npz', **artifacts)
+                del scores
+            if len(fitted) > 1:
+                from compare_models import compare_fitted_models
+                within = compare_fitted_models(fold, fitted, dimensions, repeat=repeat)
+                for key, table in within.items():
+                    table['analysis'] = analysis
+                    if repeat == -1 and 'partition' in table: table['partition'] = 'in_sample'
+                    tables[key].extend(table.to_dict('records'))
+        for table, rows in tables.items():
+            frame = pd.DataFrame(rows)
+            if not (table.startswith('within_model_') and frame.empty):
+                frame.to_csv(out/f'{table}.csv', index=False)
+    (out/'COMPLETE.json').write_text(json.dumps(dict(repeats=repeats, models=list(models))))
+    return {name: pd.DataFrame(rows) for name, rows in tables.items()}
+
+
+def load_results(output_dir):
+    root = Path(output_dir)
+    config = json.loads((root/'config.json').read_text())
+    if not (root/'COMPLETE.json').exists():
+        warnings.warn('Run has not completed; tables may describe only finished repetitions.')
+    names = ['overlap', 'alignment', 'clusters']
+    names += [name for name in ('cloud_metrics',) if (root/f'{name}.csv').exists()]
+    if config.get('schema_version',1) < 2: names += ['reliability','cluster_selection']
+    names += [name for name in ('within_model_metrics', 'within_model_pairs', 'within_model_correlations')
+              if (root/f'{name}.csv').exists()]
+    return config, {name: pd.read_csv(root/f'{name}.csv') for name in names}
+
+
+def plot_results(output_dir, k=None, show=True):
+    """Save cross-modal and available within-modal model comparison figures."""
+    import matplotlib.pyplot as plt
+    config, tables = load_results(output_dir)
+    if config.get('schema_version',1) >= 2:
+        return _plot_kfold_results(output_dir, config, tables, k, show)
+    k = k or max(config['dimensions'])
+    if k not in config['dimensions']:
+        raise ValueError('Choose a dimension saved in this run.')
+    out = Path(output_dir)
+    spaces = ('temporal_scores', 'spatial_patterns')
+    figures = []
+
+    def finish(fig, filename):
+        for ext in ('png', 'pdf'):
+            fig.savefig(out/f'{filename}.{ext}', dpi=180, bbox_inches='tight')
+        if show:
+            plt.show()
+        plt.close(fig)
+        figures.append(str(out/f'{filename}.png'))
+
+    def curve(ax, data, x, y, label):
+        group = data.groupby(x)[y]
+        summary = group.agg(['median', 'min', 'max'])
+        ax.plot(summary.index, summary['median'], 'o-', label=label)
+        ax.fill_between(summary.index.to_numpy(), summary['min'].to_numpy(), summary['max'].to_numpy(), alpha=.12)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
+    data = tables['overlap'].query("partition == 'test'")
+    for ax, space in zip(axes, spaces):
+        for name, rows in data[data.space == space].groupby('model'):
+            curve(ax, rows, 'k', 'overlap', name)
+        ax.set(title=space.replace('_', ' '), xlabel='Retained dimensions', xticks=config['dimensions'], ylabel='Mean squared cosine (overlap)', ylim=(0, 1.02))
+        ax.legend()
+    fig.suptitle('Held-out subspace overlap — median and range across repetitions')
+    finish(fig, 'subspace_overlap')
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8), constrained_layout=True)
+    data = tables['alignment'].query("partition == 'test' and k == @k").copy()
+    order = ['identity', 'orthogonal', 'affine', 'quadratic']
+    data['complexity_index'] = data.complexity.map({v: i for i, v in enumerate(order)})
+    for i, space in enumerate(spaces):
+        for j, direction in enumerate(('ieeg_to_meg', 'meg_to_ieeg')):
+            ax = axes[i, j]
+            for name, rows in data[(data.space == space) & (data.direction == direction)].groupby('model'):
+                curve(ax, rows, 'complexity_index', 'nrmse', name)
+            ax.axhline(1, color='grey', linestyle=':', label='Training-mean baseline')
+            ax.set(xticks=range(4), xticklabels=order, ylabel='Held-out normalized error', title=f'{space}: {direction}')
+            ax.legend(fontsize=8)
+    fig.suptitle(f'Alignment complexity, k={k} — ridge chosen on tuning trials; lower is better')
+    finish(fig, f'alignment_complexity_k{k}')
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4), constrained_layout=True)
+    data = tables['reliability']
+    for ax, space in zip(axes, spaces):
+        for (name, modality), rows in data[data.space == space].groupby(['model', 'modality']):
+            curve(ax, rows, 'k', 'overlap', f'{name}: {modality}')
+        ax.set(title=space.replace('_', ' '), xlabel='Retained dimensions', xticks=config['dimensions'], ylabel='Test-half subspace overlap', ylim=(0, 1.02))
+        ax.legend(fontsize=7)
+    fig.suptitle('Within-modality reliability — independent test halves, fixed trained axes')
+    finish(fig, 'within_modality_reliability')
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4), constrained_layout=True)
+    data = tables['clusters']
+    for ax, metric in zip(axes, ('cross_modal_ari', 'fixed_centroid_stability', 'refit_stability')):
+        subset = data[data.metric == metric]
+        if metric == 'cross_modal_ari':
+            subset = subset[subset.partition == 'test']
+        for (name, modality), rows in subset.groupby(['model', 'modality']):
+            curve(ax, rows, 'k', 'value', f'{name}: {modality}')
+        ax.axhline(0, color='grey', linestyle=':')
+        ax.set(title=metric.replace('_', ' '), xlabel='Retained dimensions', xticks=config['dimensions'], ylabel='Adjusted Rand index', ylim=(-1, 1.02))
+        if len(subset):
+            ax.legend(fontsize=7)
+        else:
+            ax.text(.5, .5, 'No valid cluster solution', ha='center', transform=ax.transAxes)
+    fig.suptitle('Spatial clusters — common cluster count selected on tuning trials')
+    finish(fig, 'cluster_stability_agreement')
+    if 'within_model_metrics' in tables:
+        from vs2_0_compare_models import plot_within_models
+        for index, fig in enumerate(plot_within_models(tables, k=k, partition='test')):
+            finish(fig, f'within_models_k{k}_{index:02d}')
+    return figures
+
+
+def _plot_kfold_results(output_dir, config, tables, k, show):
+    """Separate all-data descriptions from held-out fold performance."""
+    import matplotlib.pyplot as plt
+    k = k or max(config['dimensions'])
+    if k not in config['dimensions']: raise ValueError('Choose a saved dimension.')
+    paths = []
+    def finish(fig,name):
+        for ext in ('png','pdf'): fig.savefig(Path(output_dir)/f'{name}.{ext}',dpi=180,bbox_inches='tight')
+        if show: plt.show()
+        plt.close(fig); paths.append(str(Path(output_dir)/f'{name}.png'))
+    fig,axes=plt.subplots(1,2,figsize=(12,4),layout='constrained')
+    for ax,space in zip(axes,('temporal_scores','spatial_patterns')):
+        for model in config['models']:
+            data=tables['overlap']; data=data[(data.space==space)&(data.model==model)]
+            full=data[data.partition=='in_sample'].sort_values('k')
+            line,=ax.plot(full.k,full.overlap,'--',label=model+' all data')
+            grouped=data[data.partition=='test'].groupby('k').overlap.agg(['median','min','max'])
+            ax.plot(grouped.index,grouped['median'],'o-',color=line.get_color(),label=model+' test folds')
+            ax.fill_between(grouped.index,grouped['min'],grouped['max'],color=line.get_color(),alpha=.12)
+        ax.set(title=space+(' (mapped features)' if space=='spatial_patterns' else ' (shared times)'),xlabel='Components',ylabel='Subspace overlap',ylim=(0,1.02));ax.legend(fontsize=7)
+    fig.suptitle('All-data description vs held-out geometry; shading = fold range')
+    finish(fig,'subspace_overlap')
+    fig,axes=plt.subplots(2,2,figsize=(12,8),layout='constrained')
+    order=['identity','orthogonal','affine','quadratic']
+    for i,space in enumerate(('temporal_scores','spatial_patterns')):
+        for j,direction in enumerate(('ieeg_to_meg','meg_to_ieeg')):
+            ax=axes[i,j]
+            for model in config['models']:
+                data=tables['alignment'];data=data[(data.k==k)&(data.space==space)&(data.direction==direction)&(data.model==model)]
+                full=data[data.partition=='in_sample'].set_index('complexity').reindex(order)
+                line,=ax.plot(range(4),full.nrmse,'--',label=model+' all data')
+                g=data[data.partition=='test'].groupby('complexity').nrmse.agg(['median','min','max']).reindex(order)
+                ax.plot(range(4),g['median'],'o-',color=line.get_color(),label=model+' test')
+                ax.fill_between(range(4),g['min'],g['max'],color=line.get_color(),alpha=.12)
+            ax.axhline(1,color='grey',ls=':');ax.set(title=space+' '+direction,xticks=range(4),xticklabels=order,ylabel='Normalized error');ax.legend(fontsize=7)
+    fig.suptitle(f'Transformations, k={k}; fixed ridge, no tuning')
+    finish(fig,f'alignment_complexity_k{k}')
+    fig,ax=plt.subplots(figsize=(8,4),layout='constrained')
+    data=tables['clusters'];data=data[(data.k==k)&(data.metric=='cross_modal_ari')]
+    for model in config['models']:
+        full=data[(data.model==model)&(data.partition=='in_sample')].sort_values('n_clusters')
+        line,=ax.plot(full.n_clusters,full.value,'--',label=model+' all data')
+        g=data[(data.model==model)&(data.partition=='test')].groupby('n_clusters').value.agg(['median','min','max'])
+        if len(g):
+            ax.plot(g.index,g['median'],'o-',color=line.get_color(),label=model+' test')
+            ax.fill_between(g.index,g['min'],g['max'],color=line.get_color(),alpha=.12)
+    ax.set(xlabel='Predeclared cluster count',ylabel='Cross-modal ARI',title=f'Mapped spatial grouping, k={k}; full-concatenated uses pairing',ylim=(-1,1.02));ax.legend(fontsize=7)
+    finish(fig,f'cluster_agreement_k{k}')
+    _plot_extended_geometry(tables,k,finish)
+    return paths
+
+
+def _plot_extended_geometry(tables,k,finish):
+    import matplotlib.pyplot as plt
+    # Fold consistency: every point is one held-out fold, no independence claim.
+    fig,axes=plt.subplots(1,2,figsize=(13,4),layout='constrained')
+    for ax,space in zip(axes,('temporal_scores','spatial_patterns')):
+        data=tables['alignment'].query("partition == 'test' and k == @k")
+        for (model,direction),g in data[(data.space==space)&(data.complexity=='affine')].groupby(['model','direction']):
+            g=g.sort_values('repeat');ax.plot(g.repeat+1,g.nrmse,'o-',label=model+' '+direction)
+        ax.axhline(1,color='grey',ls=':');ax.set(title=space+(' (mapped features)' if space=='spatial_patterns' else ' (no electrode pairing)'),xlabel='Test fold',ylabel='Affine NRMSE');ax.set_xticks(sorted(data.repeat.unique()+1));ax.legend(fontsize=6)
+    fig.suptitle('Fold consistency; fixed ridge and overlapping training sets')
+    finish(fig,f'fold_consistency_k{k}')
+    if 'cloud_metrics' not in tables:return
+    fig,axes=plt.subplots(1,3,figsize=(15,4),layout='constrained')
+    for ax,metric,title in zip(axes,('wasserstein2','gw_squared_loss','mmd2'),('Wasserstein W2','Gromov–Wasserstein squared loss','Gaussian MMD²')):
+        for model,g in tables['cloud_metrics'].groupby('model'):
+            full=g[g.partition=='in_sample'].sort_values('k')
+            line,=ax.plot(full.k,full[metric],'s--',markerfacecolor='none',label=model+' all data')
+            test=g[g.partition=='test'].groupby('k')[metric].agg(['median','min','max'])
+            ax.plot(test.index,test['median'],'o-',color=line.get_color(),label=model+' test')
+            ax.fill_between(test.index,test['min'],test['max'],color=line.get_color(),alpha=.15)
+        ax.set(title=title,xlabel='Components',ylabel='Discrepancy (lower is closer)',xticks=sorted(tables['cloud_metrics'].k.unique()));ax.legend(fontsize=6)
+    fig.suptitle('Unpaired native spatial clouds · weighted prototype approximations')
+    finish(fig,'unpaired_cloud_distances')
+
+
+
+def plot_full_data_clusters(output_dir, show=True):
+    """Plot saved k=3 full-data spatial patterns without fitting or changing CV.
+
+    Two figures per model: independent silhouette-selected counts, and a common
+    count selected by full-data ARI. ARI compares separate K-means partitions;
+    it does not define a jointly fitted clustering. Ties favor fewer clusters.
+    Returns image paths and the descriptive selection table.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap
+    from matplotlib.ticker import MaxNLocator
+    from scipy.optimize import linear_sum_assignment
+
+    root = Path(output_dir)
+    config, tables = load_results(root)
+    if config.get('schema_version', 1) < 2 or 3 not in config['dimensions']:
+        raise ValueError('3D plots require saved full-data k=3 results. Include 3 in --dimensions.')
+    full = tables['clusters'].query("partition == 'in_sample' and k == 3")
+    destination = root / 'full_data_clusters_3d'
+    destination.mkdir(exist_ok=True)
+    paths, records = [], []
+    names = {'separate_pca': 'Separate PCA', 'joint_pca': 'Joint PCA', 'plssvd': 'PLSSVD'}
+
+    def best(rows):
+        rows = rows[np.isfinite(rows.value)]
+        if rows.empty:
+            return None
+        return int(rows.sort_values(['value', 'n_clusters'], ascending=[False, True]).iloc[0].n_clusters)
+
+    for model in config['models']:
+        data = full[full.model == model]
+        individual = {m: best(data[(data.metric == 'silhouette') & (data.modality == m)]) for m in MODALITIES}
+        shared = best(data[data.metric == 'cross_modal_ari'])
+        if any(v is None for v in individual.values()) or shared is None:
+            warnings.warn(f'{model}: no valid silhouette/ARI solution for both modalities; skipping 3D plots.')
+            continue
+        with np.load(root / f'{model}_-01_k3_spatial_patterns.npz') as patterns, np.load(root / f'{model}_-01_k3_clusters.npz') as clusters:
+            xyz = {m: (patterns[m + '_train'] - clusters[m + '_normalization_center']) /
+                      float(clusters[m + '_normalization_rms']) for m in MODALITIES}
+            if any(x.ndim != 2 or x.shape[1] != 3 or not np.isfinite(x).all() for x in xyz.values()):
+                raise ValueError(f'{model}: expected finite location × 3 forward patterns.')
+            if xyz['ieeg'].shape != xyz['meg'].shape:
+                raise ValueError('Cross-modal ARI needs the same ordered feature correspondences.')
+            # Keep identical limits between modalities and both selection views.
+            combined = np.vstack(list(xyz.values()))
+            middle = (combined.max(0) + combined.min(0)) / 2
+            radius = max(float(np.ptp(combined, axis=0).max()) * .55, 1e-6)
+            for criterion, counts in [('silhouette', individual), ('ari', dict.fromkeys(MODALITIES, shared))]:
+                labels = {m: clusters[f'c{counts[m]}_{m}_train'].astype(int).copy() for m in MODALITIES}
+                centers = {m: clusters[f'c{counts[m]}_{m}_centers'] for m in MODALITIES}
+                center_ids = {m: np.arange(counts[m]) for m in MODALITIES}
+                for m in MODALITIES:
+                    if len(labels[m]) != len(xyz[m]): raise ValueError('Saved labels and patterns have different row counts.')
+                observed_ari = float(adjusted_rand_score(labels['ieeg'], labels['meg']))
+                if criterion == 'ari':
+                    contingency = np.zeros((shared, shared), dtype=int)
+                    np.add.at(contingency, (labels['ieeg'], labels['meg']), 1)
+                    a, b = linear_sum_assignment(-contingency)
+                    mapping = np.empty(shared, dtype=int); mapping[b] = a
+                    labels['meg'] = mapping[labels['meg']]
+                    center_ids['meg'] = mapping[center_ids['meg']]
+                fig = plt.figure(figsize=(13, 6.8))
+                fig.subplots_adjust(left=.03, right=.97, top=.78, bottom=.18, wspace=.12)
+                palette = list(plt.get_cmap('tab20').colors)
+                cmap = ListedColormap(palette[::2] + palette[1::2])
+                for i, m in enumerate(MODALITIES):
+                    count = counts[m]
+                    ax = fig.add_subplot(1, 2, i + 1, projection='3d')
+                    score = float(data[(data.metric == 'silhouette') & (data.modality == m) & (data.n_clusters == count)].value.iloc[0])
+                    for label in range(count):
+                        points = xyz[m][labels[m] == label]
+                        ax.scatter(*points.T, color=cmap(label % 20), s=20, alpha=.7, depthshade=False,
+                                   label=f'{label + 1} (n={len(points)})', rasterized=True)
+                    ax.scatter(*centers[m].T, c=[cmap(int(v) % 20) for v in center_ids[m]], marker='X',
+                               s=150, edgecolor='black', linewidth=1.2, depthshade=False)
+                    for location, label in zip(centers[m], center_ids[m]):
+                        ax.text(*location, f' {label+1}', fontsize=9, weight='bold')
+                    ax.set(title=f'{"iEEG" if m == "ieeg" else "MEG"}: {count} clusters | silhouette {score:.3f}',
+                           xlabel='Component 1 pattern', ylabel='Component 2 pattern', zlabel='Component 3 pattern')
+                    for setter, c in zip((ax.set_xlim, ax.set_ylim, ax.set_zlim), middle): setter(c-radius, c+radius)
+                    for axis in (ax.xaxis, ax.yaxis, ax.zaxis): axis.set_major_locator(MaxNLocator(4))
+                    ax.set_box_aspect((1, 1, 1), zoom=.82)
+                    ax.view_init(elev=22, azim=40)
+                    ax.legend(title='Cluster (point count)', loc='upper left', fontsize=7, title_fontsize=8)
+                    records.append(dict(model=model, criterion=criterion, modality=m, n_components=3,
+                                        n_clusters=count, silhouette=score, cross_modal_ari=observed_ari,
+                                        n_points=len(labels[m]), partition='in_sample'))
+                title = 'Highest silhouette per modality' if criterion == 'silhouette' else 'Common count with highest cross-modal ARI'
+                fig.suptitle(f'{names.get(model, model)} — {title}\nFull dataset, 3 components | cross-modal ARI = {observed_ari:.3f}', fontsize=14, y=.97)
+                colors = ('Colours are independent between modalities.' if criterion == 'silhouette' else
+                          'Colours matched by membership agreement; same colour does not imply identical membership.')
+                fig.text(.5, .065, 'Points: electrodes / mapped sources in component-pattern space. X: centroid.\n' + colors +
+                         '\nSeparate K-means fits; full-data selection is descriptive, not held-out validation.', ha='center', fontsize=9)
+                stem = destination / f'{model}_{criterion}'
+                for ext in ('png', 'pdf'): fig.savefig(stem.with_suffix('.' + ext), dpi=180, bbox_inches='tight')
+                if show: plt.show()
+                plt.close(fig)
+                paths.append(str(stem.with_suffix('.png')))
+    selection = pd.DataFrame(records, columns=['model','criterion','modality','n_components','n_clusters',
+                                               'silhouette','cross_modal_ari','n_points','partition'])
+    selection.to_csv(destination / 'display_selections.csv', index=False)
+    return paths, selection
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parent)
+    parser.add_argument('--cache-dir', type=Path)
+    parser.add_argument('--scratch-dir', type=Path, help='Temporary fold storage (default: TMPDIR/system temp).')
+    parser.add_argument('--output-dir', type=Path)
+    parser.add_argument('--meg-kind', choices=MEG_KINDS, default='full_concatenated')
+    parser.add_argument('--models', nargs='+', choices=MODELS, default=list(MODELS))
+    parser.add_argument('--dimensions', nargs='+', type=int, default=[1, 2, 3, 5, 10])
+    parser.add_argument('--repeats', '--n-splits', dest='repeats', type=int, default=5)
+    parser.add_argument('--seed', type=int, default=2026)
+    parser.add_argument('--block-scaling', choices=['none', 'equal_variance'], default='equal_variance')
+    parser.add_argument('--split-unit', choices=['trial', 'group'], default='trial')
+    parser.add_argument('--cluster-counts', nargs='+', type=int, default=[2, 3, 4, 5, 6])
+    parser.add_argument('--ridge-alpha', type=float, default=1e-2, help='Fixed transformation ridge penalty; no tuning.')
+    parser.add_argument('--ieeg-coords-dir',type=Path,help='Optional directory of subject_coords.csv in cached channel order.')
+    parser.add_argument('--meg-coords-dir',type=Path,help='Optional directory of subject_pos.csv in cached source order.')
+    parser.add_argument('--ieeg-coords-unit',choices=['mm','m'],default='mm')
+    parser.add_argument('--meg-coords-unit',choices=['mm','m'],default='mm')
+    parser.add_argument('--cloud-prototypes',type=int,default=32,help='Maximum weighted representatives per native spatial cloud; all features contribute.')
+    parser.add_argument('--max-gram-gib', type=float, default=2.)
+    parser.add_argument('--plot-only', action='store_true', help='Regenerate figures from saved result tables.')
+    args = parser.parse_args()
+    import matplotlib
+    matplotlib.use('Agg')
+    out = args.output_dir or args.root/'out'/'compare_subspace'/args.meg_kind
+    if not args.plot_only:
+        run_comparison(args.cache_dir or args.root/'out'/'trial_cache', out,
+                       meg_kind=args.meg_kind, models=args.models, dimensions=args.dimensions,
+                       repeats=args.repeats, seed=args.seed, block_scaling=args.block_scaling,
+                       split_unit=args.split_unit, cluster_counts=args.cluster_counts,
+                       ridge_grid=(args.ridge_alpha,), ieeg_coords_dir=args.ieeg_coords_dir, meg_coords_dir=args.meg_coords_dir,
+                       ieeg_coords_unit=args.ieeg_coords_unit,meg_coords_unit=args.meg_coords_unit, cloud_prototypes=args.cloud_prototypes, max_gram_gib=args.max_gram_gib, scratch_dir=args.scratch_dir)
+    plot_results(out, show=False)
+    print(f'Outputs saved to: {out.resolve()}', flush=True)
+
+
+if __name__ == '__main__':
+    main()

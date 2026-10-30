@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Trial-held-out comparison of PCA, PLSSVD and joint PCA spaces.
 
-submit_to_cluster -n 2 -q short.q "python -u compare_subspace.py --meg-kind full_concatenated"  --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q short.q "python -u vs3_0_compare_subspace.py --meg-kind full_concatenated"  --project MINDLAB2021_MEG-TempSeqAges
 
 Input: the resumable cache produced by plssvd_eval.py (ROOT/out/trial_cache).
-Output: ROOT/out/compare_subspace/MEG_KIND. Read with compare_subspace.ipynb.
+Output: ROOT/out/compare_subspace/MEG_KIND. Read with vs3_0_compare_modality.ipynb.
 All-data descriptive fit followed by shuffled folds with disjoint test trials.
 Conditions are averaged; participant/source assignments remain fixed across folds.
 Spatial tests concern new trials at the same locations, NOT new participants.
@@ -216,13 +216,10 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
                    dimensions=(1, 2, 3, 5, 10), repeats=5, seed=2026,
                    block_scaling='equal_variance', split_unit='trial',
                    cluster_counts=(2, 3, 4, 5, 6), ridge_grid=(1e-2,),
-                   max_gram_gib=2., scratch_dir=None, cloud_prototypes=32,
+                   max_gram_gib=2., scratch_dir=None,
                    ieeg_coords_dir=None, meg_coords_dir=None, ieeg_coords_unit="mm", meg_coords_unit="mm"):
     """Run/export comparison; reuse an already complete PLSSVD trial cache."""
     from vs2_1_plssvd_eval_utils import load_trial_cache, _subject_folds, _temporary_fold, _project
-    from vs3_1_spatial_clouds import evaluate_clouds
-    from vs2_1_plssvd_eval_utils import _patterns
-    if not isinstance(cloud_prototypes,int) or cloud_prototypes < 2: raise ValueError('cloud_prototypes must be >=2.')
     dimensions = sorted(set(dimensions))
     if not dimensions or min(dimensions) < 1 or repeats < 2:
         raise ValueError('Positive dimensions and at least two folds are required.')
@@ -244,7 +241,7 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
     for modality, subjects in (('ieeg', trials.ieeg), ('meg', trials.meg)):
         if not subjects or {s.subject for s in subjects} != set(map(str, manifest['config'][modality+'_subjects'])):
             raise ValueError('Trial cache is incomplete. Finish prepare_trial_cache first.')
-    config = dict(schema_version=3,cloud_prototypes=cloud_prototypes,condition_mode='average', full_data_repeat=-1, cache_dir=str(Path(cache_dir).resolve()), meg_kind=meg_kind, models=list(models),
+    config = dict(schema_version=4,condition_mode='average', full_data_repeat=-1, cache_dir=str(Path(cache_dir).resolve()), meg_kind=meg_kind, models=list(models),
                   dimensions=dimensions, repeats=repeats, seed=seed, block_scaling=block_scaling,
                   split_unit=split_unit, cluster_counts=list(cluster_counts), ridge_grid=list(ridge_grid),
                   max_gram_gib=max_gram_gib, scope='new trials at fixed participant locations',
@@ -258,7 +255,7 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
     (out/'config.json').write_text(json.dumps(config, indent=2))
     (out/'cache_config.json').write_text(json.dumps(manifest['config'], indent=2))
     np.savez_compressed(out/'axes.npz', times=trials.times, conditions=trials.conditions)
-    tables = {name: [] for name in ('overlap', 'alignment', 'clusters', 'splits', 'cloud_metrics',
+    tables = {name: [] for name in ('overlap', 'alignment', 'clusters', 'splits',
                                   'within_model_metrics', 'within_model_pairs', 'within_model_correlations')}
     matching_seq, split_seq = np.random.SeedSequence(seed).spawn(2)
     matching_seed = int(np.random.default_rng(matching_seq).integers(2**31-1))
@@ -294,17 +291,6 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
                 for k in dimensions:
                     base = dict(analysis=analysis, model=name, repeat=repeat, k=k)
                     representations = _representations(fold, scores, k)
-                    native_patterns={m:{p:_patterns(fold[p][m],scores[p][m][:,:k]) for p in fold} for m in MODALITIES}
-                    selected_scores={p:{m:scores[p][m][:,:k] for m in MODALITIES} for p in fold}
-                    cloud_rows,cloud_artifacts=evaluate_clouds(native_patterns,selected_scores,
-                        prototypes=cloud_prototypes,seed=matching_seed)
-                    for key,rows in [('cloud_metrics',cloud_rows)]:
-                        if repeat == -1:
-                            for row in rows:row['partition']='in_sample'
-                        tables[key].extend(dict(**base,**row) for row in rows)
-                    np.savez_compressed(out/f'{name}_{repeat:03d}_k{k}_clouds.npz',**cloud_artifacts)
-                    del native_patterns
-
                     for space, reps in representations.items():
                         prefix = f'{name}_{repeat:03d}_k{k}_{space}'
                         if space == 'spatial_patterns':
@@ -325,7 +311,7 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
                     np.savez_compressed(out/f'{name}_{repeat:03d}_k{k}_clusters.npz', **artifacts)
                 del scores
             if len(fitted) > 1:
-                from compare_models import compare_fitted_models
+                from vs2_0_compare_models import compare_fitted_models
                 within = compare_fitted_models(fold, fitted, dimensions, repeat=repeat)
                 for key, table in within.items():
                     table['analysis'] = analysis
@@ -345,7 +331,6 @@ def load_results(output_dir):
     if not (root/'COMPLETE.json').exists():
         warnings.warn('Run has not completed; tables may describe only finished repetitions.')
     names = ['overlap', 'alignment', 'clusters']
-    names += [name for name in ('cloud_metrics',) if (root/f'{name}.csv').exists()]
     if config.get('schema_version',1) < 2: names += ['reliability','cluster_selection']
     names += [name for name in ('within_model_metrics', 'within_model_pairs', 'within_model_correlations')
               if (root/f'{name}.csv').exists()]
@@ -500,18 +485,6 @@ def _plot_extended_geometry(tables,k,finish):
         ax.axhline(1,color='grey',ls=':');ax.set(title=space+(' (mapped features)' if space=='spatial_patterns' else ' (no electrode pairing)'),xlabel='Test fold',ylabel='Affine NRMSE');ax.set_xticks(sorted(data.repeat.unique()+1));ax.legend(fontsize=6)
     fig.suptitle('Fold consistency; fixed ridge and overlapping training sets')
     finish(fig,f'fold_consistency_k{k}')
-    if 'cloud_metrics' not in tables:return
-    fig,axes=plt.subplots(1,3,figsize=(15,4),layout='constrained')
-    for ax,metric,title in zip(axes,('wasserstein2','gw_squared_loss','mmd2'),('Wasserstein W2','Gromov–Wasserstein squared loss','Gaussian MMD²')):
-        for model,g in tables['cloud_metrics'].groupby('model'):
-            full=g[g.partition=='in_sample'].sort_values('k')
-            line,=ax.plot(full.k,full[metric],'s--',markerfacecolor='none',label=model+' all data')
-            test=g[g.partition=='test'].groupby('k')[metric].agg(['median','min','max'])
-            ax.plot(test.index,test['median'],'o-',color=line.get_color(),label=model+' test')
-            ax.fill_between(test.index,test['min'],test['max'],color=line.get_color(),alpha=.15)
-        ax.set(title=title,xlabel='Components',ylabel='Discrepancy (lower is closer)',xticks=sorted(tables['cloud_metrics'].k.unique()));ax.legend(fontsize=6)
-    fig.suptitle('Unpaired native spatial clouds · weighted prototype approximations')
-    finish(fig,'unpaired_cloud_distances')
 
 
 
@@ -638,7 +611,6 @@ def main():
     parser.add_argument('--meg-coords-dir',type=Path,help='Optional directory of subject_pos.csv in cached source order.')
     parser.add_argument('--ieeg-coords-unit',choices=['mm','m'],default='mm')
     parser.add_argument('--meg-coords-unit',choices=['mm','m'],default='mm')
-    parser.add_argument('--cloud-prototypes',type=int,default=32,help='Maximum weighted representatives per native spatial cloud; all features contribute.')
     parser.add_argument('--max-gram-gib', type=float, default=2.)
     parser.add_argument('--plot-only', action='store_true', help='Regenerate figures from saved result tables.')
     args = parser.parse_args()
@@ -651,7 +623,7 @@ def main():
                        repeats=args.repeats, seed=args.seed, block_scaling=args.block_scaling,
                        split_unit=args.split_unit, cluster_counts=args.cluster_counts,
                        ridge_grid=(args.ridge_alpha,), ieeg_coords_dir=args.ieeg_coords_dir, meg_coords_dir=args.meg_coords_dir,
-                       ieeg_coords_unit=args.ieeg_coords_unit,meg_coords_unit=args.meg_coords_unit, cloud_prototypes=args.cloud_prototypes, max_gram_gib=args.max_gram_gib, scratch_dir=args.scratch_dir)
+                       ieeg_coords_unit=args.ieeg_coords_unit,meg_coords_unit=args.meg_coords_unit, max_gram_gib=args.max_gram_gib, scratch_dir=args.scratch_dir)
     plot_results(out, show=False)
     print(f'Outputs saved to: {out.resolve()}', flush=True)
 
