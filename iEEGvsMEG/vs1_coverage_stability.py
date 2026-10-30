@@ -1,7 +1,7 @@
-"""Separate subject-count and fixed-cohort pairing sensitivity analyses.
+"""Fixed-cohort random-assignment stability of PCA time courses and weights.
 
 All reported metrics are mean absolute Pearson correlations after one-to-one
-component assignment. These are descriptive comparisons of averaged time courses.
+component assignment. Domains are matched independently; weight rows retain iEEG electrode order.
 """
 from itertools import combinations
 from pathlib import Path
@@ -10,9 +10,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial import cKDTree
-from vs1_coverage_matching_utils import Dataset, fit_block_pca
-
-GROUP_KINDS = ('full_average', 'full_concatenated', 'coverage_average')
+from vs1_coverage_matching_utils import Dataset, fit_block_pca, normalize_dataset
 
 
 def _integer(value, name, minimum=1):
@@ -56,28 +54,6 @@ def _ieeg_dataset(reference, subjects):
     rows = np.flatnonzero(np.isin(owners, subjects))
     return Dataset('iEEG', [s['ieeg'][:, rows, :]], s['electrode_metadata'].iloc[rows].reset_index(drop=True),
                    np.arange(len(rows)), reference.condition_mode, source_data=s), rows
-
-
-def _group_dataset(reference, indices, kind):
-    """No participant assignment; even one MEG participant is supported."""
-    s = reference.source_data
-    arrays = [s['meg'][i] for i in indices]
-    if kind == 'full_average':
-        if any(a.shape != arrays[0].shape for a in arrays):
-            raise ValueError('full_average requires equal MEG source/condition/time counts.')
-        mean = np.zeros_like(arrays[0], dtype=np.result_type(np.float32, *[a.dtype for a in arrays]))
-        for a in arrays: mean += a/len(arrays)
-        arrays = [mean]
-    elif kind == 'coverage_average':
-        coords = s['electrode_positions']
-        mean = np.zeros((arrays[0].shape[0], len(coords), arrays[0].shape[-1]), dtype=float)
-        for index, a in zip(indices, arrays):
-            _, ix = cKDTree(s['meg_positions'][index]).query(coords)
-            mean += a[:, ix, :]/len(arrays)
-        arrays = [mean]
-    elif kind != 'full_concatenated':
-        raise ValueError(f'Unsupported group composition: {kind}')
-    return Dataset(kind, arrays, pd.DataFrame(), None, reference.condition_mode, source_data=s)
 
 
 def _scores(dataset, k, max_gram_gib):
@@ -124,71 +100,6 @@ def load_stability_results(output_dir, expected_experiment=None):
     return result
 
 
-def run_subject_count_stability(reference, *, subject_counts=(5, 10, 20, 30), repeats=20,
-                                n_components=3, seed=2026, meg_kinds=GROUP_KINDS,
-                                max_gram_gib=2., output_dir=None):
-    """Vary actual cohort size separately in MEG and iEEG, without subject pairing.
-
-    Native features are kept: iEEG and concatenated MEG feature counts naturally
-    grow with subject count. iEEG channels remain in their original order.
-    Stability compares each subset with its full-cohort PCA AND all pairs of
-    resampled fits at the same count. MEG subsets are compared with fixed full
-    iEEG PCA; iEEG subsets are compared with fixed full MEG PCA for each kind.
-    Subsets overlap; none of these correlations is a held-out validation score.
-    """
-    k = _integer(n_components, 'n_components'); repeats = _integer(repeats, 'repeats', 2)
-    counts = sorted(set(_integer(n, 'subject_counts') for n in subject_counts))
-    kinds = tuple(meg_kinds)
-    if not counts or not kinds or len(set(kinds)) != len(kinds) or not set(kinds) <= set(GROUP_KINDS):
-        raise ValueError('Use positive subject counts and unique group MEG compositions, without paired/control.')
-    s, owners, ieeg_ids, meg_ids = _context(reference)
-    available = {m: [n for n in counts if n <= total] for m, total in [('ieeg', len(ieeg_ids)), ('meg', len(meg_ids))]}
-    if not any(available.values()): raise ValueError('No requested counts fit the available cohorts.')
-    availability = pd.DataFrame([
-        dict(modality=m, n_subjects=n, available_subjects=total,
-             status='included' if n <= total else 'skipped_insufficient_subjects')
-        for m, total in [('ieeg', len(ieeg_ids)), ('meg', len(meg_ids))]
-        for n in counts])
-    config = dict(experiment='subject_count', subject_counts=counts, repeats=repeats, n_components=k,
-        seed=int(seed), meg_kinds=list(kinds), ieeg_subjects=ieeg_ids, meg_subjects=meg_ids,
-        condition_mode=reference.condition_mode, metric='one-to-one matched mean absolute Pearson r',
-        features='all native features; fixed full electrode target for MEG coverage_average',
-        preprocessing=s.get('load_config', {}), scope='descriptive resampling; overlapping subsets; no confidence intervals')
-    out = _open_output(output_dir, config)
-    full_ieeg = _scores(reference, k, max_gram_gib)
-    full_meg = {kind: _scores(_group_dataset(reference, range(len(meg_ids)), kind), k, max_gram_gib) for kind in kinds}
-    saved = {'full_ieeg': full_ieeg, **{'full_'+kind: scores for kind, scores in full_meg.items()}}
-    metrics, pairs, participants, fitted = [], [], [], {}
-    for repeat, seq in enumerate(np.random.SeedSequence(seed).spawn(repeats)):
-        for modality, child in zip(('ieeg', 'meg'), seq.spawn(2)):
-            ids = ieeg_ids if modality == 'ieeg' else meg_ids
-            order = np.random.default_rng(child).permutation(len(ids))
-            for count in available[modality]:
-                chosen = sorted(order[:count]); selected_ids = [ids[i] for i in chosen]
-                participants.extend(dict(repeat=repeat, modality=modality, n_subjects=count, subject=v) for v in selected_ids)
-                datasets = {'iEEG': _ieeg_dataset(reference, selected_ids)[0]} if modality == 'ieeg' else {
-                    kind: _group_dataset(reference, chosen, kind) for kind in kinds}
-                for name, dataset in datasets.items():
-                    score = _scores(dataset, k, max_gram_gib)
-                    fitted.setdefault((modality, name, count), []).append(score)
-                    saved[f'{modality}_{name}_n{count}_r{repeat}'] = score
-                    labels = dict(modality=modality, dataset=name, n_subjects=count, n_features=dataset.n_features,
-                                  repeat=repeat, repeat_other=-1)
-                    _record(metrics, pairs, score, full_ieeg if modality == 'ieeg' else full_meg[name], k,
-                            **labels, comparison='to_full_cohort', reference_dataset=name)
-                    targets = full_meg if modality == 'ieeg' else {'iEEG': full_ieeg}
-                    for target, other in targets.items():
-                        _record(metrics, pairs, score, other, k, **labels,
-                                comparison='cross_modal', reference_dataset=target)
-        print(f'Subject-count repetition {repeat+1}/{repeats}', flush=True)
-    for (modality, name, count), values in fitted.items():
-        for a, b in combinations(range(repeats), 2):
-            _record(metrics, pairs, values[a], values[b], k, modality=modality, dataset=name,
-                    n_subjects=count, n_features=np.nan, repeat=a, repeat_other=b,
-                    comparison='between_resamples', reference_dataset=name)
-    return _finish(out, config, metrics, pairs, participants, saved, availability=availability)
-
-
 def run_pairing_stability(reference, *, n_subjects=None, repeats=20, n_components=3, seed=2026,
                           baseline_pairing=None, max_gram_gib=2., output_dir=None):
     """Freeze participant identities/counts, vary only MEG-to-iEEG assignment.
@@ -217,17 +128,20 @@ def run_pairing_stability(reference, *, n_subjects=None, repeats=20, n_component
         if count > min(len(ieeg_ids), len(meg_ids)): raise ValueError('Fixed cohort exceeds available participants.')
         fixed_ieeg = [ieeg_ids[i] for i in sorted(rng.choice(len(ieeg_ids), count, replace=False))]
         fixed_meg = [meg_ids[i] for i in sorted(rng.choice(len(meg_ids), count, replace=False))]
-        baseline = dict(zip(fixed_ieeg, fixed_meg))
+        baseline = dict(zip(fixed_ieeg, rng.permutation(fixed_meg).tolist()))
     if count < 2: raise ValueError('Pairing sensitivity requires at least two subjects per modality.')
     anchor_dataset, electrode_rows = _ieeg_dataset(reference, fixed_ieeg)
     config = dict(experiment='pairing', n_subjects=count, repeats=repeats, n_components=k, seed=int(seed),
         ieeg_subjects=fixed_ieeg, meg_subjects=fixed_meg, baseline_pairing=baseline,
         condition_mode=reference.condition_mode, metric='one-to-one matched mean absolute Pearson r',
         random_control='one fixed source-index permutation per MEG participant; no new source draws per assignment',
+        block_scaling=reference.block_scaling, weight_correspondence='fixed iEEG electrode slots',
         preprocessing=s.get('load_config', {}), scope='fixed-cohort assignment sensitivity, not validation of subject identity')
     out = _open_output(output_dir, config)
-    anchor = _scores(anchor_dataset, k, max_gram_gib)
-    saved = {'fixed_ieeg': anchor}
+    normalize_dataset(anchor_dataset, reference.block_scaling)
+    anchor_fit = fit_block_pca(anchor_dataset, k, max_gram_gib=max_gram_gib)
+    anchor = {'timecourses': anchor_fit.scores, 'weights': anchor_fit.weights}
+    saved = {f'fixed_ieeg_{key}': value for key, value in anchor.items()}
     indices = {v: meg_ids.index(v) for v in fixed_meg}
     nearest = {v: cKDTree(s['meg_positions'][indices[v]]).query(s['electrode_positions'][electrode_rows])[1] for v in fixed_meg}
     control_rng = np.random.default_rng(control_seq)
@@ -256,69 +170,32 @@ def run_pairing_stability(reference, *, n_subjects=None, repeats=20, n_component
                 for row, i, j in zip(rows, ix, rx))
         for kind, a in arrays.items():
             dataset = Dataset(kind, [a], pd.DataFrame(), None, reference.condition_mode, source_data=s)
-            scores = _scores(dataset, k, max_gram_gib)
-            saved[f'{kind}_r{repeat}'] = scores
+            normalize_dataset(dataset, reference.block_scaling)
+            fitted = fit_block_pca(dataset, k, max_gram_gib=max_gram_gib)
+            values = {'timecourses': fitted.scores, 'weights': fitted.weights}
             labels = dict(modality='meg', dataset=kind, n_subjects=count, n_features=dataset.n_features,
                           repeat=repeat, repeat_other=-1)
-            _record(metrics, pairs, scores, anchor, k, **labels, comparison='cross_modal', reference_dataset='fixed_iEEG')
-            if repeat == -1: baseline_scores[kind] = scores
-            else:
-                resampled[kind].append(scores)
-                _record(metrics, pairs, scores, baseline_scores[kind], k, **labels,
-                        comparison='to_baseline_pairing', reference_dataset=kind)
+            for domain, value in values.items():
+                saved[f'{kind}_r{repeat}_{domain}'] = value
+                _record(metrics, pairs, value, anchor[domain], k, **labels, domain=domain,
+                        comparison='cross_modal', reference_dataset='fixed_iEEG')
+                if repeat >= 0:
+                    _record(metrics, pairs, value, baseline_scores[kind][domain], k, **labels,
+                            domain=domain, comparison='to_baseline_pairing', reference_dataset=kind)
+            if repeat == -1: baseline_scores[kind] = values
+            else: resampled[kind].append(values)
         if repeat >= 0: print(f'Pairing repetition {repeat+1}/{repeats}', flush=True)
     for kind, values in resampled.items():
         for a, b in combinations(range(repeats), 2):
-            _record(metrics, pairs, values[a], values[b], k, modality='meg', dataset=kind,
-                    n_subjects=count, n_features=len(electrode_rows), repeat=a, repeat_other=b,
-                    comparison='between_pairings', reference_dataset=kind)
+            for domain in ('timecourses', 'weights'):
+                _record(metrics, pairs, values[a][domain], values[b][domain], k, modality='meg', dataset=kind,
+                        n_subjects=count, n_features=len(electrode_rows), repeat=a, repeat_other=b,
+                        domain=domain, comparison='between_pairings', reference_dataset=kind)
     cross = pd.DataFrame(metrics).query("comparison == 'cross_modal'")
-    differences = cross.pivot(index='repeat', columns='dataset', values='correlation')
+    differences = cross.pivot(index=['domain', 'repeat'], columns='dataset', values='correlation')
     differences['paired_minus_control'] = differences.paired_coverage-differences.random_control
     return _finish(out, config, metrics, pairs, participants, saved,
                    assignments=pd.DataFrame(assignments), source_mapping=pd.DataFrame(mappings),
                    paired_control_differences=differences.reset_index())
 
 
-def plot_subject_count_stability(result):
-    import matplotlib.pyplot as plt
-    table = result['metrics']; figures = []
-    for modality in ('meg', 'ieeg'):
-        fig, axes = plt.subplots(1, 3, figsize=(16, 4), constrained_layout=True)
-        for ax, comparison, title in zip(axes, ['to_full_cohort', 'between_resamples', 'cross_modal'],
-                ['PCA vs full-cohort PCA', 'PCA stability between resamples', 'Cross-modal PCA correspondence']):
-            data = table[(table.modality == modality) & (table.comparison == comparison) & (table.status == 'ok')]
-            for (name, target), rows in data.groupby(['dataset', 'reference_dataset'], sort=False):
-                summary = rows.groupby('n_subjects').correlation.agg(['median', 'min', 'max'])
-                label = f'{name} vs {target}' if comparison == 'cross_modal' else name
-                ax.plot(summary.index, summary['median'], 'o-', label=label)
-                ax.fill_between(summary.index, summary['min'], summary['max'], alpha=.15)
-            ax.set(title=title, xlabel=f'Number of selected {modality.upper()} subjects',
-                   ylabel='Mean matched |Pearson r|', ylim=(-.02, 1.02), xticks=result['config']['subject_counts'])
-            if len(data): ax.legend(fontsize=8)
-            else: ax.text(.5, .5, 'No supported results', ha='center', transform=ax.transAxes)
-        fig.suptitle(f'{modality.upper()}: first {result["config"]["n_components"]} PCs; median/range, not confidence intervals')
-        figures.append(fig)
-    return figures
-
-
-def plot_pairing_stability(result):
-    import matplotlib.pyplot as plt
-    table = result['metrics']; fig, axes = plt.subplots(1, 3, figsize=(16, 4), constrained_layout=True)
-    for ax, comparison, title in zip(axes, ['to_baseline_pairing', 'between_pairings', 'cross_modal'],
-            ['PCA vs baseline assignment', 'PCA stability between assignments', 'PCA correspondence with fixed iEEG']):
-        for index, kind in enumerate(('paired_coverage', 'random_control')):
-            rows = table[(table.dataset == kind) & (table.comparison == comparison) & (table.repeat >= 0) & (table.status == 'ok')]
-            values = rows.correlation.to_numpy()
-            if len(values):
-                ax.boxplot([values], positions=[index], widths=.45, showfliers=False)
-                ax.scatter(index+np.linspace(-.13, .13, len(values)), values, s=12, alpha=.4)
-            if comparison == 'cross_modal':
-                baseline = table[(table.dataset == kind) & (table.comparison == comparison) & (table.repeat == -1)]
-                if len(baseline): ax.plot(index, baseline.correlation.iloc[0], 'r*', markersize=12,
-                                          label='Baseline assignment' if index == 0 else None)
-        ax.set(title=title, xticks=[0, 1], xticklabels=['Paired coverage', 'Random control'],
-               ylabel='Mean matched |Pearson r|', ylim=(-.02, 1.02))
-        if comparison == 'cross_modal': ax.legend(fontsize=8)
-    fig.suptitle(f'Fixed {result["config"]["n_subjects"]} subjects per modality; assignments vary, source randomization fixed')
-    return [fig]

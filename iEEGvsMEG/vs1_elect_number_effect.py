@@ -21,19 +21,21 @@ class _SelectedChannels:
         self.n_observations = dataset.n_observations
         self.condition_mode = dataset.condition_mode
         self.source_data = dataset.source_data
+        self.scale = 1.
+        if dataset.block_scaling:
+            variance = sum(np.var(x, axis=0, ddof=1).sum() for x in self.blocks())
+            self.scale = float(1 / np.sqrt(variance))
 
     def blocks(self):
         offset = 0
         for block in self.original.blocks():
             ix = self.selected[(self.selected >= offset) & (self.selected < offset+block.shape[1])] - offset
             for start in range(0, len(ix), 1024):
-                yield block[:, ix[start:start+1024]]
+                yield block[:, ix[start:start+1024]] * self.scale
             offset += block.shape[1]
 
 
 def _channel_counts(n_features, step):
-    if step < 5:
-        raise ValueError('step must be at least 5 for five-component PCA.')
     counts=list(range(step,min(20000,n_features)+1,step))
     if not counts:
         raise ValueError('step exceeds the available channel count or the 20,000-channel cap.')
@@ -41,8 +43,8 @@ def _channel_counts(n_features, step):
 
 
 def run_elect_number_effect(meg, ieeg, *, step=100, repeats=1, seed=2026,
-                           output_dir='out/elect_number_effect', max_gram_gib=2.):
-    """Fit five PCs at step, 2*step, ... up to min(20,000, available channels).
+                           output_dir='out/elect_number_effect', max_gram_gib=2., n_components=5):
+    """Fit the requested PCs at step, 2*step, ... up to min(20,000, available channels).
 
     Only complete steps are evaluated. Each repetition uses nested prefixes
     of a random permutation of all channels; no subject balancing is applied.
@@ -53,18 +55,20 @@ def run_elect_number_effect(meg, ieeg, *, step=100, repeats=1, seed=2026,
             raise ValueError(f'{name} must be a positive integer.')
     if meg.name != 'full_concatenated':
         raise ValueError('Supply the full_concatenated MEG dataset.')
-    if min(meg.n_features,ieeg.n_features) < 5:
-        raise ValueError('Both datasets require at least five features.')
+    if min(meg.n_features,ieeg.n_features) < n_components:
+        raise ValueError('Datasets have fewer features than requested components.')
     out=Path(output_dir);out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()): raise FileExistsError('Use a new output directory to avoid mixing runs.')
     counts = _channel_counts(meg.n_features, step)
-    config=dict(schema_version=2,max_channels=20000,n_components=5,step=step,repeats=repeats,seed=seed,channel_counts=counts,
+    if counts[0] < n_components:
+        raise ValueError('Channel step must be at least n_components.')
+    config=dict(schema_version=3,max_channels=20000,n_components=n_components,step=step,repeats=repeats,seed=seed,channel_counts=counts,
                 n_full_channels=meg.n_features,condition_mode=meg.condition_mode,
                 sampling='nested uniform channel addition, independent seeded paths',
                 scope='descriptive in-sample sensitivity; fixed full iEEG PCA reference')
     (out/'config.json').write_text(json.dumps(config,indent=2))
-    reference=fit_block_pca(ieeg,n_components=5,max_gram_gib=max_gram_gib);reference.dataset=ieeg
-    if reference.scores.shape[1]!=5: raise ValueError('iEEG rank is below five.')
+    reference=fit_block_pca(ieeg,n_components=n_components,max_gram_gib=max_gram_gib);reference.dataset=ieeg
+    if reference.scores.shape[1]!=n_components: raise ValueError('iEEG rank is below n_components.')
     np.savez_compressed(out/'ieeg_reference.npz',scores=reference.scores,
                         explained_variance=reference.explained_variance,
                         explained_variance_ratio=reference.explained_variance_ratio)
@@ -79,17 +83,17 @@ def run_elect_number_effect(meg, ieeg, *, step=100, repeats=1, seed=2026,
             selected=_SelectedChannels(meg,order[:count])
             if count==meg.n_features and full_fit is not None: fitted=full_fit
             else:
-                fitted=fit_block_pca(selected,n_components=5,max_gram_gib=max_gram_gib)
+                fitted=fit_block_pca(selected,n_components=n_components,max_gram_gib=max_gram_gib)
                 fitted.dataset=selected
                 if count==meg.n_features:full_fit=fitted
-            if fitted.scores.shape[1]!=5: raise ValueError(f'Only {fitted.scores.shape[1]} PCs at {count} channels; five required.')
-            table,matched=compare_pca_to_ieeg({'iEEG':reference,'MEG':fitted},n_components=(5,),plot=False)
+            if fitted.scores.shape[1]!=n_components: raise ValueError(f'Only {fitted.scores.shape[1]} PCs at {count} channels; {n_components} required.')
+            table,matched=compare_pca_to_ieeg({'iEEG':reference,'MEG':fitted},n_components=(n_components,),plot=False)
             row=dict(repeat=repeat,n_channels=count,n_removed=meg.n_features-count,
                      total_variance=fitted.total_variance,
-                     variance_first5=float(fitted.explained_variance.sum()),
-                     variance_fraction_first5=float(fitted.explained_variance_ratio.sum()))
+                     variance_retained=float(fitted.explained_variance.sum()),
+                     variance_fraction_retained=float(fitted.explained_variance_ratio.sum()))
             row.update({key:float(table.iloc[0][key]) for key in ('ieeg_variance_captured','subspace_overlap','matched_abs_r')})
-            for pc in range(5):
+            for pc in range(n_components):
                 row[f'pc{pc+1}_variance']=float(fitted.explained_variance[pc])
                 row[f'pc{pc+1}_variance_ratio']=float(fitted.explained_variance_ratio[pc])
             metrics.append(row)
@@ -107,135 +111,3 @@ def load_elect_number_effect(output_dir):
     if not (out/'COMPLETE.json').exists(): raise FileNotFoundError('Channel sweep is incomplete.')
     return dict(config=json.loads((out/'config.json').read_text()),metrics=pd.read_csv(out/'metrics.csv'),
                 component_pairs=pd.read_csv(out/'component_pairs.csv'))
-
-
-def plot_elect_number_effect(result):
-    import matplotlib.pyplot as plt
-    fig,axes=plt.subplots(1,3,figsize=(11,5),layout='constrained')
-    for ax,key,title in zip(axes.flat,
-        ['total_variance','subspace_overlap','matched_abs_r'],
-        ['MEG total variance (all PCs)','Temporal subspace overlap with first 5 PCs iEEG','Matched component correlation first 5 PCs iEEG']):
-        
-        g=result['metrics'].groupby('n_channels')[key].agg(['median','min','max']).sort_index()
-        
-        ax.plot(g.index,g['median'],'o-',markersize=3)
-        
-        if result['config']['repeats']>1:
-            ax.fill_between(g.index,g['min'],g['max'],alpha=.2)
-        
-        ax.set(title=title, xlabel='Number of MEG channels')
-        if key == 'total_variance':
-            ax.set_ylabel('Total variance (sum across channels)')
-            ax.set_ylim(bottom=0)  # Absolute variance is not bounded by one.
-        else:
-            ax.set(ylabel='Similarity', ylim=(0, 1.02))
-        ax.grid(alpha=.2)
-    fig.suptitle('Channel-count effect: full-concatenated MEG vs fixed 5-PC iEEG reference')
-    return fig
-
-
-def visualize_elect_number_effect(output_dir, *, min_channels=None, max_channels=None,
-                                  channel_counts=None, save=True):
-    """Plot saved counts within inclusive bounds, or an explicit list of counts.
-
-    No PCA is recomputed. Returned metrics/pairs contain only selected counts;
-    the original saved configuration is retained alongside visualized_counts.
-    Filtered plots use a separate filename and never replace the full plot.
-    """
-    result = load_elect_number_effect(output_dir)
-    def positive_integer(value):
-        return not isinstance(value, bool) and isinstance(value, (int, np.integer)) and value > 0
-    for name,value in [('min_channels',min_channels),('max_channels',max_channels)]:
-        if value is not None and not positive_integer(value):
-            raise ValueError(f'{name} must be a positive integer.')
-    if min_channels is not None and max_channels is not None and min_channels > max_channels:
-        raise ValueError('min_channels must not exceed max_channels.')
-    available = sorted(result['metrics'].n_channels.unique().tolist())
-    selected = available
-    if channel_counts is not None:
-        selected = [channel_counts] if np.isscalar(channel_counts) else list(channel_counts)
-        if not selected or any(not positive_integer(v) for v in selected):
-            raise ValueError('channel_counts must contain positive integers.')
-        missing = sorted(set(selected)-set(available))
-        if missing: raise ValueError(f'Channel counts not present in saved results: {missing}')
-        selected = sorted(set(selected))
-    selected = [v for v in selected if (min_channels is None or v >= min_channels)
-                and (max_channels is None or v <= max_channels)]
-    if not selected: raise ValueError('No saved channel counts fall within this selection.')
-    result['metrics'] = result['metrics'][result['metrics'].n_channels.isin(selected)].copy()
-    result['component_pairs'] = result['component_pairs'][result['component_pairs'].n_channels.isin(selected)].copy()
-    result['visualized_counts'] = selected
-    fig = plot_elect_number_effect(result)
-    if save:
-        stem = 'channel_number_effect'
-        if selected != available:
-            import hashlib
-            tag = hashlib.sha256(json.dumps(selected).encode()).hexdigest()[:8]
-            stem += f'_{selected[0]}-{selected[-1]}_{tag}'
-        for extension in ('png','pdf'):
-            fig.savefig(Path(output_dir)/f'{stem}.{extension}',dpi=180,bbox_inches='tight')
-    return result, fig
-
-
-def main(argv=None):
-    import argparse
-    import sys
-    parser = argparse.ArgumentParser(description='Run five-PC MEG channel-count sensitivity up to 20,000 channels on a cluster.')
-    parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parent)
-    parser.add_argument('--meg-dir',type=Path)
-    parser.add_argument('--ieeg-dir',type=Path)
-    parser.add_argument('--output-dir',type=Path)
-    parser.add_argument('--metadata-csv',type=Path,help='Optional electrode metadata; otherwise use LB src.setting.GetInfo.')
-    parser.add_argument('--project-path',type=Path,help='Anatomical project path for GetInfo.')
-    parser.add_argument('--ieeg-coordinate-unit',choices=['m','mm'],default='mm')
-    parser.add_argument('--meg-coordinate-unit',choices=['m','mm'],default='m')
-    parser.add_argument('--meg-times-file',type=Path)
-    parser.add_argument('--meg-tmin',type=float,help='Defaults to first iEEG epoch time.')
-    parser.add_argument('--sfreq',type=float,default=250.)
-    parser.add_argument('--conditions',nargs='+',type=int,default=[1,2])
-    parser.add_argument('--condition-mode',choices=['average','stack'],default='average')
-    parser.add_argument('--step',type=int,default=100)
-    parser.add_argument('--repeats',type=int,default=1)
-    parser.add_argument('--seed',type=int,default=2026)
-    parser.add_argument('--max-gram-gib',type=float,default=2.)
-    parser.add_argument('--plot-only',action='store_true',help='Load saved results without loading recordings or fitting PCA.')
-    args=parser.parse_args(argv)
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    root=args.root.expanduser().resolve()
-    out=args.output_dir or root/'out'/'elect_number_effect'
-    if not args.plot_only:
-        if out.exists() and any(out.iterdir()):
-            raise FileExistsError('Choose a new --output-dir or use --plot-only for completed results.')
-        for directory in (root,root.parent,root.parent/'LB'):sys.path.insert(0,str(directory))
-        from vs1_coverage_matching_utils import load_dataset
-        meg_dir=args.meg_dir or root/'MEG'/'dataMEG'
-        ieeg_dir=args.ieeg_dir or root/'ieeg_shortWOBS_fs250'
-        subjects=sorted(p.name.removesuffix('_epochs.p') for p in ieeg_dir.glob('*_epochs.p'))
-        if not subjects:raise FileNotFoundError(f'No iEEG epochs in {ieeg_dir}.')
-        tmin=args.meg_tmin
-        if tmin is None and args.meg_times_file is None:
-            info=json.loads((ieeg_dir/f'{subjects[0]}_info.json').read_text())
-            tmin=float(info['time_epoch'][0])
-        project=args.project_path
-        if args.metadata_csv is None and project is None:
-            from src.setting import PROJECT_PATH
-            project=PROJECT_PATH
-        ieeg=load_dataset('ieeg',meg_dir=meg_dir,ieeg_dir=ieeg_dir,metadata_csv=args.metadata_csv,
-                          project_path=project,ieeg_subjects=subjects,
-                          ieeg_coordinate_unit=args.ieeg_coordinate_unit,meg_coordinate_unit=args.meg_coordinate_unit,
-                          meg_times_file=args.meg_times_file,meg_tmin=tmin,sfreq=args.sfreq,
-                          conditions=tuple(args.conditions),condition_mode=args.condition_mode)
-        meg=load_dataset('full_concatenated',reference=ieeg)
-        print(f'Loaded {meg.n_features} MEG channels; {ieeg.n_features} iEEG electrodes.',flush=True)
-        run_elect_number_effect(meg,ieeg,step=args.step,repeats=args.repeats,seed=args.seed,
-                               output_dir=out,max_gram_gib=args.max_gram_gib)
-        (out/'run_config.json').write_text(json.dumps(vars(args),default=str,indent=2))
-    _,fig=visualize_elect_number_effect(out)
-    plt.close(fig)
-    print(f'Results and figures: {out.resolve()}',flush=True)
-
-
-if __name__ == '__main__':
-    main()
