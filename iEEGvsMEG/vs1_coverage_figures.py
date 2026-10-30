@@ -8,7 +8,7 @@ from nilearn import plotting
 from vs1_coverage_information import COMPARISONS
 from vs0_load_and_config import coordinates_mm
 
-MODALITY_COLORS = {'iEEG': '#D55E00', 'MEG': '#0072B2'}
+MODALITY_COLORS = {'iEEG': 'navy', 'MEG': 'orange'}
 SETUP_NAMES = ('full_average', 'full_concatenated', 'coverage_average', 'paired_coverage', 'random_control')
 SETUP_COLORS = dict.fromkeys(SETUP_NAMES, MODALITY_COLORS['MEG'])
 SETUP_LINESTYLES = dict(zip(SETUP_NAMES, ('-', '--', ':', '-.', (0, (3, 1, 1, 1, 1, 1)))))
