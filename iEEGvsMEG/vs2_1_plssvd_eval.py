@@ -79,6 +79,7 @@ def parse_args():
     parser.add_argument('--max-components', '--n-components', dest='n_components', type=int, default=100,
                         help='Maximum fitted dimension; select fewer later in the notebook (default: 100).')
     parser.add_argument('--split-unit', choices=['trial', 'group'], default='trial')
+    parser.add_argument('--block-scaling', choices=['none','equal_variance'], default='equal_variance')
     parser.add_argument('--max-gram-gib', type=float, default=2.0)
     return parser.parse_args()
 
@@ -97,12 +98,12 @@ def main():
     meg_dir = args.meg_dir or root / 'MEG' / 'dataMEG'
     ieeg_dir = args.ieeg_dir or root / 'ieeg_shortWOBS_fs250'
     cache_dir = args.cache_dir or root / 'out' / 'trial_cache'
-    output_dir = args.output_dir or root / 'out' / 'plssvd_eval_equal_var' / args.meg_kind / validation_run_name(args.perm, args.perm_type)
+    output_dir = args.output_dir or root / 'out' / ('plssvd_eval_equal_var' if args.block_scaling == 'equal_variance' else 'plssvd_eval') / args.meg_kind / validation_run_name(args.perm, args.perm_type)
     options = ValidationOptions(repeats=args.repeats, n_components=args.n_components,
                                 n_iterations=args.n_iterations, perm=args.perm, perm_type=args.perm_type,
                                 block_seconds=args.block_seconds, seed=args.seed,
                                 split_unit=args.split_unit,
-                                block_scaling='equal_variance', max_gram_gib=args.max_gram_gib) #TODO turn to 'equal_variance'
+                                block_scaling=args.block_scaling, max_gram_gib=args.max_gram_gib)
     options = _checked_options(options)
     prepare_output_directory(output_dir, args.n_components)
 

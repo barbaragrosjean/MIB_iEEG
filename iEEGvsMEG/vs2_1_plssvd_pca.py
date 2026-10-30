@@ -14,7 +14,7 @@ def independent_pca_scores(train, test, n_components, scale=1., train_gram=None)
     Test data never enter the training eigendecomposition or sign convention.
     """
     from scipy.linalg import eigh
-    from cov_models_utils import _gram
+    from vs2_0_cov_models_utils import _gram
     gram = _gram(train)*scale**2 if train_gram is None else train_gram
     values,u = eigh(gram,check_finite=False)
     values,u = values[::-1],u[:,::-1]
@@ -69,9 +69,9 @@ def plssvd_pca_comparison(runs_dir, perm=None, perm_type=None, n_components=None
     axes by its own largest absolute TRAIN score. It retains signed fold r too.
     Missing PCA scores require the original trial cache; PLSSVD is never refit.
     """
-    from plssvd_eval_utils import load_plssvd_results, validation_run_name, load_trial_cache, _saved_scores
-    from plssvd_diagnostics import _check_matching, _backfill_spectra
-    from compare_models import correlation_matrix
+    from vs2_1_plssvd_eval_utils import load_plssvd_results, validation_run_name, load_trial_cache, _saved_scores
+    from vs2_1_plssvd_diagnostics import _check_matching, _backfill_spectra
+    from vs2_0_compare_models import correlation_matrix
     root=Path(runs_dir); name=validation_run_name(perm,perm_type)
     baseline=load_plssvd_results(root/'none',n_components=n_components)
     results={'Unpermuted':baseline}
@@ -135,7 +135,7 @@ def plssvd_pca_comparison(runs_dir, perm=None, perm_type=None, n_components=None
 
 def plot_plssvd_pca_comparison(data):
     """Annotated mean ± SD matrices; paired difference panels for a selected run."""
-    from plssvd_eval_utils import _annotate_matrix
+    from vs2_1_plssvd_eval_utils import _annotate_matrix
     k=data['n_components']; labels=[label for label in ('Unpermuted','Permuted') if label in set(data['summary'].run)]
     panels=labels+(['Permuted − unpermuted'] if len(labels)>1 else [])
     fig,axes=plt.subplots(2,len(panels),figsize=(6*len(panels),11),squeeze=False,layout='constrained')
@@ -164,8 +164,9 @@ def plot_plssvd_pca_comparison(data):
     return fig
 
 
-def fit_full_data_pca(cache_dir, n_components, scratch_dir=None):
-    """Fit one PCA per modality to all trials, with concatenated MEG features.
+def fit_full_data_pca(cache_dir, n_components, scratch_dir=None, *, meg_kind='full_concatenated',
+                      seed=2026, block_scaling='none'):
+    """Fit a fixed PCA per modality to all trials using the selected MEG construction.
 
     Trial means are computed within each condition, preprocessing is estimated
     from all trials, then conditions are averaged equally. Feature blocks are
@@ -181,11 +182,13 @@ def fit_full_data_pca(cache_dir, n_components, scratch_dir=None):
     indices={m:{s.subject:{'train':[np.arange(len(a)) for a in s.data]}
                 for s in getattr(trials,m)} for m in ('ieeg','meg')}
     scores={};singular_values={}
-    with _temporary_fold(trials,'full_concatenated',indices,seed=2026,scratch_dir=scratch_dir,
+    with _temporary_fold(trials,meg_kind,indices,seed=seed,scratch_dir=scratch_dir,
                          condition_mode='average') as prepared:
         datasets=prepared[0]['train']
         for modality in ('ieeg','meg'):
             dataset=datasets[modality]
+            from vs1_coverage_matching_utils import normalize_dataset
+            normalize_dataset(dataset, block_scaling == 'equal_variance')
             u,d=_spectrum(_gram(dataset),dataset.n_features)
             if len(d)<k:raise ValueError(f'{modality}: full-data PCA rank {len(d)} is below {k}.')
             values=u[:,:k]*d[:k]
@@ -193,11 +196,11 @@ def fit_full_data_pca(cache_dir, n_components, scratch_dir=None):
             scores[modality]=values*signs
             singular_values[modality]=d
     return dict(scores=scores,singular_values=singular_values,times=trials.times,
-                conditions=trials.conditions,n_components=k,
+                conditions=trials.conditions,n_components=k,meg_kind=meg_kind,block_scaling=block_scaling,seed=seed,
                 subjects={m:[s.subject for s in getattr(trials,m)] for m in ('ieeg','meg')})
 
 
-def correlate_full_pca(run_dir, pca, n_components=None, absolute=True):
+def correlate_full_pca(run_dir, pca, n_components=None, absolute=True, n_iterations=None):
     """Average correlations across iterations SEPARATELY for each fold/partition.
 
     PCA remains fixed. Every matrix contains all PLSSVD-by-PCA component pairs.
@@ -210,11 +213,13 @@ def correlate_full_pca(run_dir, pca, n_components=None, absolute=True):
     from vs2_1_plssvd_postprocess import Moments
     from vs2_0_compare_models import correlation_matrix
     root=Path(run_dir);config=json.loads((root/'validation_options.json').read_text())
-    if config.get('meg_kind')!='full_concatenated':
-        raise ValueError('This comparison requires the full_concatenated MEG run.')
+    if config.get('meg_kind') != pca.get('meg_kind', 'full_concatenated'):
+        raise ValueError('PCA and PLSSVD MEG constructions differ.')
     k=selected_count(n_components,min(config['n_components'],pca['n_components']))
     ids=[i for i in range(config['n_iterations']) if (root/f'iteration_{i:03d}'/'COMPLETE.json').is_file()]
     if not ids:raise FileNotFoundError('No completed PLSSVD iterations are available.')
+    from vs2_1_plssvd_results import selected_iterations
+    ids = selected_iterations(ids, n_iterations)
     axes=root/'trial_axes.npz'
     if not axes.exists():axes=root/f'iteration_{ids[0]:03d}'/'trial_axes.npz'
     with np.load(axes) as saved:
@@ -244,7 +249,8 @@ def correlate_full_pca(run_dir, pca, n_components=None, absolute=True):
     print(f'Full-data PCA reference versus PLSSVD: {len(ids)}/{config["n_iterations"]} iterations; '
           f'{config["repeats"]} folds kept separate, k={k}.')
     return dict(mean=mean,std=sd,count=count,iterations=ids,n_components=k,absolute=absolute,
-                n_folds=config['repeats'],perm=config.get('perm'),perm_type=config.get('perm_type'))
+                n_folds=config['repeats'],perm=config.get('perm'),perm_type=config.get('perm_type'),
+                meg_kind=config['meg_kind'],block_scaling=config['block_scaling'])
 
 
 def plot_full_pca_comparison(result):

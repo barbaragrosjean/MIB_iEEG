@@ -251,7 +251,7 @@ def plot_null_timecourses(runs_dir, n_components=3, perm='both', prepared_compon
         for iteration in ids:
             totals={}
             for fold in range(meta['options']['repeats']):
-                from plssvd_eval_utils import _saved_scores
+                from vs2_1_plssvd_eval_utils import _saved_scores
                 child=root/name/f'iteration_{iteration:03d}'
                 with _saved_scores(child,fold) as z:
                     train_ieeg=z['train_ieeg'][:,:n_components]

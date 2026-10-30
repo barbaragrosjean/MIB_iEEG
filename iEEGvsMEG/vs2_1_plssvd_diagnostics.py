@@ -97,11 +97,11 @@ def _backfill_spectra(root, iteration, trials, scratch_dir=None, include_pca=Fal
                     for modality in ('ieeg','meg'):
                         gram=_gram(datasets[part][modality])*float(model[modality+'_scale'])**2
                         if compute_spectra:
-                            from plssvd_pca import temporal_singular_values
+                            from vs2_1_plssvd_pca import temporal_singular_values
                             spectra[f'{part}_{modality}_temporal_singular_values']=temporal_singular_values(
                                 gram,datasets[part][modality].n_features)
                         if part == 'train' and include_pca:
-                            from plssvd_pca import independent_pca_scores
+                            from vs2_1_plssvd_pca import independent_pca_scores
                             pca=independent_pca_scores(datasets['train'][modality],datasets['test'][modality],
                                 config['n_components'],model[modality+'_scale'],train_gram=gram)
                             pca_scores[f'train_{modality}_pca']=pca['train']

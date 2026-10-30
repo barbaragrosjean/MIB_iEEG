@@ -1,65 +1,64 @@
 #!/usr/bin/env python3
-
+"""Compare saved PLSSVD scores with fixed, full-data PCA of the selected MEG dataset."""
 from pathlib import Path
 import argparse
 import json
-import matplotlib.pyplot as plt
 import numpy as np
+from vs2_1_plssvd_pca import fit_full_data_pca, correlate_full_pca
 
-from vs2_1_plssvd_pca import fit_full_data_pca, correlate_full_pca, plot_full_pca_comparison
 
-ROOT = Path.cwd()
-PCA_ABSOLUTE = True 
+def comparison_path(run_dir, components, absolute=True, n_iterations=None):
+    count = 'all' if n_iterations is None else str(n_iterations)
+    statistic = 'absolute' if absolute else 'signed'
+    return Path(run_dir)/'full_pca'/f'k_{components:03d}_{statistic}_iterations_{count}.npz'
+
+
+def run(run_dir, cache_dir, components, *, meg_kind, block_scaling, absolute=True,
+        n_iterations=None, scratch_dir=None):
+    config = json.loads((Path(run_dir)/'validation_options.json').read_text())
+    if config['meg_kind'] != meg_kind or config['block_scaling'] != block_scaling:
+        raise ValueError('Requested MEG construction/scaling differs from the saved PLSSVD run.')
+    # Reproduce fit_plssvd's fixed random association and random-source selection.
+    matching_sequence = np.random.SeedSequence(config['seed']).spawn(3)[0]
+    matching_seed = int(np.random.default_rng(matching_sequence).integers(2**31-1))
+    reference = fit_full_data_pca(cache_dir, components, scratch_dir, meg_kind=meg_kind,
+                                 seed=matching_seed, block_scaling=block_scaling)
+    result = correlate_full_pca(run_dir, reference, components, absolute, n_iterations)
+    destination = comparison_path(run_dir, components, absolute, n_iterations)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(destination, mean=result['mean'], std=result['std'], count=result['count'])
+    metadata = {key:value for key,value in result.items() if key not in ('mean','std','count')}
+    metadata['fit_options'] = config
+    destination.with_suffix('.json').write_text(json.dumps(metadata, indent=2))
+    return destination
+
+
+def load_comparison(run_dir, components, *, meg_kind, block_scaling, absolute=True, n_iterations=None):
+    from vs2_1_plssvd_results import selected_iterations
+    destination = comparison_path(run_dir, components, absolute, n_iterations)
+    metadata = json.loads(destination.with_suffix('.json').read_text())
+    config = json.loads((Path(run_dir)/'validation_options.json').read_text())
+    ids = [i for i in range(config['n_iterations']) if (Path(run_dir)/f'iteration_{i:03d}'/'COMPLETE.json').exists()]
+    if (metadata['fit_options'] != config or metadata['meg_kind'] != meg_kind
+        or metadata['block_scaling'] != block_scaling or metadata['iterations'] != selected_iterations(ids, n_iterations)):
+        raise ValueError('PCA comparison differs from the requested run/settings; recompute it.')
+    with np.load(destination) as saved: return dict(metadata, **dict(saved))
+
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parent,
-                        help='Project/data root (default: directory containing this script).')
-    parser.add_argument('--meg-dir', type=Path, help='Subject discovery directory (default: ROOT/MEG/dataMEG).')
-    parser.add_argument('--ieeg-dir', type=Path, help='Epoch directory (default: ROOT/ieeg_shortWOBS_fs250).')
-    parser.add_argument('--meg-raw-dir', type=Path, default=Path(
-        '/projects/MINDLAB2025_MEG-Auditory_Cognitive_Maps/scratch/APR2020_Block3_SingleTrial_BarbaraNikita'))
-    parser.add_argument('--project-path', type=Path, help='GetInfo project directory; default: PROJECT_PATH as configured, without ROOT prefix.')
-    parser.add_argument('--cache-dir', type=Path, help='Default: ROOT/out/trial_cache.')
-    parser.add_argument('--scratch-dir', type=Path,
-                        help='Temporary fold storage; default: system temporary directory (honors TMPDIR).')
-    parser.add_argument('--output-dir', type=Path, help='Default: ROOT/out/plssvd_eval/{MEG_KIND}/{PERMUTATION}')
-    parser.add_argument('--meg-kind', default='full_concatenated', choices=[
-        'full_average', 'full_concatenated', 'coverage_average', 'paired_coverage', 'random_control'])
-    parser.add_argument('--repeats', '--n-splits', dest='repeats', type=int, default=5,
-                        help='Number of shuffled folds with disjoint test trials (default: 5).')
-    parser.add_argument('--perm', choices=['ieeg','meg','both','none'], default=None)
-    parser.add_argument('--perm-type', choices=['time_cirular_shift','time_circular_shift',
-                        'time_block','time_point','space','phase','none'], default=None,
-                        help='Surrogate transform; phase uses coherent Fourier phases within each modality.')
-    parser.add_argument('--block-seconds', type=float, default=0.36)
-    parser.add_argument('--seed', type=int, default=2026)
-    parser.add_argument('--components', '--n-components', dest='n_components', type=int, default=100,
-                        help='Maximum fitted dimension; select fewer later in the notebook (default: 100).')
-    parser.add_argument('--split-unit', choices=['trial', 'group'], default='trial')
-    parser.add_argument('--max-gram-gib', type=float, default=2.0)
-    args=parser.parse_args()
-
-    from vs2_1_plssvd_eval_utils import validation_run_name
-    root = args.root.expanduser().resolve()
-    meg_dir = args.meg_dir or root / 'MEG' / 'dataMEG'
-    ieeg_dir = args.ieeg_dir or root / 'ieeg_shortWOBS_fs250'
-    cache_dir = args.cache_dir or root / 'out' / 'trial_cache'
-    output_dir = args.output_dir or root / 'out' / 'pca_comparison' / args.meg_kind / validation_run_name(args.perm, args.perm_type)
-    
-    full_pca = fit_full_data_pca(cache_dir, n_components=args.components)
-
-    full_pca_result = correlate_full_pca(output_dir, full_pca, n_components=args.components, absolute=PCA_ABSOLUTE)
-    fig = plot_full_pca_comparison(full_pca_result)
-
-    pca_destination = output_dir
-    pca_destination.mkdir(exist_ok=True)
-    statistic = 'absolute' if PCA_ABSOLUTE else 'signed'
-    fig.savefig(pca_destination / f'comparison_k{args.components}_{statistic}.png', dpi=180, bbox_inches='tight')
-    
-    np.savez_compressed(pca_destination / f'correlations_k{args.components}_{statistic}.npz',
-        mean=full_pca_result['mean'], std=full_pca_result['std'], count=full_pca_result['count'],
-        iterations=full_pca_result['iterations'])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--run-dir', type=Path, required=True)
+    parser.add_argument('--cache-dir', type=Path, required=True)
+    parser.add_argument('--meg-kind', required=True, choices=['full_average','full_concatenated','coverage_average','paired_coverage','random_control'])
+    parser.add_argument('--block-scaling', choices=['none','equal_variance'], default='equal_variance')
+    parser.add_argument('--components', type=int, default=10)
+    parser.add_argument('--iterations', type=int, default=None)
+    parser.add_argument('--absolute', action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--scratch-dir', type=Path)
+    args = parser.parse_args()
+    print(run(args.run_dir, args.cache_dir, args.components, meg_kind=args.meg_kind,
+              block_scaling=args.block_scaling, absolute=args.absolute,
+              n_iterations=args.iterations, scratch_dir=args.scratch_dir))
 
 
-if __name__=='__main__':main()
+if __name__ == '__main__': main()
