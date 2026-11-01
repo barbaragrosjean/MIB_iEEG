@@ -1,4 +1,4 @@
-"""Paired-coverage spatial organization and descriptive absolute-weight patches.
+"""Paired-coverage cosine profiles and normalized magnitude semivariance.
 
 All inference is conditional on fitted group-model weights. Spatial shuffles
 remove within-subject/hemisphere association, not MEG reconstruction smoothness.
@@ -8,43 +8,7 @@ import hashlib
 import json
 import numpy as np
 import pandas as pd
-from scipy.spatial.distance import pdist, squareform
-
-
-def _patch_labels(xyz, unit, radius, similarity, *, metric="cosine",
-                  magnitude=None, magnitude_variance=None, max_semivariance=.1):
-    """Spatially connected merges with complete-link profile similarity.
-
-    Every member pair must meet the selected criterion, preventing chaining.
-    Magnitude variance is fixed to the full analysis block during deletion
-    resampling. Zero variance leaves magnitude-based groups as singletons.
-    Greedy edge order is deterministic; patches are exploratory, not optimized k.
-    """
-    distance = squareform(pdist(xyz))
-    cosine = np.clip(unit @ unit.T, 0, 1)
-    if metric not in ('cosine', 'magnitude_semivariance'):
-        raise ValueError('Unknown patch metric.')
-    if metric == 'magnitude_semivariance':
-        magnitude = np.asarray(magnitude, float)
-        variance = np.var(magnitude) if magnitude_variance is None else magnitude_variance
-        score = ((magnitude[:, None] - magnitude[None, :])**2 / (2 * variance)
-                 if variance > 0 else np.full_like(cosine, np.inf))
-        allowed = score <= max_semivariance
-    else:
-        score = -cosine
-        allowed = cosine >= similarity
-    i, j = np.where(np.triu((distance > 0) & (distance <= radius), 1))
-    labels = np.arange(len(xyz))
-    groups = {k: [k] for k in labels}
-    for edge in np.argsort(score[i,j], kind='stable'):
-        a, b = labels[i[edge]], labels[j[edge]]
-        if a == b or not allowed[i[edge],j[edge]]:
-            continue
-        if np.all(allowed[np.ix_(groups[a], groups[b])]):
-            rows = groups.pop(b)
-            groups[a].extend(rows)
-            labels[rows] = a
-    return labels, distance, cosine
+from scipy.spatial.distance import pdist
 
 
 def _mean(values, axis=0):
@@ -56,27 +20,24 @@ def _mean(values, axis=0):
 
 def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=None,
                              n_permutations=199, n_bootstrap=500, seed=2026,
-                             patch_radius_mm=15., patch_similarity=.9, min_patch_size=3,
-                             patch_resamples=30, min_norm_quantile=0.,
-                             patch_metric="cosine", patch_max_semivariance=.1,
+                             min_norm_quantile=0.,
                              spatial_scope="within_participant", fold_hemispheres=False,
                              target_hemisphere="left"):
-    """Matched-pair curves, paired participant bootstrap, and hemisphere patches.
+    """Matched-pair curves and paired participant bootstrap.
 
     weights has iEEG and MEG entries from the same selected group-model fit.
     Rows must retain paired_coverage electrode correspondence. Duplicate MEG
     source matches within a participant are removed jointly from both modalities.
     Curves use only pairs in the same distance bin in both modalities. All
-    nonempty participant curves receive equal weight. Patch stability is source
-    deletion stability (80% retained), NOT trial-bootstrap fit reproducibility.
+    nonempty participant curves receive equal weight.
     spatial_scope='pooled' treats retained participants as one analysis block:
-    cross-participant pairs and patches are allowed, separately per hemisphere.
+    cross-participant pairs are allowed, separately per hemisphere.
     Shuffling and magnitude variance use that pooled hemisphere. Every pair has
     equal weight; participant bootstrap intervals are unavailable. Deduplication
     remains within original participants because their measurements are distinct.
     fold_hemispheres reflects x to -abs(x) (left) or abs(x) (right), after
     original-coordinate matching exclusions and deduplication. Original sides
-    then share distance, shuffle, variance and patch groups within each block.
+    then share distance, shuffle, variance groups within each block.
     Weights and input metadata are unchanged; zero folded distances are excluded.
 
     """
@@ -85,17 +46,13 @@ def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=
         raise ValueError("target_hemisphere must be 'left' or 'right'.")
     if spatial_scope not in ('within_participant', 'pooled'):
         raise ValueError("spatial_scope must be 'within_participant' or 'pooled'.")
-    if patch_metric not in ('cosine', 'magnitude_semivariance'):
-        raise ValueError("patch_metric must be 'cosine' or 'magnitude_semivariance'.")
-    if not np.isfinite(patch_max_semivariance) or patch_max_semivariance < 0:
-        raise ValueError('patch_max_semivariance must be finite and nonnegative.')
     edges = np.asarray(np.arange(0, 101, 10) if bin_edges is None else bin_edges, float)
     if edges.ndim != 1 or len(edges)<2 or edges[0]!=0 or np.any(np.diff(edges)<=0) or not np.isfinite(edges).all():
         raise ValueError('Distance edges must be finite, start at zero, and strictly increase.')
-    if n_permutations<2 or n_bootstrap<2 or patch_resamples<0 or min_patch_size<2:
-        raise ValueError('Use >=2 permutations/bootstrap draws, >=2 patch members, and >=0 patch resamples.')
-    if not 0<=min_norm_quantile<1 or not 0<patch_similarity<=1 or patch_radius_mm<=0:
-        raise ValueError('Invalid norm quantile, cosine threshold, or patch radius.')
+    if n_permutations < 2 or n_bootstrap < 2:
+        raise ValueError('Use at least two permutations and bootstrap draws.')
+    if not 0 <= min_norm_quantile < 1:
+        raise ValueError('Norm quantile must be in [0, 1).')
     im, mm = spatial_metadata(ieeg_metadata).reset_index(drop=True), spatial_metadata(meg_metadata).reset_index(drop=True)
     if len(im)!=len(mm) or 'ieeg_subject' not in mm or not np.array_equal(im.subject.astype(str),mm.ieeg_subject.astype(str)):
         raise ValueError('Use paired_coverage MEG in original electrode row order with ieeg_subject ownership.')
@@ -121,7 +78,6 @@ def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=
     original = np.flatnonzero(keep)
     im,mm=im.loc[keep].reset_index(drop=True),mm.loc[keep].reset_index(drop=True)
     xyz={m:a[keep] for m,a in xyz.items()};norm={m:a[keep] for m,a in norm.items()}
-    original_xyz={m:a.copy() for m,a in xyz.items()}
     if fold_hemispheres:
         xyz={m:fold_coordinates(a, target_hemisphere) for m,a in xyz.items()}
     unit={m:w[m][keep]/norm[m][:,None] for m in w}
@@ -132,7 +88,7 @@ def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=
     if not names:raise ValueError('No valid matched features remain.')
     curves=np.full((2,len(names),n_permutations+1,2,nb),np.nan)
     counts=np.zeros((len(names),nb),int); rng=np.random.default_rng(seed)
-    audit=[];patches=[];membership=[]
+    audit=[]
     contributing_subjects=[set() for _ in range(nb)]
     for si,subject in enumerate(names):
         total=np.zeros((2,n_permutations+1,2,nb));number=np.zeros(nb,int)
@@ -160,52 +116,9 @@ def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=
                         values=(mag[order[a]]-mag[order[b]])**2/(2*variance)
                         total[mi,repeat,1]+=np.bincount(bi,weights=values,minlength=nb)
                     else:total[mi,repeat,1,:]=np.nan
-                labels,d,cos=_patch_labels(xyz[m][rows],u,patch_radius_mm,patch_similarity,
-                    metric=patch_metric,magnitude=mag,magnitude_variance=variance,
-                    max_semivariance=patch_max_semivariance)
-                semivar=((mag[:,None]-mag[None,:])**2/(2*variance)
-                         if variance>0 else np.full_like(cos,np.nan))
-                resampled=[]
-                for repeat in range(patch_resamples):
-                    subset=np.sort(rng.choice(len(rows),max(2,int(.8*len(rows))),replace=False))
-                    sublabels,_,_=_patch_labels(xyz[m][rows][subset],u[subset],patch_radius_mm,patch_similarity,
-                        metric=patch_metric,magnitude=mag[subset],magnitude_variance=variance,
-                        max_semivariance=patch_max_semivariance)
-                    resampled.append((subset,sublabels))
-                for label in np.unique(labels):
-                    local=np.flatnonzero(labels==label)
-                    if len(local)<min_patch_size:continue
-                    patch_id=f'{subject}_{side}_{int(label)}'
-                    center=xyz[m][rows][local].mean(axis=0)
-                    medoid=local[np.argmin(d[np.ix_(local,local)].sum(axis=1))]
-                    other=np.flatnonzero(labels!=label)
-                    boundary=(d[np.ix_(local,other)]<=patch_radius_mm)&(d[np.ix_(local,other)]>0)
-                    inner=cos[np.ix_(local,local)][np.triu_indices(len(local),1)].mean()
-                    outer=cos[np.ix_(local,other)][boundary].mean() if boundary.any() else np.nan
-                    inner_mag=semivar[np.ix_(local,local)][np.triu_indices(len(local),1)].mean()
-                    outer_mag=semivar[np.ix_(local,other)][boundary].mean() if boundary.any() else np.nan
-                    stability=[]
-                    for subset,sl in resampled:
-                        retained=np.intersect1d(local,subset)
-                        if len(retained)<2:continue
-                        stability.append(max(len(np.intersect1d(retained,subset[sl==l]))/len(np.union1d(retained,subset[sl==l])) for l in np.unique(sl)))
-                    patches.append(dict(modality=m,subject=subject,hemisphere=side,patch_id=patch_id,
-                        patch_metric=patch_metric,magnitude_variance=variance,
-                        within_magnitude_semivariance=inner_mag,boundary_magnitude_semivariance=outer_mag,
-                        magnitude_contrast=outer_mag-inner_mag,
-                        n_sources=len(local),coherence=inner,boundary_similarity=outer,contrast=inner-outer,
-                        radius_rms_mm=np.sqrt(np.mean(np.sum((xyz[m][rows][local]-center)**2,axis=1))),
-                        diameter_mm=d[np.ix_(local,local)].max(),stability=np.mean(stability) if stability else np.nan,
-                        medoid_x=xyz[m][rows][medoid,0],medoid_y=xyz[m][rows][medoid,1],medoid_z=xyz[m][rows][medoid,2]))
-                    for loc in local:
-                        idx=rows[loc]
-                        membership.append(dict(modality=m,subject=subject,participant=owners[idx],patch_id=patch_id,feature_row=original[idx],
-                            original_hemisphere='left' if original_xyz[m][idx,0]<0 else 'right',
-                            original_x=original_xyz[m][idx,0],original_y=original_xyz[m][idx,1],original_z=original_xyz[m][idx,2],
-                            x=xyz[m][idx,0],y=xyz[m][idx,1],z=xyz[m][idx,2]))
         counts[si]=number
         curves[:,si]=np.divide(total,number[None,None,None,:],out=np.full_like(total,np.nan),where=number[None,None,None,:]>0)
-        audit.append(dict(subject=subject,spatial_scope=spatial_scope,patch_metric=patch_metric,
+        audit.append(dict(subject=subject,spatial_scope=spatial_scope,
             fold_hemispheres=bool(fold_hemispheres),target_hemisphere=target_hemisphere if fold_hemispheres else 'native',
             n_participants=len(pd.unique(owners[subjects==subject])),
             n_original_features=len(ieeg_metadata) if spatial_scope == 'pooled' else int((spatial_metadata(ieeg_metadata).subject.astype(str)==subject).sum()),
@@ -240,8 +153,7 @@ def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=
         frame.insert(0,'modality',m)
         weight_tables.append(frame)
     return dict(weights=pd.concat(weight_tables,ignore_index=True),curves=pd.DataFrame(table),subject_curves=pd.DataFrame(subject_table),difference=pd.DataFrame(difference),
-        patches=pd.DataFrame(patches,columns=['modality','subject','hemisphere','patch_id','n_sources','patch_metric','magnitude_variance','within_magnitude_semivariance','boundary_magnitude_semivariance','magnitude_contrast','coherence','boundary_similarity','contrast','radius_rms_mm','diameter_mm','stability','medoid_x','medoid_y','medoid_z']),
-        memberships=pd.DataFrame(membership,columns=['modality','subject','participant','patch_id','feature_row','original_hemisphere','original_x','original_y','original_z','x','y','z']),audit=pd.DataFrame(audit))
+        audit=pd.DataFrame(audit))
 
 
 def run_analysis(ieeg, *, model='plssvd', n_components=3, seed=2026,
@@ -252,7 +164,7 @@ def run_analysis(ieeg, *, model='plssvd', n_components=3, seed=2026,
     if model not in ('plssvd','separate_pca','joint_pca'):raise ValueError('Select plssvd, separate_pca or joint_pca.')
     if not isinstance(n_components,int) or n_components<2:raise ValueError('Select at least two components.')
     meg=load_dataset('paired_coverage',reference=ieeg,seed=seed,condition_mode='average')
-    config=dict(model=model,n_components=n_components,seed=seed,block_scaling=block_scaling,options=options,meg_kind='paired_coverage',version=4)
+    config=dict(model=model,n_components=n_components,seed=seed,block_scaling=block_scaling,options=options,meg_kind='paired_coverage',version=5)
     digest=hashlib.sha256(json.dumps(config,sort_keys=True,default=lambda v:np.asarray(v).tolist()).encode())
     for dataset in (ieeg,meg):
         digest.update(dataset.metadata.to_csv(index=False).encode())
@@ -270,46 +182,3 @@ def run_analysis(ieeg, *, model='plssvd', n_components=3, seed=2026,
         (folder/'manifest.json').write_text(json.dumps(dict(signature=signature,config=config,tables=list(result)),indent=2,default=lambda v:np.asarray(v).tolist()))
     return result
 
-
-def plot_analysis(result, title=''):
-    import matplotlib.pyplot as plt
-    from nilearn import plotting
-    folded=('fold_hemispheres' in result['audit'] and result['audit'].fold_hemispheres.eq(True).all())
-    if folded:
-        title += f" · folded to {result['audit'].target_hemisphere.iloc[0]}"
-    fig,axes=plt.subplots(2,2,figsize=(13,9),layout='constrained')
-    for m,color in [('iEEG','navy'),('MEG','darkorange')]:
-        t=result['curves'].query('modality == @m')
-        axes[0,0].plot(t.distance_mm,t.similarity,'o-',color=color,label=m)
-        axes[0,0].plot(t.distance_mm,t.null_mean,'--',color=color)
-        axes[0,1].plot(t.distance_mm,t.excess_similarity,'o-',color=color,label=m)
-        axes[0,1].fill_between(t.distance_mm,t.ci_low,t.ci_high,color=color,alpha=.15)
-        axes[1,0].plot(t.distance_mm,t.magnitude_semivariance,'o-',color=color,label=m)
-        axes[1,0].plot(t.distance_mm,t.magnitude_null,'--',color=color)
-    t=result['difference'];axes[1,1].plot(t.distance_mm,t.meg_minus_ieeg,'o-',color='black')
-    axes[1,1].fill_between(t.distance_mm,t.ci_low,t.ci_high,color='gray',alpha=.25)
-    for ax,ylabel in zip(axes.flat,['Absolute-profile cosine similarity','Excess similarity over spatial shuffle','Normalized magnitude semivariance','Excess similarity: MEG − iEEG']):
-        ax.set(xlabel='Distance (mm; matched bins)',ylabel=ylabel);ax.axhline(0,color='gray',lw=.7)
-    pooled=('spatial_scope' in result['audit'] and result['audit'].spatial_scope.eq('pooled').all())
-    uncertainty='pooled hemispheres; no participant confidence intervals' if pooled else 'bands: paired-participant bootstrap'
-    axes[0,0].legend();fig.suptitle(title+' · dashed: shuffled baseline; '+uncertainty)
-    brainfig=plt.figure(figsize=(16,7));brain=plotting.plot_glass_brain(None,figure=brainfig,display_mode='lyrz',title=title+' · MEG weight patches; stars: spatial medoids')
-    members=result['memberships'].query("modality == 'MEG'");patches=result['patches'].query("modality == 'MEG'")
-    from matplotlib.colors import to_hex
-    for i,row in enumerate(patches.itertuples()):
-        group=members[members.patch_id==row.patch_id];color=to_hex(plt.get_cmap('tab20')(i%20))
-        brain.add_markers(group[['x','y','z']].to_numpy(),marker_color=color,marker_size=12,alpha=.6)
-        brain.add_markers([[row.medoid_x,row.medoid_y,row.medoid_z]],marker_color=color,marker='*',marker_size=160)
-    metrics,axes=plt.subplots(1,3,figsize=(14,4),layout='constrained')
-    magnitude_patches=('patch_metric' in result['audit'] and
-                       result['audit'].patch_metric.eq('magnitude_semivariance').all())
-    patch_metrics=(['within_magnitude_semivariance','magnitude_contrast','stability']
-                   if magnitude_patches else ['coherence','contrast','stability'])
-    for ax,metric in zip(axes,patch_metrics):
-        for m,color in [('iEEG','navy'),('MEG','darkorange')]:
-            values=result['patches'].query('modality == @m')[metric].dropna()
-            if len(values):ax.hist(values,bins=12,histtype='step',color=color,label=m)
-        ax.set(xlabel=metric,ylabel='Patch count')
-    if len(result['patches']):axes[0].legend()
-    metrics.suptitle(('Magnitude-semivariance patches' if magnitude_patches else 'Cosine patches')+' · Descriptive patches · stability = 80% source-retention Jaccard; no trial resampling')
-    return dict(spatial_profiles=fig,meg_patches=brainfig,patch_metrics=metrics)
