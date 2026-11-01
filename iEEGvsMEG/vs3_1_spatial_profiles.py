@@ -129,7 +129,11 @@ def analyze_spatial_profiles(weights, ieeg_metadata, meg_metadata, *, bin_edges=
     for mi,m in enumerate(('iEEG','MEG')):
         for b in range(nb):
             for si,sub in enumerate(names):
-                subject_table.append(dict(modality=m,subject=sub,bin=b,n_pairs=counts[si,b],excess_similarity=excess[mi,si,b]))
+                subject_table.append(dict(modality=m,subject=sub,bin=b,distance_mm=(edges[b]+edges[b+1])/2,
+                    n_pairs=counts[si,b],similarity=curves[mi,si,0,0,b],
+                    null_mean=_mean(curves[mi,si,1:,0,b]),
+                    magnitude_semivariance=curves[mi,si,0,1,b],
+                    magnitude_null=_mean(curves[mi,si,1:,1,b]),excess_similarity=excess[mi,si,b]))
             observed=_mean(curves[mi,:,0,0,b]);null=_mean(curves[mi,:,1:,0,b],axis=0)
             bs=_mean(excess[mi,:,b][boot],axis=1);finite=bs[np.isfinite(bs)]
             table.append(dict(modality=m,distance_mm=(edges[b]+edges[b+1])/2,n_subjects=len(contributing_subjects[b]),

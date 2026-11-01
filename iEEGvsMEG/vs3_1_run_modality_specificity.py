@@ -22,6 +22,8 @@ VERSION = 1
 
 def result_directory(config, analysis):
     payload = dict(version=VERSION, fit=config['fit'])
+    if analysis.startswith('pairing_'):
+        payload['pairing'] = config['pairing']
     if analysis != 'weights':
         payload['options'] = config['analyses'][analysis]
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
@@ -35,7 +37,12 @@ def load_result(config, analysis):
         raise FileNotFoundError(f'Analysis has not completed: {folder}')
     # Only load result files produced by this project's runner.
     with (folder / 'result.pkl').open('rb') as stream:
-        return pickle.load(stream)
+        result = pickle.load(stream)
+    if isinstance(result, dict) and 'provenance' in result:
+        from vs3_0_spatial_reliability import _fingerprint
+        if any(_fingerprint(p['path']) != p for p in result['provenance']):
+            raise FileNotFoundError('Source fits changed; recompute the summary.')
+    return result
 
 
 def prepare_analysis(config, analysis, config_file, recompute=False):
@@ -74,6 +81,16 @@ def compute_weights(fit):
 def compute(config, analysis):
     if analysis == 'weights':
         return compute_weights(config['fit'])
+    if analysis == 'pairing_weights':
+        from vs3_1_pairing_specificity import ensure_fits, load_aligned, summarize_magnitudes
+        signature = hashlib.sha256(json.dumps(dict(fit=config['fit'], pairing=config['pairing']), sort_keys=True).encode()).hexdigest()[:16]
+        source = ensure_fits(config, Path(config['output_dir'])/'pairing_fits'/signature)
+        aligned = load_aligned(source, config['fit']['model'], config['pairing']['iterations'])
+        return summarize_magnitudes(aligned, **config['analyses'][analysis])
+    if analysis == 'pairing_profiles':
+        from vs3_1_pairing_specificity import summarize_profiles
+        return summarize_profiles(load_result(config, 'pairing_weights'),
+                                  config['analyses'][analysis], config['fit']['seed'])
     options = dict(config['analyses'][analysis])
     if analysis == 'profiles':
         # These curves require electrode-to-source correspondence in both modalities.
@@ -105,8 +122,14 @@ def compute(config, analysis):
 def run(config, analysis, recompute=False):
     out = result_directory(config, analysis)
     if (out / 'RUN_COMPLETE.json').exists() and not recompute:
-        return out
-    if analysis not in ('weights', 'profiles'):
+        try:
+            load_result(config, analysis)
+            return out
+        except FileNotFoundError:
+            pass
+    if analysis == 'pairing_profiles':
+        run(config, 'pairing_weights')
+    elif analysis not in ('weights', 'profiles', 'pairing_weights'):
         run(config, 'weights')
     result = compute(config, analysis)
     if out.exists():
@@ -128,7 +151,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--analysis', choices=['weights', 'profiles', 'gradients',
-                        'gradient_comparison', 'radius_search', 'percent_search'], required=True)
+                        'gradient_comparison', 'radius_search', 'percent_search',
+                        'pairing_weights', 'pairing_profiles'], required=True)
     parser.add_argument('--recompute', action='store_true')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
