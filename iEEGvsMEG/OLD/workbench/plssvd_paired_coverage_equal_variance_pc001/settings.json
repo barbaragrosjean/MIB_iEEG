@@ -1,0 +1,15 @@
+{
+  "model": "plssvd",
+  "meg_kind": "paired_coverage",
+  "component": 1,
+  "block_scaling": "equal_variance",
+  "condition_mode": "average",
+  "seed": 2026,
+  "modality_scales": [
+    0.08451267628827029,
+    0.025957173515284076
+  ],
+  "coordinate_unit": "mm",
+  "radius_mm": 4.0,
+  "folding": "x -> -abs(x); coincident coordinates averaged"
+}
