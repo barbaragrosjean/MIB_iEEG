@@ -15,7 +15,7 @@ from nilearn.datasets import load_mni152_template
 ROOT = Path(__file__).resolve().parent
 MODEL = 'plssvd'                    # separate_pca, joint_pca, plssvd
 MEG_KIND = 'paired_coverage'       # full_average, coverage_average, paired_coverage, random_control also supported
-COMPONENT = 1                    # one-based component index
+COMPONENT = 3                    # one-based component index
 BLOCK_SCALING = 'equal_variance'              # none or equal_variance (whole-modality scaling)
 CONDITION_MODE = 'average'          # average or stack
 SEED = 2026
@@ -160,20 +160,16 @@ if __name__=='__main__':
         if not required.is_file():
             raise FileNotFoundError(f'Set the template paths at the top of visualization.py: {required}')
     
-    if shutil.which(str(WB_COMMAND)) is None:
-        raise FileNotFoundError('Set WB_COMMAND to your Workbench executable.')
-    
-    #weights=compute_weights()
-    #volumes=create_nifti(weights)
+    weights=compute_weights()
+    volumes=create_nifti(weights)
 
-    volumes = {
-        'ieeg' : {'L': OUTPUT_DIR / 'ieeg_L.nii.gz', 
+    '''volumes = {'ieeg' : {'L': OUTPUT_DIR / 'ieeg_L.nii.gz', 
                 'R': OUTPUT_DIR / 'ieeg_R.nii.gz', 
                 'coverage': OUTPUT_DIR / 'ieeg_coverage.nii.gz'},
         'meg':{'L': OUTPUT_DIR / 'meg_L.nii.gz', 
                 'R': OUTPUT_DIR / 'meg_R.nii.gz', 
-                'coverage': OUTPUT_DIR / 'meg_coverage.nii.gz'}}
+                'coverage': OUTPUT_DIR / 'meg_coverage.nii.gz'}}'''
         
-    print(map_to_workbench(volumes))
+    #print(map_to_workbench(volumes))
 
 
