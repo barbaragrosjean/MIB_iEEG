@@ -15,7 +15,7 @@ from nilearn.datasets import load_mni152_template
 ROOT = Path(__file__).resolve().parent
 MODEL = 'plssvd'                    # separate_pca, joint_pca, plssvd
 MEG_KIND = 'paired_coverage'       # full_average, coverage_average, paired_coverage, random_control also supported
-COMPONENT = 3                    # one-based component index
+COMPONENT = 1                    # one-based component index
 BLOCK_SCALING = 'equal_variance'              # none or equal_variance (whole-modality scaling)
 CONDITION_MODE = 'average'          # average or stack
 SEED = 2026
@@ -34,10 +34,10 @@ RIGHT_SURFACE = ROOT.parent / 'templates' / 'ParcellationPilot.R.midthickness.32
 
 WB_COMMAND = '/Applications/ConnectomeWorkbench.app/Contents/usr/bin/wb_command'          # or absolute path to the executable
 RADIUS_MM = 4.                     # nearest-location display radius; no whole-brain extrapolation
-OUTPUT_DIR = ROOT / 'out' / 'workbench' / f'{MODEL}_{MEG_KIND}_{BLOCK_SCALING}_pc{COMPONENT:03d}'
+OUTPUT_DIR = ROOT / 'out' / 'workbench' / f'{MODEL}_{MEG_KIND}_{BLOCK_SCALING}_pc{COMPONENT:03d}_abs'
 
 
-def compute_weights(output_dir=OUTPUT_DIR):
+def compute_weights(output_dir=OUTPUT_DIR, abs=False):
     """Load current pipeline datasets, fit models, save selected weights + original MNI coordinates.
 
     Uses the existing common fitter (which computes all three models), then
@@ -67,12 +67,11 @@ def compute_weights(output_dir=OUTPUT_DIR):
     files={}
     for modality,dataset in [('ieeg',ieeg),('meg',meg)]:
         weights=getattr(model,modality+'_weights')
-        if weights.shape[1]<COMPONENT:raise ValueError('Requested component exceeds data rank.')
         table=dataset.metadata.reset_index(drop=True).copy()
-        if len(table)!=len(weights):raise ValueError('Metadata and weights do not align.')
-        table['weight']=weights[:,COMPONENT-1]
+        if abs : table['weight']=np.abs(weights[:,COMPONENT-1])
+        else : table['weight']=weights[:,COMPONENT-1]
         files[modality]=out/f'{modality}_weights.csv';table.to_csv(files[modality],index=False)
-    (out/'settings.json').write_text(json.dumps(dict(model=MODEL,meg_kind=MEG_KIND,
+        (out/'settings.json').write_text(json.dumps(dict(model=MODEL,meg_kind=MEG_KIND,
         component=COMPONENT,block_scaling=BLOCK_SCALING,condition_mode=CONDITION_MODE,
         seed=SEED,modality_scales=list(model.scales),coordinate_unit='mm',
         radius_mm=RADIUS_MM,folding='x -> -abs(x); coincident coordinates averaged'),indent=2))
@@ -160,7 +159,7 @@ if __name__=='__main__':
         if not required.is_file():
             raise FileNotFoundError(f'Set the template paths at the top of visualization.py: {required}')
     
-    weights=compute_weights()
+    weights=compute_weights(abs=True)
     volumes=create_nifti(weights)
 
     '''volumes = {'ieeg' : {'L': OUTPUT_DIR / 'ieeg_L.nii.gz', 
@@ -169,7 +168,8 @@ if __name__=='__main__':
         'meg':{'L': OUTPUT_DIR / 'meg_L.nii.gz', 
                 'R': OUTPUT_DIR / 'meg_R.nii.gz', 
                 'coverage': OUTPUT_DIR / 'meg_coverage.nii.gz'}}'''
+    
         
-    #print(map_to_workbench(volumes))
+    print(map_to_workbench(volumes))
 
 
