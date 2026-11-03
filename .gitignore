@@ -2,7 +2,7 @@ outs/
 
 iEEGvsMEG/out/
 iEEGvsMEG/out_old/
-
+iEEGvsMEG/OLD/
 iEEGvsMEG/MEG/
 iEEGvsMEG/ieeg_shortWOBS_fs250/
 ieeg_shortWOBS_fs400/
