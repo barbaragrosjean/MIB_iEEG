@@ -151,12 +151,62 @@ def summarize_magnitudes(aligned, *, normalize, percentile, bins=50):
                 histogram_iterations=pd.DataFrame(histograms), maps=maps, **aligned)
 
 
+
+def profile_distance_edges(aligned, n_components, *, width_mm=10., min_norm_quantile=0.,
+                           fold_hemispheres=False, target_hemisphere='left'):
+    """Common bins covering all eligible within-participant distances, including the maximum.
+
+    Apply the same feature exclusions as analyze_spatial_profiles. Distance-bin
+    agreement is imposed later, using these common edges for every association.
+    """
+    from scipy.spatial.distance import pdist
+    anchor = aligned['anchor']
+    owners = anchor.subject.astype(str).to_numpy()
+    maximum = 0.
+    for i, meg in enumerate(aligned['meg_metadata']):
+        xyz = {'iEEG': anchor[['x','y','z']].to_numpy(float),
+               'MEG': meg[['x','y','z']].to_numpy(float)}
+        keep = np.ones(len(anchor), dtype=bool)
+        for modality in xyz:
+            norm = np.linalg.norm(aligned['weights'][modality][i, :, :n_components], axis=1)
+            positive = norm[norm > 0]
+            if not len(positive):
+                raise ValueError('All weight profiles are zero.')
+            keep &= (norm > 0) & (norm >= np.quantile(positive, min_norm_quantile))
+        keep &= (np.sign(xyz['iEEG'][:,0]) == np.sign(xyz['MEG'][:,0])) & (xyz['iEEG'][:,0] != 0)
+        keep &= ~meg.assign(pair_subject=owners).duplicated(['pair_subject','x','y','z']).to_numpy()
+        xyz = {m: values[keep].copy() for m, values in xyz.items()}
+        if fold_hemispheres:
+            for values in xyz.values():
+                values[:,0] = (-1 if target_hemisphere == 'left' else 1) * np.abs(values[:,0])
+        for subject in pd.unique(owners[keep]):
+            for side in (-1, 1):
+                rows = (owners[keep] == subject) & (np.sign(xyz['iEEG'][:,0]) == side)
+                distances = {m: pdist(values[rows]) for m, values in xyz.items()}
+                valid = (distances['iEEG'] > 0) & (distances['MEG'] > 0)
+                if valid.any():
+                    maximum = max(maximum, *(float(d[valid].max()) for d in distances.values()))
+    if not np.isfinite(width_mm) or width_mm <= 0:
+        raise ValueError('Distance-bin width must be positive and finite.')
+    # searchsorted(..., side="right") excludes the final edge: put it above the maximum.
+    edges = np.arange(int(np.floor(maximum / width_mm)) + 2, dtype=float) * width_mm
+    return edges, maximum
+
+
 def summarize_profiles(aligned, options, seed):
     """Preserve participant-level curves before summarizing association means/SD."""
     options = dict(options)
     k = options.pop('n_components')
     if options.get('spatial_scope', 'within_participant') != 'within_participant':
         raise ValueError('Participant variability requires within_participant spatial scope.')
+    width = options.pop('distance_bin_width_mm', 10.)
+    maximum = None
+    if options.get('bin_edges') is None:
+        edges, maximum = profile_distance_edges(aligned, k, width_mm=width,
+            min_norm_quantile=options.get('min_norm_quantile', 0.),
+            fold_hemispheres=options.get('fold_hemispheres', False),
+            target_hemisphere=options.get('target_hemisphere', 'left'))
+        options['bin_edges'] = edges.tolist()
     subjects, audits = [], []
     for i in range(len(aligned['meg_metadata'])):
         result = analyze_spatial_profiles(
@@ -176,6 +226,12 @@ def summarize_profiles(aligned, options, seed):
     summary = iterations.groupby(keys)[metrics].agg(['mean','std','count'])
     summary.columns = [m+'_'+{'std':'association_sd','count':'n_associations'}.get(stat, stat) for m,stat in summary.columns]
     summary = summary.reset_index()
-    return dict(participant_curves=participant, iteration_curves=iterations, summary=summary,
+    pair_counts = participant.groupby(groups, as_index=False).n_pairs.sum()
+    pair_summary = pair_counts.groupby(keys).n_pairs.agg(['mean','std','min','max','count']).reset_index()
+    edges = np.asarray(options['bin_edges'], dtype=float)
+    bins = pd.DataFrame(dict(bin_left_mm=edges[:-1], bin_right_mm=edges[1:],
+                             distance_mm=(edges[:-1]+edges[1:])/2))
+    return dict(pair_counts=pair_counts, pair_count_summary=pair_summary, distance_bins=bins,
+                max_eligible_distance_mm=maximum, participant_curves=participant, iteration_curves=iterations, summary=summary,
                 audit=pd.concat(audits, ignore_index=True), provenance=aligned['provenance'],
                 source_dir=aligned['source_dir'])
