@@ -22,6 +22,8 @@ VERSION = 1
 
 def result_directory(config, analysis):
     payload = dict(version=VERSION, fit=config['fit'])
+    if analysis == 'pairing_weights':
+        payload['magnitude_summary_version'] = 2  # Bilateral ROIs and strict threshold counts
     if analysis.startswith('pairing_'):
         payload['pairing'] = config['pairing']
     if analysis != 'weights':

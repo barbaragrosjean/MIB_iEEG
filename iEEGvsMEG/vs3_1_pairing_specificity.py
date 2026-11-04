@@ -119,7 +119,8 @@ def load_aligned(root, model, iterations):
 def summarize_magnitudes(aligned, *, normalize, percentile, bins=50):
     """Threshold each aligned component in each association, then aggregate."""
     anchor = aligned['anchor']
-    regions = anchor['region'].fillna('Unassigned')
+    from vs3_0_weight_stability import bilateral_label
+    regions = anchor['region'].map(bilateral_label).fillna('Unassigned')
     thresholds, roi_rows, histograms, maps = [], [], [], {}
     for modality, weights in aligned['weights'].items():
         if normalize:
@@ -135,7 +136,8 @@ def summarize_magnitudes(aligned, *, normalize, percentile, bins=50):
             edges = np.linspace(0, max(float(magnitude[:, :, c].max()), np.finfo(float).eps), bins+1)
             for i in range(len(weights)):
                 thresholds.append(dict(iteration=i, modality=modality, component=c+1,
-                                       threshold=limits[i, c], percentile=percentile, normalized=normalize))
+                                       threshold=limits[i, c], percentile=percentile, normalized=normalize,
+                                       n_above_threshold=int(np.count_nonzero(magnitude[i, :, c] > limits[i, c]))))
                 counts, _ = np.histogram(magnitude[i, :, c], bins=edges)
                 histograms.extend(dict(iteration=i, modality=modality, component=c+1,
                                        magnitude=(edges[b]+edges[b+1])/2, count=count)
