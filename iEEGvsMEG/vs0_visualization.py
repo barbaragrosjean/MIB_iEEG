@@ -15,7 +15,7 @@ from nilearn.datasets import load_mni152_template
 ROOT = Path(__file__).resolve().parent
 MODEL = 'plssvd'                    # separate_pca, joint_pca, plssvd
 MEG_KIND = 'paired_coverage'       # full_average, coverage_average, paired_coverage, random_control also supported
-COMPONENT = 1                    # one-based component index
+COMPONENT = 3                    # one-based component index
 BLOCK_SCALING = 'equal_variance'              # none or equal_variance (whole-modality scaling)
 CONDITION_MODE = 'average'          # average or stack
 SEED = 2026
@@ -170,6 +170,6 @@ if __name__=='__main__':
                 'coverage': OUTPUT_DIR / 'meg_coverage.nii.gz'}}'''
     
         
-    print(map_to_workbench(volumes))
+    #print(map_to_workbench(volumes))
 
 
