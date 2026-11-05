@@ -1,16 +1,61 @@
 import pandas as pd
 import numpy as np
 import json
+from pathlib import Path
 
 from src.config import OUT_PATH, PROJECT_PATH
 from collections import deque
 from scipy.ndimage import gaussian_filter1d
 from scipy.stats import spearmanr, pearsonr, linregress
 
-def extract_RT(subj_included, path_behavior=PROJECT_PATH+'/misc/events', path_info = OUT_PATH + '/Data_longWOBS' ) : 
+RT_CORRECTION_PATH = (
+    '/users/barbara/Desktop/MINDLAB2021_MEG-TempSeqAges/'
+    'scratch/learning_bach_iEEG/misc/RT_correction'
+)
+
+
+def extract_RT(subj_included, path_behavior=PROJECT_PATH+'/misc/events',
+               path_info=OUT_PATH + '/Data_longWOBS',
+               path_rt_correction=RT_CORRECTION_PATH):
+    """Extract RTs in seconds, preferring subject-specific corrected BIDS events.
+
+    Only sub-<subject>_task-MusicMemory_events.tsv files are overrides;
+    *_BIDS_events_old.tsv backups are ignored. Subjects without an override
+    retain the original CSV extraction. Pass None to disable corrections.
+    An explicitly configured correction directory must exist, preventing
+    accidental use of uncorrected data when the path is misspelled.
+    """
+    correction_dir = Path(path_rt_correction) if path_rt_correction is not None else None
+    if correction_dir is not None and not correction_dir.is_dir():
+        raise FileNotFoundError(f'RT correction directory not found: {correction_dir}')
     df_all = []
     for subj in subj_included:
-        df = pd.read_csv(path_behavior + '/' + subj + '_events.csv')
+        subject_id = subj.removeprefix('sub-')
+        corrected_file = (
+            correction_dir / f'sub-{subject_id}_task-MusicMemory_events.tsv'
+            if correction_dir is not None else None
+        )
+        if corrected_file is not None and corrected_file.is_file():
+            df = pd.read_csv(corrected_file, sep='\t')
+            required = {'onset', 'trial_type'}
+            if not required.issubset(df.columns):
+                raise ValueError(f'{corrected_file}: missing columns {required - set(df.columns)}')
+            event_types = {
+                'learning_bach_10': 'recognition',
+                'learning_bach_20': 'recognition',
+                'learning_bach_48': 'keypress',
+                'learning_bach_49': 'keypress',
+                'learning_bach_50': 'keypress',
+            }
+            df = df.loc[df['trial_type'].isin(event_types)].copy()
+            df['task'] = 'learning_bach'
+            df['type'] = df['trial_type'].map(event_types)
+            df['onset'] = pd.to_numeric(df['onset'], errors='raise')
+            if not np.isfinite(df['onset']).all() or not df['type'].eq('recognition').any():
+                raise ValueError(f'{corrected_file}: invalid onsets or no recognition events')
+            print(f'{subj}: using corrected RT events from {corrected_file}')
+        else:
+            df = pd.read_csv(str(Path(path_behavior) / f'{subj}_events.csv'))
         tmp = df[
             (df['task'] == 'learning_bach') &
             (df['type'].isin(['recognition', 'KeyPress', 'keypress']))
