@@ -100,6 +100,12 @@ def compute(config, analysis):
         return summarize_pairing_clustering(load_result(config, 'pairing_weights'),
             seed=config['fit']['seed'], checkpoint_dir=Path(config['output_dir'])/'clustering_checkpoints',
             **config['analyses'][analysis])
+    if analysis == 'pairing_cross_modal':
+        if config['fit']['model'] != 'plssvd' or config['fit']['meg_kind'] != 'paired_coverage':
+            raise ValueError('Cross-modal profiles require paired_coverage PLSSVD fits.')
+        from vs3_1_cross_modal_profiles import analyze_cross_modal_profiles
+        return analyze_cross_modal_profiles(load_result(config, 'pairing_weights'),
+                                            **config['analyses'][analysis])
     if analysis == 'pairing_profiles':
         from vs3_1_pairing_specificity import summarize_profiles
         return summarize_profiles(load_result(config, 'pairing_weights'),
@@ -140,7 +146,7 @@ def run(config, analysis, recompute=False):
             return out
         except FileNotFoundError:
             pass
-    if analysis in ('pairing_profiles', 'pairing_clustering', 'pairing_distributions'):
+    if analysis in ('pairing_profiles', 'pairing_clustering', 'pairing_distributions', 'pairing_cross_modal'):
         run(config, 'pairing_weights')
     elif analysis not in ('weights', 'profiles', 'pairing_weights'):
         run(config, 'weights')
@@ -165,7 +171,7 @@ def main():
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--analysis', choices=['weights', 'profiles', 'gradients',
                         'gradient_comparison', 'radius_search', 'percent_search',
-                        'pairing_weights', 'pairing_profiles', 'pairing_clustering', 'pairing_distributions'], required=True)
+                        'pairing_weights', 'pairing_profiles', 'pairing_clustering', 'pairing_distributions', 'pairing_cross_modal'], required=True)
     parser.add_argument('--recompute', action='store_true')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
