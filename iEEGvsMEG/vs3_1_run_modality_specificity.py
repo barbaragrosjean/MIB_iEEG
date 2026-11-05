@@ -91,6 +91,10 @@ def compute(config, analysis):
         source = ensure_fits(config, Path(config['output_dir'])/'pairing_fits'/signature)
         aligned = load_aligned(source, config['fit']['model'], config['pairing']['iterations'])
         return summarize_magnitudes(aligned, **config['analyses'][analysis])
+    if analysis == 'pairing_distributions':
+        from vs3_1_weight_distributions import compare_weight_distributions
+        return compare_weight_distributions(load_result(config, 'pairing_weights'),
+                                            **config['analyses'][analysis])
     if analysis == 'pairing_clustering':
         from vs3_1_pairing_clustering import summarize_pairing_clustering
         return summarize_pairing_clustering(load_result(config, 'pairing_weights'),
@@ -136,7 +140,7 @@ def run(config, analysis, recompute=False):
             return out
         except FileNotFoundError:
             pass
-    if analysis in ('pairing_profiles', 'pairing_clustering'):
+    if analysis in ('pairing_profiles', 'pairing_clustering', 'pairing_distributions'):
         run(config, 'pairing_weights')
     elif analysis not in ('weights', 'profiles', 'pairing_weights'):
         run(config, 'weights')
@@ -161,7 +165,7 @@ def main():
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--analysis', choices=['weights', 'profiles', 'gradients',
                         'gradient_comparison', 'radius_search', 'percent_search',
-                        'pairing_weights', 'pairing_profiles', 'pairing_clustering'], required=True)
+                        'pairing_weights', 'pairing_profiles', 'pairing_clustering', 'pairing_distributions'], required=True)
     parser.add_argument('--recompute', action='store_true')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
