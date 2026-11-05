@@ -22,6 +22,8 @@ VERSION = 1
 
 def result_directory(config, analysis):
     payload = dict(version=VERSION, fit=config['fit'])
+    if analysis == 'pairing_cross_modal':
+        payload['cross_modal_summary_version'] = 2  # Retain and pool individual comparisons
     if analysis == 'pairing_profiles':
         payload['spatial_summary_version'] = 2  # Full distance range and pair-count controls
     if analysis == 'pairing_weights':

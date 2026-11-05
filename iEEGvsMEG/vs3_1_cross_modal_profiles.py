@@ -29,7 +29,7 @@ def analyze_cross_modal_profiles(aligned, *, n_components=2, normalize_weights=T
             raise ValueError(f'{m}: expected finite association × paired-row × component weights.')
     if not len(anchor) or not n_iterations or not np.isfinite(xyz).all():
         raise ValueError('Nonempty fits and finite electrode coordinates are required.')
-    rows, audits = [], []
+    rows, audits, comparisons = [], [], []
     maximum = 0.
     for iteration, metadata in enumerate(aligned['meg_metadata']):
         mm = metadata.reset_index(drop=True)
@@ -66,6 +66,11 @@ def analyze_cross_modal_profiles(aligned, *, n_components=2, normalize_weights=T
             cosine[valid] = np.clip(1 - profiles['MEG'][sources[valid]] @ profiles['iEEG'][electrode] / denom[valid], 0, 1)
             semivariance = ((magnitude['iEEG'][electrode] - magnitude['MEG'][sources])**2 / (2 * variance)
                             if variance > 0 else np.full(len(sources), np.nan))
+            comparisons.append(pd.DataFrame(dict(iteration=iteration, subject=subject,
+                electrode_row=electrode, meg_row=sources,
+                meg_x=meg_xyz[sources, 0], meg_y=meg_xyz[sources, 1], meg_z=meg_xyz[sources, 2],
+                source_distance_mm=distance, bin=bins, distance_mm=(bins+.5)*width,
+                cosine_distance=cosine, magnitude_semivariance=semivariance)))
             for metric, values in [('cosine_distance', cosine), ('magnitude_semivariance', semivariance)]:
                 for b in np.unique(bins):
                     selected = values[bins == b]
@@ -81,25 +86,43 @@ def analyze_cross_modal_profiles(aligned, *, n_components=2, normalize_weights=T
     summary = curves.groupby(keys)['mean'].agg(['mean', 'std', 'count']).reset_index()
     summary = summary.rename(columns={'count': 'n_associations', 'std': 'association_sd'})
     summary['across_sem'] = summary.association_sd / np.sqrt(summary.n_associations)
-    return dict(electrode_curves=curves, summary=summary, anchor=anchor,
+    # Pool individual comparisons BEFORE averaging: each valid comparison has equal weight.
+    comparison_values = pd.concat(comparisons, ignore_index=True)
+    pooled_tables = []
+    for metric in ('cosine_distance', 'magnitude_semivariance'):
+        group_keys = keys[:-1]
+        grouped = comparison_values.groupby(group_keys)[metric]
+        pooled = grouped.agg(['mean', 'std', 'count', 'size']).reset_index().rename(
+            columns={'std': 'comparison_sd', 'count': 'n_comparisons', 'size': 'n_total_comparisons'})
+        pooled['pooled_sem'] = pooled.comparison_sd / np.sqrt(pooled.n_comparisons)
+        contributors = comparison_values.loc[np.isfinite(comparison_values[metric])].groupby(group_keys).iteration.nunique()
+        pooled = pooled.merge(contributors.rename('n_associations'), on=group_keys, how='left')
+        pooled['n_associations'] = pooled.n_associations.fillna(0).astype(int)
+        pooled['metric'] = metric
+        pooled_tables.append(pooled)
+    return dict(comparison_values=comparison_values, pooled_summary=pd.concat(pooled_tables, ignore_index=True),
+                electrode_curves=curves, summary=summary, anchor=anchor,
                 normalization_audit=pd.DataFrame(audits), max_distance_mm=maximum,
                 n_iterations=n_iterations, n_components=n_components,
                 normalize_weights=normalize_weights, distance_bin_width_mm=width,
                 provenance=aligned.get('provenance', []), source_dir=aligned.get('source_dir'))
 
 
-def plot_cross_modal_profiles(result, *, sem_mode='across', association=1,
+def plot_cross_modal_profiles(result, *, sem_mode='pooled', association=1,
                               figsize=(18, 6), cmap='turbo'):
     """Yield one figure per subject; association is one-based for within SEM."""
     import matplotlib.pyplot as plt
     from nilearn import plotting
-    if sem_mode not in ('within', 'across'):
-        raise ValueError("sem_mode must be 'within' or 'across'.")
+    if sem_mode not in ('pooled', 'within', 'across'):
+        raise ValueError("sem_mode must be 'pooled', 'within', or 'across'.")
     if not isinstance(association, (int, np.integer)) or not 1 <= association <= result['n_iterations']:
         raise ValueError('Association must be a valid one-based integer.')
     if sem_mode == 'within':
         table = result['electrode_curves'].query('iteration == @association - 1')
         sem_column, title = 'within_sem', f'association {association}: source SEM'
+    elif sem_mode == 'pooled':
+        table = result['pooled_summary']
+        sem_column, title = 'pooled_sem', 'pooled comparisons: source–association SEM'
     else:
         table = result['summary']
         sem_column, title = 'across_sem', 'association SEM'
