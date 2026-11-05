@@ -148,7 +148,7 @@ def plot_cross_modal_profiles(result, *, sem_mode='pooled', association=1,
                                           title='Fixed iEEG electrodes')
         brain.add_markers(anchor.iloc[indices][['x', 'y', 'z']].to_numpy(float),
                           marker_color=colors, marker_size=18)
-        axes[0].legend(fontsize=6, ncol=max(1, int(np.ceil(len(indices)/20))))
+        #axes[0].legend(fontsize=6, ncol=max(1, int(np.ceil(len(indices)/20))))
         fig.suptitle(f'{subject} · {title} · RMS normalization: {result["normalize_weights"]}')
         fig.subplots_adjust(wspace=.3, top=.86)
         yield subject, fig
