@@ -125,3 +125,51 @@ def analyze_channel_space(data, *, shell_edges_mm, block_scaling=True,
         shell_table=pd.DataFrame(dict(shell=np.arange(n_shells), left_mm=edges[:-1], right_mm=edges[1:], distance_mm=centers)),
         arrays=dict(times=times, correlation_time_mask=time_mask, ieeg_erp=ieeg_erp.astype('float32'),
                     meg_erp_mean=mean.astype('float32'), meg_erp_sem=sem.astype('float32'), n_meg_erp=erp_counts))
+
+
+def roi_shell_source_maps(results, source_positions):
+    """Project participant-balanced ROI shell means onto pooled MEG coordinates.
+
+    Identical source coordinates are displayed once. For overlapping electrode
+    shells, average finite ROI shell values within each iEEG participant first,
+    then across participants. These are projected shell statistics, not source-
+    specific correlations. No spatial interpolation or hemisphere folding occurs.
+    """
+    positions = np.unique(np.asarray(source_positions, float), axis=0)
+    tree = cKDTree(positions)
+    shells = results['shell_table'].sort_values('shell')
+    edges = np.r_[shells.left_mm.to_numpy(), shells.right_mm.iloc[-1]]
+    n_shells = len(shells)
+    frames = []
+    for region, electrodes in results['metadata'].groupby('region_analysis', sort=False):
+        values = (results['roi_summary'].loc[lambda f: f.region.eq(region)]
+                  .set_index('shell').mean_abs_r.reindex(shells.shell).to_numpy())
+        total = np.zeros(len(positions))
+        n_subjects = np.zeros(len(positions), dtype=int)
+        n_electrodes = np.zeros(len(positions), dtype=int)
+        for _, group in electrodes.groupby('subject', sort=False):
+            subtotal = np.zeros(len(positions))
+            count = np.zeros(len(positions), dtype=int)
+            for xyz in group[['x', 'y', 'z']].to_numpy(float):
+                nearby = np.asarray(tree.query_ball_point(xyz, np.nextafter(edges[-1], np.inf)), dtype=int)
+                distances = np.linalg.norm(positions[nearby] - xyz, axis=1)
+                index = np.searchsorted(edges, distances, side='right') - 1
+                index[distances == edges[-1]] = n_shells - 1
+                valid = (index >= 0) & (index < n_shells)
+                nearby, index = nearby[valid], index[valid]
+                finite = np.isfinite(values[index])
+                nearby, index = nearby[finite], index[finite]
+                subtotal[nearby] += values[index]
+                count[nearby] += 1
+            available = count > 0
+            total[available] += subtotal[available] / count[available]
+            n_subjects[available] += 1
+            n_electrodes += count
+        mean = np.divide(total, n_subjects, out=np.full(len(positions), np.nan), where=n_subjects > 0)
+        frame = pd.DataFrame(positions, columns=['x', 'y', 'z'])
+        frame['region'] = region
+        frame['mean_abs_r'] = mean
+        frame['n_ieeg_spatial_support'] = n_subjects
+        frame['n_electrode_shells'] = n_electrodes
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True)

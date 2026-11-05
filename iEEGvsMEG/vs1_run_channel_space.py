@@ -8,8 +8,8 @@ import shlex
 import sys
 import numpy as np
 import pandas as pd
-from vs0_load_and_config import load_project_data
-from vs1_1_channel_space import analyze_channel_space
+from vs0_load_and_config import load_project_data, coordinates_mm
+from vs1_1_channel_space import analyze_channel_space, roi_shell_source_maps
 
 VERSION = 1
 TABLES = ('metadata', 'correlations', 'electrode_summary', 'roi_subjects', 'roi_summary', 'scaling', 'shell_table')
@@ -88,14 +88,33 @@ def run(config, recompute=False):
     return folder
 
 
+
+def run_roi_brain_maps(config):
+    """Use existing correlations and source coordinate files; no ERP refitting."""
+    result = load_result(config)
+    folder = result_directory(config)
+    positions = []
+    for subject in result['correlations'].meg_subject.unique():
+        path = Path(config['data']['meg_dir']) / f'{subject}_pos.csv'
+        table = pd.read_csv(path)
+        table = table.loc[:, ~table.columns.astype(str).str.startswith('Unnamed:')]
+        positions.append(coordinates_mm(table.to_numpy(), config['data']['meg_coordinate_unit']))
+    maps = roi_shell_source_maps(result, np.concatenate(positions))
+    path = folder / 'roi_shell_source_maps.csv'
+    maps.to_csv(path, index=False)
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config',type=Path,required=True)
     parser.add_argument('--recompute',action='store_true')
+    parser.add_argument('--roi-brain-maps', action='store_true', help='Project saved ROI shell means onto MEG coordinates without refitting.')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
     sys.path.extend([str(root.parent),str(root.parent/'LB')])
-    print(run(json.loads(args.config.read_text()),args.recompute))
+    config = json.loads(args.config.read_text())
+    print(run_roi_brain_maps(config) if args.roi_brain_maps else run(config, args.recompute))
 
 
 if __name__ == '__main__': main()
