@@ -11,7 +11,7 @@ import pandas as pd
 from vs0_load_and_config import load_project_data, coordinates_mm
 from vs1_1_channel_space import analyze_channel_space, roi_shell_source_maps
 
-VERSION = 1
+VERSION = 2
 TABLES = ('metadata', 'correlations', 'electrode_summary', 'roi_subjects', 'roi_summary', 'scaling', 'shell_table')
 
 
@@ -31,6 +31,7 @@ def load_result(config):
     result = {name: pd.read_csv(folder/f'{name}.csv', dtype={'subject':str, 'ieeg_subject':str, 'meg_subject':str}) for name in TABLES}
     with np.load(folder/'erps.npz') as saved:
         result['arrays'] = dict(saved)
+    result['sequence_metric'] = config.get('sequence_metric', 'correlation')
     return result
 
 
@@ -69,7 +70,8 @@ def run(config, recompute=False):
         data['electrode_metadata'][roi_column] = get_region_label(data['electrode_metadata'][['x','y','z']]/1000.)
     result = analyze_channel_space(data, shell_edges_mm=config['shell_edges_mm'],
         block_scaling=config['block_scaling'], time_window=config['time_window'],
-        roi_column=roi_column, pool_hemispheres=config['pool_hemispheres'])
+        roi_column=roi_column, pool_hemispheres=config['pool_hemispheres'],
+        sequence_metric=config.get('sequence_metric', 'correlation'))
     if folder.exists():
         archive = folder.parent/'old';archive.mkdir(exist_ok=True)
         folder.rename(archive/f'{folder.name}_{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}')
