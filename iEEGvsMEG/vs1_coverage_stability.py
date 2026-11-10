@@ -199,3 +199,33 @@ def run_pairing_stability(reference, *, n_subjects=None, repeats=20, n_component
                    paired_control_differences=differences.reset_index())
 
 
+
+
+def compare_to_full_concatenated(stability, output_dir, full_pca):
+    """Compare saved shuffled PCs with full MEG PCs, sampling matching sources for weights."""
+    if full_pca.dataset.name != 'full_concatenated':
+        raise ValueError('Use the full_concatenated PCA result.')
+    metadata = full_pca.dataset.metadata
+    # Full dataset blocks follow the MEG subject order; each block contains all sources.
+    subjects = metadata['meg_subject'].astype(str).to_numpy()
+    offsets = {subject: int(np.flatnonzero(subjects == subject)[0])
+               for subject in dict.fromkeys(subjects)}
+    metrics, pairs = [], []
+    k = stability['config']['n_components']
+    with np.load(Path(output_dir) / 'scores.npz') as scores:
+        for repeat, mapping in stability['source_mapping'].groupby('repeat'):
+            if repeat < 0:
+                continue
+            mapping = mapping.sort_values('electrode_index')
+            starts = mapping.meg_subject.astype(str).map(offsets)
+            if starts.isna().any():
+                raise ValueError('A stability subject is missing from full_concatenated.')
+            for name, source_column in [('paired_coverage', 'source_index'),
+                                        ('random_control', 'random_source_index')]:
+                indices = starts.to_numpy(dtype=int) + mapping[source_column].to_numpy(dtype=int)
+                for domain in ('timecourses', 'weights'):
+                    reference = full_pca.scores if domain == 'timecourses' else full_pca.weights[indices]
+                    _record(metrics, pairs, scores[f'{name}_r{repeat}_{domain}'], reference, k,
+                            dataset=name, domain=domain, repeat=int(repeat), repeat_other=-1,
+                            comparison='to_full_concatenated', reference_dataset='full_concatenated')
+    return pd.DataFrame(pairs)
