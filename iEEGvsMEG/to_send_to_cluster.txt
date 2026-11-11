@@ -17,8 +17,5 @@ submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEE
 
 submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs1_run_channel_space.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/channel_space/config.json" --project MINDLAB2021_MEG-TempSeqAges
 
-submit_to_cluster -n 2 -q highmem_short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs3_1_run_modality_specificity.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/modality_specificity/paired_coverage/plssvd/pairing_weights_config.json --analysis pairing_weights" --project MINDLAB2021_MEG-TempSeqAges
-
-
-
-submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs3_1_run_modality_specificity.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/modality_specificity/paired_coverage/plssvd/pairing_weights_config.json --analysis pairing_weights" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q highmem_short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs3_1_weight_clustering.py --input-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/modality_specificity/paired_coverage/plssvd/weights/c2a261e925a3bff6/absolute_weight_clustering --n-clusters auto --n-components 6 --k-min 2 --k-max 10 --seed 2026 --methods kmeans minibatch gmm birch" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q highmem_short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs3_1_run_modality_specificity.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/modality_specificity/paired_coverage/plssvd/pairing_clustering_config.json --analysis pairing_clustering" --project MINDLAB2021_MEG-TempSeqAges
