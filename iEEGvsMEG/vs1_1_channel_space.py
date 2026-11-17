@@ -3,7 +3,7 @@ import re
 import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
-from scipy.stats import rankdata
+from vs1_coverage_matching_utils import cross_correlations
 
 
 def _condition_average(array, block_scaling):
@@ -20,19 +20,8 @@ def _bilateral_region(label):
     return re.sub(r'[_ .-]+(?:left|right|lh|rh|L|R)$', '', value, flags=re.I)
 
 
-def absolute_spearman(reference, targets):
-    """One reference and a row per shell; ties receive average ranks."""
-    x = rankdata(reference)
-    y = rankdata(targets, axis=1)
-    x = x - x.mean()
-    y = y - y.mean(axis=1, keepdims=True)
-    denominator = np.linalg.norm(x) * np.linalg.norm(y, axis=1)
-    values = np.divide(y @ x, denominator, out=np.full(len(y), np.nan), where=denominator > 0)
-    return np.clip(np.abs(values), 0., 1.)
-
-
 METRIC_LABELS = {
-    'correlation': 'Absolute Spearman correlation of absolute ERPs',
+    'correlation': 'Signed Pearson correlation of absolute ERPs',
     'rmsd': 'RMSD of absolute ERPs',
     'cosine': 'Cosine distance of absolute ERPs',
 }
@@ -55,7 +44,7 @@ def sequence_comparison(reference, targets, metric='correlation'):
         return result
     targets = y[valid]
     if metric == 'correlation':
-        result[valid] = absolute_spearman(x, targets)
+        result[valid] = cross_correlations(x[:, None], targets.T)[0]
     elif metric == 'rmsd':
         result[valid] = np.sqrt(np.mean((targets-x)**2, axis=1))
     else:
@@ -73,7 +62,7 @@ def analyze_channel_space(data, *, shell_edges_mm, block_scaling=True,
 
     Whole-participant blocks have total temporal sample variance one when enabled,
     after condition averaging. Positive scalar scaling affects displayed ERPs but
-    does not change Spearman correlations. Shells are [left, right), except that
+    does not change Pearson correlations. Shells are [left, right), except that
     the last shell includes its right edge. ROI means give each iEEG participant
     equal weight after averaging available electrodes within that participant/ROI.
     """

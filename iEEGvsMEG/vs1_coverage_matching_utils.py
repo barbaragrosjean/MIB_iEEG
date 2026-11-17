@@ -258,19 +258,15 @@ def fit_block_pca(dataset, n_components=10, feature_chunk=1024, max_gram_gib=2.)
                      values / total_ss, total_ss / (n - 1))
 
 def cross_correlations(a, b):
-    """Spearman correlation between columns; constant columns return NaN."""
-    from scipy.stats import rankdata
-
+    """Pearson correlation between columns; constant columns return NaN."""
     a = np.asarray(a, float)
     b = np.asarray(b, float)
 
     if a.shape[0] != b.shape[0]:
         raise ValueError('Correlation requires aligned observations/features.')
 
-    a = np.apply_along_axis(rankdata, 0, a)
-    b = np.apply_along_axis(rankdata, 0, b)
-    a -= np.mean(a, axis=0)
-    b -= np.mean(b, axis=0)
+    a = a - a.mean(axis=0)
+    b = b - b.mean(axis=0)
     denominator = (np.linalg.norm(a, axis=0)[:, None]* np.linalg.norm(b, axis=0)[None, :])
     return np.divide(a.T @ b,denominator,out=np.full(denominator.shape, np.nan),where=denominator > 0).clip(-1, 1)
 
@@ -345,7 +341,7 @@ def _check_comparison(meg, ieeg):
         raise ValueError('iEEG electrode reference/order differs.')
 
 def correlate_timecourses(meg, ieeg, plot=False):
-    """All MEG-PC x iEEG-PC score spearman correlations; return a DataFrame and plot."""
+    """All MEG-PC x iEEG-PC score Pearson correlations; return a DataFrame and plot."""
     _check_comparison(meg, ieeg)
     matrix = cross_correlations(meg.scores, ieeg.scores)
     matrix

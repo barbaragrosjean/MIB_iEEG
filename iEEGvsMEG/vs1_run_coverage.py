@@ -14,7 +14,16 @@ from vs1_coverage_matching_utils import (
     SETUP_NAMES, load_dataset, fit_block_pca, PCAResult,
 )
 
+from vs1_elect_number_effect import CHANNEL_SWEEP_SCHEMA_VERSION
+
 SCHEMA_VERSION = 1
+
+
+def _run_config(config, analysis):
+    payload = dict(config, schema_version=SCHEMA_VERSION)
+    if analysis == "channels":
+        payload["channel_sweep_schema_version"] = CHANNEL_SWEEP_SCHEMA_VERSION
+    return payload
 
 
 def load_datasets(config):
@@ -33,7 +42,7 @@ def load_datasets(config):
 
 
 def analysis_directory(config, analysis):
-    payload = dict(config, schema_version=SCHEMA_VERSION)
+    payload = _run_config(config, analysis)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
     return Path(config['output_dir']) / analysis / digest
 
@@ -52,7 +61,7 @@ def prepare_analysis(config, analysis, config_file, recompute=False):
     marker = out / 'RUN_COMPLETE.json'
     if not recompute and marker.exists():
         saved = json.loads(marker.read_text())
-        if saved == dict(config, schema_version=SCHEMA_VERSION):
+        if saved == _run_config(config, analysis):
             print(f'Loading completed analysis: {out}')
             return out
     print('Run the command above, then set RECOMPUTE=False and rerun this cell.')
@@ -87,7 +96,7 @@ def run_analysis(config, analysis, datasets, recompute=False):
         result = compare_meg_information(datasets, dimensions=list(range(1, k+1)), max_gram_gib=memory)
         save_information(result, out)
     elif analysis == 'channels':
-        run_elect_number_effect(datasets['full_concatenated'], datasets['iEEG'],
+        run_elect_number_effect(datasets['full_concatenated'],
             step=config['channel_step'], repeats=config['channel_repeats'], seed=config['seed'],
             n_components=k, output_dir=out, max_gram_gib=memory)
     elif analysis == 'pca':
@@ -102,7 +111,7 @@ def run_analysis(config, analysis, datasets, recompute=False):
             output_dir=out, max_gram_gib=memory)
     else:
         raise ValueError(f'Unknown analysis: {analysis}')
-    (out / 'RUN_COMPLETE.json').write_text(json.dumps(dict(config, schema_version=SCHEMA_VERSION), indent=2))
+    (out / 'RUN_COMPLETE.json').write_text(json.dumps(_run_config(config, analysis), indent=2))
     return out
 
 

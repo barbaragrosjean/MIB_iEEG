@@ -17,6 +17,8 @@ TABLES = ('metadata', 'correlations', 'electrode_summary', 'roi_subjects', 'roi_
 
 def result_directory(config):
     payload = dict(config, version=VERSION)
+    if config.get('sequence_metric', 'correlation') == 'correlation':
+        payload['correlation_method'] = 'pearson'
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
     return Path(config['output_dir'])/digest
 

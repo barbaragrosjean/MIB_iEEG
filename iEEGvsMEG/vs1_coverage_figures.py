@@ -328,7 +328,7 @@ def _correlation_plot(matrix, name, title, plot):
                     cmap='RdBu_r',
                     annot=True, 
                     ax=ax, 
-                    cbar_kws={'label': 'Signed Spearman r'},
+                    cbar_kws={'label': 'Signed Pearson r'},
                     fmt='.2f')
         ax.set(title=f'{name}: {title}', xlabel='iEEG PC', ylabel='MEG PC',
                xticks=range(matrix.shape[1]), xticklabels=range(1, matrix.shape[1]+1),
@@ -368,27 +368,33 @@ def plot_meg_information(result):
     return fig
 
 
-def plot_elect_number_effect(result):
+def plot_elect_number_effect(result, *, min_channels=None, max_channels=None, figsize=(8, 8)):
     import matplotlib.pyplot as plt
-    fig,axes=plt.subplots(1,3,figsize=(11,5),layout='constrained')
-    for ax,key,title in zip(axes.flat,
-        ['total_variance','subspace_overlap','matched_abs_r'],
-        ['MEG total variance (all PCs)','Temporal subspace overlap with retained PCs iEEG','Matched component correlation retained PCs iEEG']):
-        
-        g=result['metrics'].groupby('n_channels')[key].agg(['median','min','max']).sort_index()
-        
-        ax.plot(g.index,g['median'],'o-',markersize=3, color=MODALITY_COLORS['MEG'])
-        
-        if result['config']['repeats']>1:
-            ax.fill_between(g.index,g['min'],g['max'],alpha=.2)
-        
-        ax.set(title=title, xlabel='Number of MEG channels')
-        if key == 'total_variance':
-            ax.set_ylabel('Total variance (sum across channels)')
-            ax.set_ylim(bottom=0)  # Absolute variance is not bounded by one.
-        else:
-            ax.set(ylabel='Similarity', ylim=(0, 1.02))
-        ax.grid(alpha=.2)
-    fig.suptitle('Channel-count effect: full-concatenated MEG vs fixed retained-PC iEEG reference')
-    return fig
 
+    config = result['config']
+    full_count = config['n_full_channels']
+    rows = result['metrics']
+    if min_channels is not None:
+        rows = rows[rows.n_channels >= min_channels]
+    if max_channels is not None:
+        rows = rows[rows.n_channels <= max_channels]
+    endpoint = result['metrics'].loc[result['metrics'].n_channels == full_count]
+
+    fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True, layout='constrained')
+    color = SETUP_COLORS['full_concatenated']
+    for ax, (key, label) in zip(axes, (
+        ('variance_fraction_retained', 'Full-MEG variance fraction retained'),
+        ('subspace_overlap', 'Temporal subspace overlap'),
+    )):
+        values = rows.groupby('n_channels')[key].agg(['median', 'min', 'max'])
+        ax.plot(values.index, values['median'], 'o-', markersize=3, color=color)
+        if config['repeats'] > 1:
+            ax.fill_between(values.index, values['min'], values['max'], color=color, alpha=.2)
+        ax.scatter(full_count, endpoint[key].median(), marker='D', color=color,
+                   label='All sources', zorder=3)
+        ax.set(ylabel=label, ylim=(0, 1.02))
+        ax.grid(alpha=.2)
+    axes[0].legend()
+    axes[1].set_xlabel('Number of MEG sources')
+    fig.suptitle(f"Full-concatenated MEG subsampling · {config['n_components']} PCs")
+    return fig

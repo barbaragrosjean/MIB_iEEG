@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 
-NULL_TYPES = ('time_cirular_shift', 'time_block', 'time_point', 'space', 'phase')
+NULL_TYPES = ('time_cirular_shift', 'time_block', 'time_point', 'time_point_shared', 'space', 'phase')
 
 
 def _null_name(perm, perm_type='phase'):
@@ -100,7 +100,7 @@ def prepare_selection(runs_dir, n_components=10, null_quantile=.95, min_support=
 def load_selection(runs_dir, n_components=10, perm='both', perm_type='phase'):
     """Read selection for perm (modality) and perm_type (null transformation).
 
-    Supported types: time_cirular_shift, time_block, time_point, space, phase.
+    Supported types: time_cirular_shift, time_block, time_point, time_point_shared, space, phase.
     Defaults preserve historical phase selections. No evaluation or fitting is
     performed; prepare_selection must first create results for the chosen null.
     """

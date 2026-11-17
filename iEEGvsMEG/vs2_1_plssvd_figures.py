@@ -177,7 +177,7 @@ def plot_null_comparison(runs_dir, n_components, perm_type='phase', modes=('meg'
         raise ValueError(f'Unknown permutation type: {perm_type!r}; choose from {PERMUTATION_TYPES}.')
     labels = dict(phase='Coherent phase surrogates', time_cirular_shift='Circular time shifts',
                   time_block='Time-block permutations', time_point='Time-point permutations',
-                  space='Spatial permutations')
+                  time_point_shared='Shared time-point permutations', space='Spatial permutations')
     null_label = 'Phase null' if perm_type == 'phase' else 'Permutation null'
     modes = tuple(modes)
     if not modes or any(m not in ('meg','ieeg','both') for m in modes):

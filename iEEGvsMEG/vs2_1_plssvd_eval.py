@@ -72,7 +72,7 @@ def parse_args():
                         help='Number of independently shuffled K-fold evaluations (default: 100).')
     parser.add_argument('--perm', choices=['ieeg','meg','both','none'], default=None)
     parser.add_argument('--perm-type', choices=['time_cirular_shift','time_circular_shift',
-                        'time_block','time_point','space','phase','none'], default=None,
+                        'time_block','time_point','time_point_shared','space','phase','none'], default=None,
                         help='Surrogate transform; phase uses coherent Fourier phases within each modality.')
     parser.add_argument('--block-seconds', type=float, default=0.36)
     parser.add_argument('--seed', type=int, default=2026)

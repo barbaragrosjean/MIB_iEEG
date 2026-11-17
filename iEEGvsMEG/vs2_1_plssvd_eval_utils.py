@@ -293,19 +293,19 @@ def _trial_mean(array,indices):
 
 def _build_fold(trials,meg_kind,split_indices,root,seed,mmap_handles=None,condition_mode="stack", permutation_options=None, permutation_seed=None):
     permutation_rng = np.random.default_rng(permutation_seed)
-    phase_rngs = dict(zip(('ieeg', 'meg'), [np.random.default_rng(child)
+    modality_rngs = dict(zip(('ieeg', 'meg'), [np.random.default_rng(child)
         for child in np.random.SeedSequence(permutation_seed).spawn(2)]))
-    phase_transforms = {}
+    modality_transforms = {}
     prepared={m:{} for m in ('ieeg','meg')};scalers={m:{} for m in ('ieeg','meg')}
     for modality,subjects in [('ieeg',trials.ieeg),('meg',trials.meg)]:
         for s in subjects:
             ix=split_indices[modality][s.subject]
             train=np.stack([_trial_mean(a,i) for a,i in zip(s.data,ix['train'])])
-            if permutation_options is not None and permutation_options.perm_type == 'phase':
-                if modality not in phase_transforms:
-                    phase_transforms[modality] = _permutation_indices(
-                        train.shape[1:], trials.times, permutation_options, modality, phase_rngs[modality])
-                transform = phase_transforms[modality]
+            if permutation_options is not None and permutation_options.perm_type in ('phase', 'time_point_shared'):
+                if modality not in modality_transforms:
+                    modality_transforms[modality] = _permutation_indices(
+                        train.shape[1:], trials.times, permutation_options, modality, modality_rngs[modality])
+                transform = modality_transforms[modality]
             else:
                 transform = _permutation_indices(train.shape[1:], trials.times, permutation_options, modality, permutation_rng)
             train = _apply_permutation(train, transform)
@@ -937,7 +937,7 @@ def plot_test_score_correlations(output_dir, n_components=25, absolute=True):
     return fig,table
 
 
-PERMUTATION_TYPES = ('time_cirular_shift', 'time_block', 'time_point', 'space', 'phase')
+PERMUTATION_TYPES = ('time_cirular_shift', 'time_block', 'time_point', 'time_point_shared', 'space', 'phase')
 
 
 def _checked_options(options):
@@ -967,12 +967,16 @@ def _permutation_indices(shape, times, options, modality, rng):
     shuffles channels independently at each time point (a single fixed channel
     relabeling would be invariant under an unconstrained PLSSVD refit).
     Both modalities receive independent draws. Coordinates stay fixed.
-    Phase surrogates instead use a common Fourier phase vector across all
-    channels AND participants of a modality, shared across conditions/folds.
+    Phase and shared time-point surrogates use one transform across all
+    channels and participants of a modality, shared across conditions/folds.
     """
     if options is None or options.perm not in (modality, 'both'):
         return None
     channels, n_times = shape
+    if options.perm_type == 'time_point_shared':
+        if n_times < 2:
+            raise ValueError('Time permutation requires at least two time points.')
+        return {'time_order': rng.permutation(n_times)}
     if options.perm_type == 'phase':
         if n_times < 3 or len(times) != n_times or not np.allclose(np.diff(times), np.diff(times)[0], rtol=1e-4, atol=1e-9):
             raise ValueError('Phase surrogates require >=3 regularly sampled time points.')
@@ -1015,6 +1019,8 @@ def _permutation_indices(shape, times, options, modality, rng):
 def _apply_permutation(array, indices):
     if indices is None:
         return array
+    if isinstance(indices, dict) and 'time_order' in indices:
+        return np.take(array, indices['time_order'], axis=-1)
     if isinstance(indices, dict) and 'phase_multiplier' in indices:
         if array.shape[-1] != indices['n_times']:
             raise ValueError('Phase surrogate time axis mismatch.')

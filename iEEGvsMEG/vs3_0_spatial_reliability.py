@@ -15,7 +15,6 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
-from scipy.stats import rankdata
 
 from vs3_0_compare_subspace import MODELS, MODALITIES, fit_models
 from vs2_0_compare_models import correlation_matrix
@@ -158,15 +157,15 @@ def subject_profiles(values, metadata, level):
     return profile.merge(count, on=['subject', level])
 
 
-def row_spearman(a, b):
+def row_pearson(a, b):
     """Vectorized row correlations; missing/constant rows stay NaN."""
     a, b = np.asarray(a, float), np.asarray(b, float)
     valid = np.isfinite(a).all(1) & np.isfinite(b).all(1)
     result = np.full(len(a), np.nan)
-    x, y = rankdata(a[valid], axis=1), rankdata(b[valid], axis=1)
+    x, y = a[valid], b[valid]
     x -= x.mean(1, keepdims=True); y -= y.mean(1, keepdims=True)
     den = np.linalg.norm(x, axis=1)*np.linalg.norm(y, axis=1)
-    result[valid] = np.divide((x*y).sum(1), den, out=np.full(len(den), np.nan), where=den > 0)
+    result[valid] = np.divide((x*y).sum(1), den, out=np.full(len(den), np.nan), where=den > 0).clip(-1, 1)
     return result
 
 
@@ -197,18 +196,18 @@ def parcel_correspondence(profiles, level, n_components, n_bootstrap, seed,
         observed = np.nan
         bootstrap = np.full(n_bootstrap, np.nan)
         if len(common) >= 3:
-            observed = row_spearman(means['ieeg'][:, c][None], means['meg'][:, c][None])[0]
+            observed = row_pearson(means['ieeg'][:, c][None], means['meg'][:, c][None])[0]
             sampled = {}
             for m in MODALITIES:
                 matrix = matrices[m][:, :, c]
                 numerator = draws[m] @ np.nan_to_num(matrix)
                 denominator = draws[m] @ np.isfinite(matrix).astype(float)
                 sampled[m] = np.divide(numerator, denominator, out=np.full_like(numerator, np.nan), where=denominator > 0)
-            bootstrap = row_spearman(sampled['ieeg'], sampled['meg'])
+            bootstrap = row_pearson(sampled['ieeg'], sampled['meg'])
         valid = bootstrap[np.isfinite(bootstrap)]
         # Too few complete resamples should not create apparently precise CIs.
         low, high = np.quantile(valid, [.025, .975]) if len(valid) >= max(20, .8*n_bootstrap) else (np.nan, np.nan)
-        rows.append(dict(component=c+1, level=level, spearman_r=float(observed), ci_low=low, ci_high=high,
+        rows.append(dict(component=c+1, level=level, pearson_r=float(observed), ci_low=low, ci_high=high,
                          n_common_parcels=len(common), n_valid_bootstrap=len(valid), n_bootstrap=n_bootstrap))
         for p, parcel in enumerate(common):
             for m in MODALITIES:
@@ -467,7 +466,7 @@ def summarize(root, n_bootstrap=1000, min_subjects=2, seed=2026):
     (root/'summary_config.json').write_text(json.dumps(dict(n_bootstrap=n_bootstrap, min_subjects=min_subjects,
         seed=seed, ci='95% percentile; conditional on fitted models, fixed common-parcel support; '
         'suppressed if <80% or <20 bootstrap draws are defined'), indent=2))
-    completion.write_text(json.dumps(dict(iterations=n, tables=list(tables))))
+    completion.write_text(json.dumps(dict(iterations=n, tables=list(tables), regional_correlation='pearson')))
     return tables
 
 
@@ -475,6 +474,9 @@ def load_results(root):
     root = Path(root)
     if not (root/'SUMMARY_COMPLETE.json').exists():
         raise ValueError('Summary is incomplete. Run spatial_reliability.py --summarize-only after fitting.')
+    marker = json.loads((root/'SUMMARY_COMPLETE.json').read_text())
+    if marker.get('regional_correlation') != 'pearson':
+        raise ValueError('Rerun the spatial reliability summary to compute regional Pearson correlations.')
     config = json.loads((root/'config.json').read_text())
     names = ('reliability', 'crossmodal', 'parcels', 'regional_profiles', 'across_iterations', 'component_matching')
     return config, {name: pd.read_csv(root/f'{name}.csv') for name in names}
@@ -530,7 +532,7 @@ def plot_results(root, component=1, iteration=0, space='patterns'):
     for mi, model in enumerate(models):
         offset = (mi-(len(models)-1)/2)*.2
         for li, level in enumerate(LEVELS):
-            values = d[(d.model == model) & (d.level == level)].spearman_r.dropna()
+            values = d[(d.model == model) & (d.level == level)].pearson_r.dropna()
             if len(values):
                 lo, med, hi = np.quantile(values, [.05, .5, .95])
                 axes[0].plot([li+offset]*2, [lo, hi], color=f'C{mi}')
@@ -538,10 +540,10 @@ def plot_results(root, component=1, iteration=0, space='patterns'):
             chosen = d[(d.model == model) & (d.level == level) & (d.iteration == iteration)]
             if len(chosen):
                 r = chosen.iloc[0]
-                axes[1].plot(li+offset, r.spearman_r, 'o', color=f'C{mi}', label=model if li == 0 else None)
+                axes[1].plot(li+offset, r.pearson_r, 'o', color=f'C{mi}', label=model if li == 0 else None)
                 axes[1].plot([li+offset]*2, [r.ci_low, r.ci_high], color=f'C{mi}')
     for ax in axes:
-        ax.set(xticks=range(len(LEVELS)), xticklabels=LEVELS, ylabel='Regional magnitude Spearman r', ylim=(-1.05, 1.05))
+        ax.set(xticks=range(len(LEVELS)), xticklabels=LEVELS, ylabel='Regional magnitude Pearson r', ylim=(-1.05, 1.05))
         ax.axhline(0, color='grey', ls=':'); ax.legend(fontsize=8)
     axes[0].set_title('Median and 5–95% iteration range (not a CI)')
     axes[1].set_title(f'Iteration {iteration}: conditional participant-bootstrap 95% CI')
