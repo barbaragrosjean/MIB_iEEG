@@ -248,10 +248,15 @@ def fit_iterations(args):
     model_names = tuple(getattr(args, 'models', MODELS))
     root = args.output_dir
     root.mkdir(parents=True, exist_ok=True)
-    trials = load_trial_cache(args.cache_dir)
+    trials = load_trial_cache(args.cache_dir, use_matched_pairs=getattr(args, 'use_matched_pairs', None),
+                              matched_pairs_csv=getattr(args, 'matched_pairs_csv', None))
+    if trials.pairing is not None:
+        from copy import copy
+        args = copy(args)
+        args.iterations = 1
     manifest = json.loads((args.cache_dir/'manifest.json').read_text())
     for m in MODALITIES:
-        if {str(s.subject) for s in getattr(trials, m)} != set(map(str, manifest['config'][m+'_subjects'])):
+        if not {str(s.subject) for s in getattr(trials, m)} <= set(map(str, manifest['config'][m+'_subjects'])):
             raise ValueError('Trial cache is incomplete.')
     coordinate_sources = update_trial_coordinates(trials, ieeg_dir=args.ieeg_coords_dir,
         meg_dir=args.meg_coords_dir, ieeg_unit=args.ieeg_coords_unit, meg_unit=args.meg_coords_unit)
@@ -264,10 +269,14 @@ def fit_iterations(args):
             label_lookup[m, str(s.subject)] = labels.iloc[offset:offset+len(s.positions)].reset_index(drop=True)
             offset += len(s.positions)
     provenance = [_fingerprint(args.cache_dir/'manifest.json')]
+    if trials.pairing is not None:
+        import vs0_load_and_config as shared_data
+        provenance.append(_fingerprint(shared_data.pairing_settings(
+            getattr(args, 'use_matched_pairs', None), getattr(args, 'matched_pairs_csv', None))[1]))
     provenance += [_fingerprint(args.cache_dir/f) for record in manifest['records'] for f in record['files']]
     provenance += [_fingerprint(path) for path in coordinate_sources.path]
     provenance += [_fingerprint(p) for p in (args.atlas_image, args.atlas_labels) if p is not None]
-    config = dict(schema_version=1, meg_kind=meg_kind, iterations=args.iterations,
+    config = dict(pairing=trials.pairing, schema_version=1, meg_kind=meg_kind, iterations=args.iterations,
                   components=args.components, models=list(model_names), seed=args.seed,
                   split_unit=args.split_unit, block_scaling=args.block_scaling,
                   pool_hemispheres=args.pool_hemispheres, condition_mode='average',
@@ -458,6 +467,9 @@ def summarize(root, n_bootstrap=1000, min_subjects=2, seed=2026):
     tables = dict(reliability=reliability, crossmodal=crossmodal, parcels=parcel_rows,
                   regional_profiles=region_rows, across_iterations=across, component_matching=matches)
     tables = {name: pd.DataFrame(rows) for name, rows in tables.items()}
+    if tables['across_iterations'].empty:
+        tables['across_iterations'] = pd.DataFrame(columns=['model', 'modality', 'space', 'axis',
+            'component', 'iteration_a', 'iteration_b', 'signed_r', 'magnitude_r', 'n_rows'])
     if tables['regional_profiles'].empty:
         tables['regional_profiles'] = pd.DataFrame(columns=['iteration', 'model', 'space', 'component',
             'level', 'parcel', 'modality', 'mean_magnitude', 'n_subjects'])
@@ -578,8 +590,8 @@ def main():
     args = parser.parse_args()
     if args.inspect_comparison:
         print(json.dumps(inspect_comparison(args.inspect_comparison), indent=2)); return
-    if args.iterations < 2 or args.components < 1:
-        parser.error('Need >=2 iterations and >=1 component.')
+    if args.iterations < 1 or args.components < 1:
+        parser.error('Need >=1 iteration and >=1 component.')
     if args.bootstrap < 20 or args.min_subjects < 1:
         parser.error('Need >=20 bootstrap draws and >=1 participant per parcel.')
     if not args.summarize_only:

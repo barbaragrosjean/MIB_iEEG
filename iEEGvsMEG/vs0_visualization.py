@@ -4,6 +4,7 @@ Edit the settings below, then run: python visualization.py
 The template NIfTI and both surfaces must share the input MNI millimeter space.
 Outputs are projection weights, not activation/forward patterns or significance.
 """
+from vs0_load_and_config import MEG_DATA_DIR
 from pathlib import Path
 import json
 import shutil
@@ -21,7 +22,7 @@ CONDITION_MODE = 'average'          # average or stack
 SEED = 2026
 
 # Data and template paths: replace template placeholders with your actual files.
-MEG_DIR = ROOT / 'MEG' / 'dataMEG'
+MEG_DIR = MEG_DATA_DIR
 IEEG_DIR = ROOT / 'ieeg_shortWOBS_fs250'
 METADATA_CSV = None                 # optional CSV; otherwise existing GetInfo loader
 MEG_TIMES_FILE = None

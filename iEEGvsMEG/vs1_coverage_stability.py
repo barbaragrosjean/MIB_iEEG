@@ -110,7 +110,10 @@ def run_pairing_stability(reference, *, n_subjects=None, repeats=20, n_component
     The original/baseline assignment is compared with the randomized assignments;
     their distribution measures dependence on pairing, not biological identity.
     """
-    k = _integer(n_components, 'n_components'); repeats = _integer(repeats, 'repeats', 2)
+    matched = reference.source_data.get('pairing') is not None
+    k = _integer(n_components, 'n_components'); repeats = 0 if matched else _integer(repeats, 'repeats', 2)
+    if matched:
+        baseline_pairing = reference.source_data['pairing']
     s, owners, ieeg_ids, meg_ids = _context(reference)
     roster_seq, assignment_seq, control_seq = np.random.SeedSequence(seed).spawn(3)
     rng = np.random.default_rng(roster_seq)

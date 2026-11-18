@@ -14,6 +14,7 @@ from vs2_0_compare_models import compare_cov_models_within
 
 def load_selected_datasets(config):
     options = dict(config['data'])
+    options.setdefault('selection_seed', config.get('seed', 2026))
     if options.get('meg_tmin') is None and options.get('meg_times_file') is None:
         info = sorted(Path(options['ieeg_dir']).glob('*_info.json'))[0]
         options['meg_tmin'] = float(json.loads(info.read_text())['time_epoch'][0])

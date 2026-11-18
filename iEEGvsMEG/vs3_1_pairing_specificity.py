@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import json
 import numpy as np
 import pandas as pd
+import vs0_load_and_config as shared_data
 
 from vs3_0_spatial_reliability import align_bundle, _load_bundle, _fingerprint, fit_iterations
 from vs3_0_weight_stability import controlled_seeds
@@ -20,7 +21,9 @@ def compatible_run(root, fit, options):
     root = Path(root)
     try:
         cfg = json.loads((root/'config.json').read_text())
-        expected = dict(schema_version=2, variation='pairing', meg_kind='paired_coverage',
+        enabled, csv = shared_data.pairing_settings(fit['data'].get('use_matched_pairs'), fit['data'].get('matched_pairs_csv'))
+        expected_pairing = dict(zip(*[shared_data.read_matched_pairs(csv)[c] for c in ('ieeg_subject', 'meg_subject')])) if enabled else None
+        expected = dict(pairing=expected_pairing, schema_version=2, variation='pairing', meg_kind='paired_coverage',
                         components=fit['n_components'], seed=fit['seed'],
                         split_unit=options['split_unit'], condition_mode='average',
                         block_scaling='equal_variance' if fit['block_scaling'] else 'none')
@@ -66,15 +69,18 @@ def ensure_fits(config, fallback_dir):
     manifest = json.loads((Path(options['cache_dir'])/'manifest.json').read_text())
     if list(manifest['config']['conditions']) != list(fit['data']['conditions']):
         raise ValueError('Notebook conditions differ from the selected trial cache.')
-    if options['iterations'] < 2:
-        raise ValueError('Use at least two associations for sample SD.')
+    enabled, _ = shared_data.pairing_settings(fit['data'].get('use_matched_pairs'), fit['data'].get('matched_pairs_csv'))
+    if options['iterations'] != 1 and enabled:
+        raise ValueError('Set pairing iterations to 1 for the fixed CSV assignment.')
+    if options['iterations'] < 1:
+        raise ValueError('Use at least one association.')
     existing = Path(options['existing_dir'])
     valid, reason = compatible_run(existing, fit, options)
     if valid:
         print(f'Reusing PAIRING_ONLY fits: {existing}', flush=True)
         return existing
     print(f'{reason} Computing fixed-half-trial fits in {fallback_dir}.', flush=True)
-    args = SimpleNamespace(cache_dir=Path(options['cache_dir']), output_dir=Path(fallback_dir),
+    args = SimpleNamespace(use_matched_pairs=enabled, matched_pairs_csv=fit['data'].get('matched_pairs_csv'), cache_dir=Path(options['cache_dir']), output_dir=Path(fallback_dir),
         meg_kind='paired_coverage', models=[fit['model']], components=fit['n_components'],
         iterations=options['iterations'], seed=fit['seed'], split_unit=options['split_unit'],
         block_scaling='equal_variance' if fit['block_scaling'] else 'none',
@@ -131,7 +137,7 @@ def summarize_magnitudes(aligned, *, normalize, percentile, bins=50):
             magnitude = np.abs(weights)
         limits = np.percentile(magnitude, percentile, axis=1)
         retained = np.where(magnitude >= limits[:, None, :], magnitude, 0.)
-        maps[modality] = dict(mean=retained.mean(axis=0), sd=retained.std(axis=0, ddof=1))
+        maps[modality] = dict(mean=retained.mean(axis=0), sd=retained.std(axis=0, ddof=1) if len(retained) > 1 else np.full(retained.shape[1:], np.nan))
         for c in range(weights.shape[2]):
             edges = np.linspace(0, max(float(magnitude[:, :, c].max()), np.finfo(float).eps), bins+1)
             for i in range(len(weights)):

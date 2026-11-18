@@ -2,6 +2,7 @@
 
 python vs1_run_coverage.py --config out/coverage/config.json --analysis all
 """
+from vs0_load_and_config import matching_provenance
 from pathlib import Path
 import argparse
 import hashlib
@@ -20,15 +21,16 @@ SCHEMA_VERSION = 1
 
 
 def _run_config(config, analysis):
-    payload = dict(config, schema_version=SCHEMA_VERSION)
+    payload = dict(config, schema_version=SCHEMA_VERSION, matching=matching_provenance(config.get('data')))
     if analysis == "channels":
         payload["channel_sweep_schema_version"] = CHANNEL_SWEEP_SCHEMA_VERSION
     return payload
 
 
 def load_datasets(config):
-    """Load once; construct all datasets with reproducible random associations."""
+    """Load once; construct all datasets with CSV or reproducible random associations."""
     options = dict(config['data'])
+    options.setdefault('selection_seed', config.get('seed', 2026))
     # Use the verified iEEG epoch start as in the original notebook.
     if options.get('meg_tmin') is None and options.get('meg_times_file') is None:
         info = sorted(Path(options['ieeg_dir']).glob('*_info.json'))[0]

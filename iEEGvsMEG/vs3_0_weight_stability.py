@@ -58,7 +58,7 @@ def roi_pair_correlations(ieeg, meg, metadata, level='region', block_size=256):
     No dense all-channel correlation matrix is retained.
     """
     x, y = np.asarray(ieeg,float), np.asarray(meg,float)
-    if x.shape != y.shape or x.ndim != 3 or x.shape[1] != len(metadata) or len(x)<2:
+    if x.shape != y.shape or x.ndim != 3 or x.shape[1] != len(metadata) or len(x)<1:
         raise ValueError('Need aligned iteration x coverage x component arrays.')
     if not np.isfinite(x).all() or not np.isfinite(y).all():
         raise ValueError('Weight trajectories must be finite.')
@@ -101,8 +101,8 @@ def roi_statistics(values, metadata, level='region'):
     No zero-filling. Every coverage slot has equal mass within its owner/ROI.
     """
     values = np.abs(np.asarray(values, float))
-    if values.ndim != 3 or values.shape[1] != len(metadata) or values.shape[0] < 2:
-        raise ValueError('Need >=2 iterations and aligned fixed feature metadata.')
+    if values.ndim != 3 or values.shape[1] != len(metadata) or values.shape[0] < 1:
+        raise ValueError('Need >=1 iteration and aligned fixed feature metadata.')
     metadata = metadata.reset_index(drop=True).copy()
     metadata[level] = metadata[level].map(bilateral_label)
     trajectories, summary = [], []
@@ -111,11 +111,11 @@ def roi_statistics(values, metadata, level='region'):
                              for _, group in rows.groupby('subject')]
         profile = np.mean(participant_means, axis=0)
         # Mean channel SD exposes variability that can cancel in an ROI average.
-        feature_sd = np.mean([values[:, group.index.to_numpy(), :].std(axis=0, ddof=1).mean(axis=0)
+        feature_sd = np.mean([(values[:, group.index.to_numpy(), :].std(axis=0, ddof=1).mean(axis=0) if len(values) > 1 else np.full(values.shape[2], np.nan))
                               for _, group in rows.groupby('subject')], axis=0)
         for c in range(values.shape[2]):
             summary.append(dict(roi=roi, component=c+1, mean_magnitude=profile[:, c].mean(),
-                sd_across_iterations=profile[:, c].std(ddof=1),
+                sd_across_iterations=profile[:, c].std(ddof=1) if len(values) > 1 else np.nan,
                 mean_channel_sd=feature_sd[c], n_channels=len(rows),
                 n_subjects=rows.subject.nunique(), n_iterations=len(values)))
             trajectories.extend(dict(roi=roi, component=c+1, iteration=i, magnitude=v)
@@ -163,13 +163,13 @@ def summarize_weights(root, roi_level='region'):
             summaries, traces = roi_statistics(stack, anchor, roi_level)
             roi_rows.extend(dict(model=model, modality=m, **row) for row in summaries)
             trajectories.extend(dict(model=model, modality=m, **row) for row in traces)
-            means, sds = abs(stack).mean(0), abs(stack).std(0, ddof=1)
+            means, sds = abs(stack).mean(0), abs(stack).std(0, ddof=1) if len(stack) > 1 else np.full(stack.shape[1:], np.nan)
             for j in range(len(anchor)):
                 for c in range(cfg['components']):
                     feature_rows.append(dict(model=model, modality=m, coverage_row=j,
                         subject=anchor.subject.iloc[j], roi=anchor[roi_level].iloc[j], component=c+1,
                         mean_magnitude=means[j, c], sd_across_iterations=sds[j, c]))
-    frames = dict(timecourse_correlations=pd.DataFrame(temporal_rows), roi_cross_correlations=pd.DataFrame(cross_rows), iteration_correlations=pd.DataFrame(matrices),
+    frames = dict(timecourse_correlations=pd.DataFrame(temporal_rows, columns=['model','modality','component','iteration_a','iteration_b','signed_r','magnitude_r','n_rows']), roi_cross_correlations=pd.DataFrame(cross_rows), iteration_correlations=pd.DataFrame(matrices, columns=['model','modality','component','iteration_a','iteration_b','signed_r','magnitude_r','n_rows']),
         roi_stability=pd.DataFrame(roi_rows, columns=['model', 'modality', 'roi', 'component',
             'mean_magnitude', 'sd_across_iterations', 'mean_channel_sd', 'n_channels', 'n_subjects', 'n_iterations']),
         roi_trajectories=pd.DataFrame(trajectories, columns=['model','modality','roi','component','iteration','magnitude']),
@@ -227,7 +227,11 @@ def main():
     p.add_argument('--roi-level', choices=LEVELS, default='region')
     p.add_argument('--summarize-only', action='store_true')
     args = p.parse_args()
-    if args.iterations < 2 or args.components < 1: p.error('Need >=2 iterations and >=1 component')
+    import vs0_load_and_config as shared_data
+    if shared_data.USE_MATCHED_PAIRS:
+        args.iterations = 1
+        args.conditions = ['pairing']
+    if args.iterations < 1 or args.components < 1: p.error('Need >=1 iteration and >=1 component')
     for condition in args.conditions:
         run = copy(args); run.variation = condition; run.weight_only = True
         run.output_dir = args.output_dir/condition

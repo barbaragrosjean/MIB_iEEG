@@ -2,6 +2,7 @@
 
 python -u vs3_1_run_modality_specificity.py --config CONFIG --analysis weights
 """
+from vs0_load_and_config import matching_provenance
 from pathlib import Path
 from datetime import datetime, timezone
 import argparse
@@ -21,7 +22,7 @@ VERSION = 1
 
 
 def result_directory(config, analysis):
-    payload = dict(version=VERSION, fit=config['fit'])
+    payload = dict(version=VERSION, fit=config['fit'], matching=matching_provenance(config['fit'].get('data')))
     if analysis == 'pairing_cross_modal':
         payload['cross_modal_summary_version'] = 2  # Retain and pool individual comparisons
     if analysis == 'pairing_profiles':

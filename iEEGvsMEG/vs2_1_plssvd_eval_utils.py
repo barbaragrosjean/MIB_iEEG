@@ -18,6 +18,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.linalg import svd
 from vs1_coverage_matching_utils import Dataset, coordinates_mm, construct_five_datasets
+import vs0_load_and_config as shared_data
 from vs2_0_cov_models_utils import _gram, _spectrum, _weights
 
 
@@ -54,6 +55,7 @@ class TrialData:
     meg: list
     times: np.ndarray
     conditions: tuple
+    pairing: dict = None
 
 
 def _signature(path):
@@ -63,7 +65,7 @@ def _signature(path):
 
 def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_subjects,
                         electrode_metadata, conditions=(1,2), ieeg_coordinate_unit='m',
-                        meg_coordinate_unit='m', trial_metadata_csv=None):
+                        meg_coordinate_unit='m', trial_metadata_csv=None, use_matched_pairs=None, matched_pairs_csv=None):
     """Export/reuse unaveraged trials, not the old MEG *_source.p averages.
 
     Raw MEG layout follows LB10_extract_data.py: OUT.sources_ERFs[c][0] is
@@ -81,6 +83,10 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
     Without a manifest, source data rebuilds the metadata and validates existing
     trial files; matching files are preserved and missing/partial files written.
     """
+    enabled, csv = shared_data.pairing_settings(use_matched_pairs, matched_pairs_csv)
+    meg_subjects, ieeg_subjects, meg_files, fixed_pairing = shared_data.select_subjects(
+        meg_raw_dir, ieeg_subjects, use_matched_pairs=enabled,
+        matched_pairs_csv=csv, meg_subjects=meg_subjects if not enabled else None)
     root=Path(cache_dir); root.mkdir(parents=True,exist_ok=True)
     meta=electrode_metadata.copy(); meta['subject']=meta.subject.astype(str)
     conditions=tuple(conditions)
@@ -88,7 +94,9 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
         raise ValueError('This validation currently uses exactly two conditions and their difference.')
     xyz=coordinates_mm(meta[['x','y','z']],ieeg_coordinate_unit)
     meta[['x','y','z']]=xyz
-    config=dict(meg_subjects=list(meg_subjects),ieeg_subjects=list(ieeg_subjects),conditions=list(conditions),
+    config=dict(use_matched_pairs=enabled, matched_pairs_csv=str(csv),
+        matched_pairs_signature=_signature(csv) if enabled else None, meg_files=meg_files, pairing=fixed_pairing,
+        meg_subjects=list(meg_subjects),ieeg_subjects=list(ieeg_subjects),conditions=list(conditions),
         meg_unit=meg_coordinate_unit,
         metadata_hash=hashlib.sha256(meta.to_csv(index=False).encode()).hexdigest(),
         trial_metadata=_signature(trial_metadata_csv) if trial_metadata_csv else None)
@@ -123,7 +131,7 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
            [('ieeg',ieeg_subjects),('meg',meg_subjects)] for subject in subjects) and times is not None:
         save_progress()
         print('cache computed')
-        return load_trial_cache(root)
+        return load_trial_cache(root, use_matched_pairs=enabled, matched_pairs_csv=csv)
     extra=None
     if trial_metadata_csv:
         extra=pd.read_csv(trial_metadata_csv,dtype={'subject':str,'modality':str})
@@ -148,17 +156,16 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
                     raise ValueError(f'{subject}: metadata must cover every epoch channel in order.')
                 pos=sm[['x','y','z']].to_numpy();sources.extend([_signature(info_path),_signature(data_path)])
             else:
-                data_path=Path(meg_raw_dir)/f'{subject}_norm0_abs_0.mat'
-                if not data_path.exists():
-                    raise FileNotFoundError(f'Missing raw MEG trials: {data_path}. Averaged *_source.p files cannot be used.')
-                try:
-                    import mat73
-                except ImportError as exc:
-                    raise ImportError('Install mat73 in the notebook environment to export the original MEG .mat trials.') from exc
-                out=mat73.loadmat(str(data_path))['OUT']
+                data_path=Path(meg_files[str(subject)])
+                if data_path.suffix != '.mat':
+                    raise ValueError(f'{data_path}: single-trial analysis requires a MATLAB trial file.')
+                out=shared_data.load_meg_mat(data_path)
                 t=np.asarray(out['time'],float).ravel()
                 pos=coordinates_mm(out['pos_brainsources_MNI8'],meg_coordinate_unit)
-                arrays=[np.asarray(out['sources_ERFs'][c][0]).transpose(2,0,1) for c in range(len(conditions))]
+                raw=shared_data.meg_condition_arrays(out, len(conditions))
+                if any(a.ndim != 3 for a in raw):
+                    raise ValueError(f'{data_path}: averaged MEG data cannot support trial-held-out analysis.')
+                arrays=[a.transpose(2,0,1) for a in raw]
                 sm=pd.DataFrame(pos,columns=['x','y','z']);sm['subject']=str(subject);sm['channel_index']=np.arange(len(pos))
                 sources.append(_signature(data_path))
             if len(t)<2 or not np.isfinite(t).all() or not np.all(np.diff(t)>0):
@@ -211,17 +218,39 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
             if modality=='meg':del out
             else:del epochs
     save_progress()
-    return load_trial_cache(root)
+    return load_trial_cache(root, use_matched_pairs=enabled, matched_pairs_csv=csv)
 
 
-def load_trial_cache(cache_dir):
+def load_trial_cache(cache_dir, *, use_matched_pairs=None, matched_pairs_csv=None):
     root=Path(cache_dir);m=json.loads((root/'manifest.json').read_text());modalities={'ieeg':[],'meg':[]}
     for row in m['records']:
         arrays=[np.load(root/f,mmap_mode='r') for f in row['files']]
         if any(a.ndim!=3 for a in arrays):raise ValueError('Cache must contain individual trials.')
         modalities[row['modality']].append(TrialSubject(row['subject'],tuple(m['config']['conditions']),arrays,
             np.asarray(row['positions']),pd.DataFrame(row['metadata']),row['split_groups'],row['permutation_blocks']))
-    return TrialData(modalities['ieeg'],modalities['meg'],np.asarray(m['times']),tuple(m['config']['conditions']))
+    enabled, csv = shared_data.pairing_settings(use_matched_pairs, matched_pairs_csv)
+    pairing = None
+    if enabled:
+        table = shared_data.read_matched_pairs(csv)
+        pairing = dict(zip(table.ieeg_subject, table.meg_subject))
+        source_paths = {v['path'] for v in m['source_files']}
+        missing_paths = set(table.path_to_meg) - source_paths
+        if missing_paths:
+            raise ValueError('Trial cache does not contain the CSV MEG files. Rebuild in a new cache directory: '
+                             + ', '.join(sorted(missing_paths)))
+        for modality, column in [('ieeg', 'ieeg_subject'), ('meg', 'meg_subject')]:
+            lookup = {v.subject: v for v in modalities[modality]}
+            missing = set(table[column]) - set(lookup)
+            if missing:
+                raise ValueError(f'Trial cache missing matched {modality} subjects: {sorted(missing)}')
+            modalities[modality] = [lookup[v] for v in table[column]]
+    else:
+        n = len(modalities['ieeg'])
+        if len(modalities['meg']) < n:
+            raise ValueError('Insufficient cached MEG subjects for random pairing.')
+        indices = np.random.default_rng(2026).choice(len(modalities['meg']), n, replace=False)
+        modalities['meg'] = [modalities['meg'][i] for i in indices]
+    return TrialData(modalities['ieeg'],modalities['meg'],np.asarray(m['times']),tuple(m['config']['conditions']),pairing)
 
 
 def _split_subject(subject,rng,unit):
@@ -328,7 +357,7 @@ def _build_fold(trials,meg_kind,split_indices,root,seed,mmap_handles=None,condit
     metadata=pd.concat([s.metadata for s in trials.ieeg],ignore_index=True)
     coords=np.concatenate([s.positions for s in trials.ieeg]);owners=np.concatenate([np.repeat(s.subject,len(s.positions)) for s in trials.ieeg])
     context={'times':trials.times,'load_config':{'conditions':list(trials.conditions)}}
-    datasets={};audit=None;pairing=None
+    datasets={};audit=None;pairing=trials.pairing
     # Shared with compare_subspace, which still has a tuning partition.
     for part in next(iter(split_indices['ieeg'].values())):
         ieeg_arrays=[prepared['ieeg'][s.subject][part] for s in trials.ieeg]
@@ -1043,11 +1072,13 @@ def fit_plssvd(trials, meg_kind, options=None, output_dir='out/plssvd_eval_kfold
     iterations are available even if a later iteration is interrupted.
     """
     options = _checked_options(options or ValidationOptions())
+    if trials.pairing is not None:
+        options = replace(options, n_iterations=1)
     out = Path(output_dir)
     if (out/'validation_options.json').exists() or any(out.glob('iteration_*')):
         raise FileExistsError('Choose a new output directory; fits are not overwritten.')
     out.mkdir(parents=True, exist_ok=True)
-    settings = dict(options.__dict__, schema_version=6, meg_kind=meg_kind,
+    settings = dict(options.__dict__, pairing=trials.pairing, schema_version=6, meg_kind=meg_kind,
                     condition_mode='average', iteration_layout='iteration_000/model_000.npz')
     (out/'validation_options.json').write_text(json.dumps(settings, indent=2))
     np.savez_compressed(out/'trial_axes.npz',times=trials.times,conditions=trials.conditions)

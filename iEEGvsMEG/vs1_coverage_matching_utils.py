@@ -300,7 +300,7 @@ def load_dataset(kind, *, reference=None, condition_mode=None, seed=2026,
         selected, audit, used_pairing = construct_five_datasets(
             inputs['meg'], inputs['meg_positions'], inputs['meg_subjects'],
             inputs['electrode_positions'], inputs['electrode_subjects'],
-            seed=seed, pairing=pairing, condition_mode=mode, kinds=[kind],
+            seed=seed, pairing=inputs.get('pairing') or pairing, condition_mode=mode, kinds=[kind],
         )
         dataset = selected[kind]
         dataset.matching = audit

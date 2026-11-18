@@ -7,7 +7,7 @@ Use --perm ieeg or both for the other randomized modalities.
 In both mode, independent modality-wide phases preserve within-modality power/cross-spectra.
 Run plssvd_postprocess.py afterward to prepare evaluation and comparison plots.
 
-Defaults preserve the notebook analysis and exclude MEG SUBJ_0038. 
+Defaults use the project-wide matched cohort and exact CSV MEG files. 
 trials use ROOT/out/trial_cache.
 Tests concern new trials from the same participants, not new participants.
 """
@@ -16,6 +16,7 @@ import argparse
 import json
 import sys
 import uuid
+import vs0_load_and_config as shared_data
 
 
 def prepare_output_directory(output_dir, n_components):
@@ -54,10 +55,11 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parent,
                         help='Project/data root (default: directory containing this script).')
-    parser.add_argument('--meg-dir', type=Path, help='Subject discovery directory (default: ROOT/MEG/dataMEG).')
+    parser.add_argument('--meg-dir', type=Path, help='MEG data directory (default: project-wide MEG_DATA_DIR).')
+    parser.add_argument('--use-matched-pairs', action=argparse.BooleanOptionalAction, default=shared_data.USE_MATCHED_PAIRS)
+    parser.add_argument('--matched-pairs-csv', type=Path, default=shared_data.MATCHED_PAIRS_CSV)
     parser.add_argument('--ieeg-dir', type=Path, help='Epoch directory (default: ROOT/ieeg_shortWOBS_fs250).')
-    parser.add_argument('--meg-raw-dir', type=Path, default=Path(
-        '/projects/MINDLAB2025_MEG-Auditory_Cognitive_Maps/scratch/APR2020_Block3_SingleTrial_BarbaraNikita'))
+    parser.add_argument('--meg-raw-dir', type=Path, default=shared_data.MEG_DATA_DIR)
     parser.add_argument('--project-path', type=Path, help='GetInfo project directory; default: PROJECT_PATH as configured, without ROOT prefix.')
     parser.add_argument('--cache-dir', type=Path, help='Default: ROOT/out/trial_cache.')
     parser.add_argument('--scratch-dir', type=Path,
@@ -95,23 +97,28 @@ def main():
     from src.setting import GetInfo, PROJECT_PATH
     from vs2_1_plssvd_eval_utils import ValidationOptions, prepare_trial_cache, fit_plssvd, validation_run_name, _checked_options
 
-    meg_dir = args.meg_dir or root / 'MEG' / 'dataMEG'
+    meg_dir = args.meg_dir or shared_data.MEG_DATA_DIR
     ieeg_dir = args.ieeg_dir or root / 'ieeg_shortWOBS_fs250'
+    output_root = shared_data.analysis_output_root(root, args.use_matched_pairs, args.matched_pairs_csv)
     cache_dir = args.cache_dir or root / 'out' / 'trial_cache'
-    output_dir = args.output_dir or root / 'out' / ('plssvd_eval_equal_var' if args.block_scaling == 'equal_variance' else 'plssvd_eval') / args.meg_kind / validation_run_name(args.perm, args.perm_type)
+    output_dir = args.output_dir or output_root / ('plssvd_eval_equal_var' if args.block_scaling == 'equal_variance' else 'plssvd_eval') / args.meg_kind / validation_run_name(args.perm, args.perm_type)
     options = ValidationOptions(repeats=args.repeats, n_components=args.n_components,
                                 n_iterations=args.n_iterations, perm=args.perm, perm_type=args.perm_type,
                                 block_seconds=args.block_seconds, seed=args.seed,
                                 split_unit=args.split_unit,
                                 block_scaling=args.block_scaling, max_gram_gib=args.max_gram_gib)
     options = _checked_options(options)
-    prepare_output_directory(output_dir, args.n_components)
 
-    meg_subjects = sorted(p.name.removesuffix('_source.p') for p in meg_dir.glob('*_source.p')
-                          if p.name != 'SUBJ_0038_source.p')
     ieeg_subjects = sorted(p.name.removesuffix('_epochs.p') for p in ieeg_dir.glob('*_epochs.p'))
+    meg_subjects, ieeg_subjects, _, pairing = shared_data.select_subjects(
+        meg_dir, ieeg_subjects, use_matched_pairs=args.use_matched_pairs,
+        matched_pairs_csv=args.matched_pairs_csv, seed=args.seed)
+    if pairing is not None:
+        from dataclasses import replace
+        options = replace(options, n_iterations=1)
     if not meg_subjects or not ieeg_subjects:
         raise FileNotFoundError(f'No subjects found: check {meg_dir} and {ieeg_dir}.')
+    prepare_output_directory(output_dir, args.n_components)
     print(f'MEG subjects: {len(meg_subjects)}; iEEG subjects: {len(ieeg_subjects)}', flush=True)
     coord, _, electrodes, subjects, regions = GetInfo(
         ieeg_subjects, data_path=str(ieeg_dir), project_path=str(args.project_path if args.project_path is not None else PROJECT_PATH))
@@ -132,7 +139,8 @@ def main():
     trials = prepare_trial_cache(args.meg_raw_dir, ieeg_dir, cache_dir, meg_subjects,
                                  ieeg_subjects, metadata, conditions=(1, 2),
                                  ieeg_coordinate_unit='m', meg_coordinate_unit='m',
-                                 trial_metadata_csv=args.trial_metadata_csv)
+                                 trial_metadata_csv=args.trial_metadata_csv,
+                                 use_matched_pairs=args.use_matched_pairs, matched_pairs_csv=args.matched_pairs_csv)
     trial_counts = pd.DataFrame([
         dict(modality=modality, subject=subject.subject, condition=condition,
              n_trials=len(array), n_channels=array.shape[1], n_times=array.shape[2])

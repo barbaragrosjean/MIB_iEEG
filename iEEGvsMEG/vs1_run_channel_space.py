@@ -1,4 +1,5 @@
 """Cluster runner for channel-space ERP comparisons: --config CONFIG [--recompute]."""
+from vs0_load_and_config import matching_provenance
 from pathlib import Path
 from datetime import datetime, timezone
 import argparse
@@ -16,7 +17,7 @@ TABLES = ('metadata', 'correlations', 'electrode_summary', 'roi_subjects', 'roi_
 
 
 def result_directory(config):
-    payload = dict(config, version=VERSION)
+    payload = dict(config, version=VERSION, matching=matching_provenance(config.get('data')))
     if config.get('sequence_metric', 'correlation') == 'correlation':
         payload['correlation_method'] = 'pearson'
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
@@ -62,6 +63,7 @@ def run(config, recompute=False):
         except FileNotFoundError:
             pass
     options = dict(config['data'])
+    options.setdefault('selection_seed', config.get('seed', 2026))
     if options.get('meg_tmin') is None and options.get('meg_times_file') is None:
         info = sorted(Path(options['ieeg_dir']).glob('*_info.json'))[0]
         options['meg_tmin'] = float(json.loads(info.read_text())['time_epoch'][0])
@@ -85,7 +87,10 @@ def run(config, recompute=False):
     for subject in data['ieeg_subjects']:
         paths.extend(Path(options['ieeg_dir'])/f'{subject}{suffix}' for suffix in ['_epochs.p','_info.json'])
     for subject in data['meg_subjects']:
-        paths.extend(Path(options['meg_dir'])/f'{subject}{suffix}' for suffix in ['_source.p','_pos.csv'])
+        source = Path(data['meg_files'][subject])
+        paths.append(source)
+        if source.suffix != '.mat':
+            paths.append(source.with_name(source.name.removesuffix('_source.p') + '_pos.csv'))
     paths.extend(Path(options[name]) for name in ['metadata_csv','meg_times_file'] if options.get(name))
     files = [dict(path=str(path.resolve()),size=path.stat().st_size,mtime_ns=path.stat().st_mtime_ns) for path in paths]
     (folder/'RUN_COMPLETE.json').write_text(json.dumps(dict(version=VERSION,config=config,input_files=files),indent=2))
@@ -99,10 +104,18 @@ def run_roi_brain_maps(config):
     folder = result_directory(config)
     positions = []
     for subject in result['correlations'].meg_subject.unique():
-        path = Path(config['data']['meg_dir']) / f'{subject}_pos.csv'
-        table = pd.read_csv(path)
-        table = table.loc[:, ~table.columns.astype(str).str.startswith('Unnamed:')]
-        positions.append(coordinates_mm(table.to_numpy(), config['data']['meg_coordinate_unit']))
+        from vs0_load_and_config import select_subjects, load_meg_mat
+        options = config['data']
+        _, _, files, _ = select_subjects(options['meg_dir'], result['metadata'].subject.unique(),
+            use_matched_pairs=options.get('use_matched_pairs'), matched_pairs_csv=options.get('matched_pairs_csv'),
+            meg_subjects=result['correlations'].meg_subject.unique())
+        path = Path(files[subject])
+        if path.suffix == '.mat':
+            values = load_meg_mat(path)['pos_brainsources_MNI8']
+        else:
+            table = pd.read_csv(path.with_name(path.name.removesuffix('_source.p') + '_pos.csv'))
+            values = table.loc[:, ~table.columns.astype(str).str.startswith('Unnamed:')].to_numpy()
+        positions.append(coordinates_mm(values, options['meg_coordinate_unit']))
     maps = roi_shell_source_maps(result, np.concatenate(positions))
     path = folder / 'roi_shell_source_maps.csv'
     maps.to_csv(path, index=False)
