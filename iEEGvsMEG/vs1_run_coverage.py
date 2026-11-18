@@ -12,9 +12,10 @@ import sys
 from datetime import datetime, timezone
 import numpy as np
 from vs1_coverage_matching_utils import (
-    SETUP_NAMES, load_dataset, fit_block_pca, PCAResult,
+    SETUP_NAMES, load_dataset, load_meg_datasets, fit_block_pca, PCAResult,
 )
 
+from vs0_prepare_data import prepare_data, data_options
 from vs1_elect_number_effect import CHANNEL_SWEEP_SCHEMA_VERSION
 
 SCHEMA_VERSION = 1
@@ -29,17 +30,11 @@ def _run_config(config, analysis):
 
 def load_datasets(config):
     """Load once; construct all datasets with CSV or reproducible random associations."""
-    options = dict(config['data'])
-    options.setdefault('selection_seed', config.get('seed', 2026))
-    # Use the verified iEEG epoch start as in the original notebook.
-    if options.get('meg_tmin') is None and options.get('meg_times_file') is None:
-        info = sorted(Path(options['ieeg_dir']).glob('*_info.json'))[0]
-        options['meg_tmin'] = float(json.loads(info.read_text())['time_epoch'][0])
+    options = data_options(config)
     reference = load_dataset('ieeg', condition_mode=config['condition_mode'],
                              block_scaling=config['block_scaling'], **options)
     datasets = {'iEEG': reference}
-    datasets.update({name: load_dataset(name, reference=reference, seed=config['seed'])
-                     for name in SETUP_NAMES})
+    datasets.update(load_meg_datasets(reference, seed=config['seed']))
     return datasets
 
 
@@ -126,6 +121,7 @@ def main():
     config = json.loads(args.config.read_text())
     root = Path(__file__).resolve().parent
     sys.path.extend([str(root.parent), str(root.parent / 'LB')])
+    prepare_data(**data_options(config))
     datasets = load_datasets(config)
     for analysis in (['manipulations', 'channels', 'pca', 'stability'] if args.analysis == 'all' else [args.analysis]):
         run_analysis(config, analysis, datasets, args.recompute)

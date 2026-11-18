@@ -166,7 +166,9 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
                       ieeg_scaling='none', ieeg_multiplier=1000.,
                       meg_times_file=None, meg_tmin=None, sfreq=250.,
                       conditions=(1, 2), use_matched_pairs=None, matched_pairs_csv=None, selection_seed=2026):
-    """Load the original pickle/JSON layout, without importing legacy utils.
+    """Low-level raw import and preprocessing, used by prepare_data().
+
+    Analysis loaders use load_prepared_data() instead of calling this importer.
 
     MEG: LBPD MATLAB files, or <subject>_source.p and <subject>_pos.csv. iEEG:
     <subject>_epochs.p (trial x channel x time), <subject>_info.json.
@@ -291,6 +293,9 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
             raise ValueError(f'{subject}: source coordinate count mismatch.')
         positions.append(pos)
         meg.append(_preprocess(a, meg_scaling))
+        if out is not None:
+            del arrays
+        del out  # Release raw trial arrays before opening the next recording.
     return dict(pairing=fixed_pairing, meg_files=meg_files, meg=meg, meg_positions=positions, meg_subjects=meg_subjects,
                 ieeg=np.concatenate(ieeg_arrays, axis=1), ieeg_subjects=ieeg_subjects,
                 electrode_subjects=owners, electrode_positions=coord,

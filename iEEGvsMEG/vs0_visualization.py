@@ -59,9 +59,12 @@ def compute_weights(output_dir=OUTPUT_DIR, abs=False):
         files=sorted(IEEG_DIR.glob('*_info.json'))
         if not files:raise FileNotFoundError(f'No iEEG info files in {IEEG_DIR}')
         tmin=float(json.loads(files[0].read_text())['time_epoch'][0])
-    ieeg=load_dataset('ieeg',meg_dir=MEG_DIR,ieeg_dir=IEEG_DIR,
+    from vs0_prepare_data import prepare_data
+    options=dict(meg_dir=MEG_DIR,ieeg_dir=IEEG_DIR,
         metadata_csv=METADATA_CSV,ieeg_coordinate_unit='mm',meg_coordinate_unit='m',
-        meg_times_file=MEG_TIMES_FILE,meg_tmin=tmin,condition_mode=CONDITION_MODE)
+        meg_times_file=MEG_TIMES_FILE,meg_tmin=tmin)
+    prepare_data(**options)
+    ieeg=load_dataset('ieeg',condition_mode=CONDITION_MODE,**options)
     meg=load_dataset(MEG_KIND,reference=ieeg,seed=SEED)
     model=fit_cov_models(ieeg,meg,n_components=COMPONENT,block_scaling=BLOCK_SCALING)[MODEL]
     out=Path(output_dir);out.mkdir(parents=True,exist_ok=True)

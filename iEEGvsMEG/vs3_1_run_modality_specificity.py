@@ -14,6 +14,7 @@ import sys
 
 import pandas as pd
 from vs2_run_cov_models import load_selected_datasets
+from vs0_prepare_data import prepare_data, data_options
 from vs2_0_cov_models_utils import fit_cov_models
 from vs3_1_modality_specificity import shared_coordinate_regions, regional_channel_counts
 from vs3_1_spatial_profiles import analyze_spatial_profiles
@@ -75,6 +76,7 @@ def prepare_analysis(config, analysis, config_file, recompute=False):
 
 
 def compute_weights(fit):
+    prepare_data(**data_options(fit))
     ieeg, meg = load_selected_datasets(fit)
     model = fit_cov_models(ieeg, meg, n_components=fit['n_components'],
         block_scaling='equal_variance' if fit['block_scaling'] else 'none',

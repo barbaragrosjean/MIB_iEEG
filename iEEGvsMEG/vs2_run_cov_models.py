@@ -7,17 +7,14 @@ from datetime import datetime, timezone
 import sys
 import numpy as np
 from vs1_coverage_matching_utils import load_dataset
+from vs0_prepare_data import prepare_data, data_options
 from vs1_run_coverage import analysis_directory, SCHEMA_VERSION
 from vs2_0_cov_models_utils import CovModel, fit_cov_models, evaluate_cov_models
 from vs2_0_compare_models import compare_cov_models_within
 
 
 def load_selected_datasets(config):
-    options = dict(config['data'])
-    options.setdefault('selection_seed', config.get('seed', 2026))
-    if options.get('meg_tmin') is None and options.get('meg_times_file') is None:
-        info = sorted(Path(options['ieeg_dir']).glob('*_info.json'))[0]
-        options['meg_tmin'] = float(json.loads(info.read_text())['time_epoch'][0])
+    options = data_options(config)
     # Whole-modality normalization is applied once, by fit_cov_models.
     ieeg = load_dataset('ieeg', condition_mode=config['condition_mode'], block_scaling=False, **options)
     meg = load_dataset(config['meg_kind'], reference=ieeg, seed=config['seed'])
@@ -54,6 +51,7 @@ def run(config, recompute=False):
         archive = out.parent/'old'
         archive.mkdir(parents=True, exist_ok=True)
         out.rename(archive/f'{out.name}_{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}')
+    prepare_data(**data_options(config))
     ieeg, meg = load_selected_datasets(config)
     models = fit_cov_models(ieeg, meg, n_components=config['n_components'],
         block_scaling='equal_variance' if config['block_scaling'] else 'none',

@@ -9,7 +9,8 @@ import shlex
 import sys
 import numpy as np
 import pandas as pd
-from vs0_load_and_config import load_project_data, coordinates_mm
+from vs0_load_and_config import coordinates_mm
+from vs0_prepare_data import prepare_data, load_prepared_data, data_options
 from vs1_1_channel_space import analyze_channel_space, roi_shell_source_maps
 
 VERSION = 2
@@ -62,12 +63,9 @@ def run(config, recompute=False):
             return folder
         except FileNotFoundError:
             pass
-    options = dict(config['data'])
-    options.setdefault('selection_seed', config.get('seed', 2026))
-    if options.get('meg_tmin') is None and options.get('meg_times_file') is None:
-        info = sorted(Path(options['ieeg_dir']).glob('*_info.json'))[0]
-        options['meg_tmin'] = float(json.loads(info.read_text())['time_epoch'][0])
-    data = load_project_data(**options)
+    options = data_options(config)
+    prepare_data(**options)
+    data = load_prepared_data(**options)
     roi_column = config['roi_column']
     if roi_column not in data['electrode_metadata']:
         from vs0_region_labels import get_region_label

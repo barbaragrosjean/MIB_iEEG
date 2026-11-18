@@ -12,6 +12,7 @@ coordinates_mm = shared_data.coordinates_mm
 ieeg_getinfo_coordinates_m = shared_data.ieeg_getinfo_coordinates_m
 _preprocess = shared_data._preprocess
 load_project_data = shared_data.load_project_data
+from vs0_prepare_data import load_prepared_data
 
 
 SETUP_NAMES = (
@@ -277,14 +278,15 @@ def load_dataset(kind, *, reference=None, condition_mode=None, seed=2026,
 
     First call: load_dataset('ieeg', meg_dir=..., ieeg_dir=..., ...).
     Subsequent calls: load_dataset('paired_coverage', reference=ieeg).
-    File options are those of load_project_data. A reference reuses the loaded
+    Call prepare_data(**file_options) first. File options select the prepared cache.
+    Loading never reads raw signal arrays. A reference reuses the loaded
     arrays (no disk reload). Only the requested MEG dataset is constructed.
     Use the same seed/pairing for the paired and random-control setups.
     """
     if kind not in ('ieeg', 'iEEG', *SETUP_NAMES):
         raise ValueError(f'Choose ieeg or one of {SETUP_NAMES}.')
     if reference is None:
-        inputs = load_project_data(**file_options)
+        inputs = load_prepared_data(**file_options)
     else:
         if file_options:
             raise ValueError('Pass file options on the first load only; reference reuses those data.')
@@ -308,6 +310,25 @@ def load_dataset(kind, *, reference=None, condition_mode=None, seed=2026,
     dataset.source_data = inputs
     enabled = reference.block_scaling if block_scaling is None and reference is not None else bool(block_scaling)
     return normalize_dataset(dataset, enabled)
+
+def load_meg_datasets(reference, *, kinds=None, seed=2026, pairing=None, block_scaling=None):
+    """Build several MEG setups together, sharing one spatial matching pass."""
+    inputs = reference.source_data
+    if inputs is None:
+        raise ValueError('reference must come from load_dataset.')
+    datasets, audit, used_pairing = construct_five_datasets(
+        inputs['meg'], inputs['meg_positions'], inputs['meg_subjects'],
+        inputs['electrode_positions'], inputs['electrode_subjects'],
+        seed=seed, pairing=inputs.get('pairing') or pairing,
+        condition_mode=reference.condition_mode, kinds=kinds)
+    enabled = reference.block_scaling if block_scaling is None else bool(block_scaling)
+    for dataset in datasets.values():
+        dataset.source_data = inputs
+        dataset.matching = audit
+        dataset.pairing = used_pairing
+        normalize_dataset(dataset, enabled)
+    return datasets
+
 
 def compute_variance(dataset):
     return variance_summary({dataset.name: dataset}).loc[dataset.name, [

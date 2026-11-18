@@ -10,8 +10,18 @@ import numpy as np
 import pandas as pd
 from scipy.io import savemat
 import vs0_load_and_config as shared
-from vs1_coverage_matching_utils import load_dataset
+from vs1_coverage_matching_utils import load_dataset as _load_dataset
+from vs0_prepare_data import prepare_data
 from vs2_1_plssvd_eval_utils import prepare_trial_cache, load_trial_cache
+
+
+def load_dataset(kind, **options):
+    if options.get('reference') is None:
+        file_options = {k: v for k, v in options.items() if k not in ('condition_mode', 'block_scaling', 'seed', 'pairing')}
+        file_options.setdefault('prepared_cache_dir', Path(file_options['ieeg_dir']).parent / 'prepared')
+        prepare_data(**file_options)
+        options['prepared_cache_dir'] = file_options['prepared_cache_dir']
+    return _load_dataset(kind, **options)
 
 
 class MatchedSelectionTests(unittest.TestCase):
