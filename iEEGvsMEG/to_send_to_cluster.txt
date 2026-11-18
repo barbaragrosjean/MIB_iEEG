@@ -32,4 +32,4 @@ submit_to_cluster -n 2 -q short.q "python -u vs2_1_plssvd_postprocess.py --runs-
 submit_to_cluster -n 2 -q short.q "python -u vs2_1_plssvd_postprocess.py --runs-dir out/plssvd_eval_equal_var/paired_coverage --components 100 --perm meg --perm-type time_point_shared" --project MINDLAB2021_MEG-TempSeqAges
 
 
-submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs2_1_plssvd_eval.py --runs-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/plssvd_eval_equal_var/paired_coverage --components 100 --perm none --perm-type none
+python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs2_1_plssvd_postprocess.py --runs-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/plssvd_eval_equal_var/paired_coverage --components 100 --perm ieeg --perm-type time_point_shared

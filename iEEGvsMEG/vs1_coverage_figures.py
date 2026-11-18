@@ -390,8 +390,7 @@ def plot_elect_number_effect(result, *, min_channels=None, max_channels=None, fi
         ax.plot(values.index, values['median'], 'o-', markersize=3, color=color)
         if config['repeats'] > 1:
             ax.fill_between(values.index, values['min'], values['max'], color=color, alpha=.2)
-        ax.scatter(full_count, endpoint[key].median(), marker='D', color=color,
-                   label='All sources', zorder=3)
+        ax.hlines(ax.get_xlim()[0], ax.get_xlim()[1], endpoint[key].median(), color='k',ls=':',lw=3,  label='All sources')
         ax.set(ylabel=label, ylim=(0, 1.02))
         ax.grid(alpha=.2)
     axes[0].legend()
