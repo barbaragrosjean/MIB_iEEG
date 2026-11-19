@@ -62,3 +62,33 @@ shared edges in the notebook if a different range or resolution is required.
 Decoding has separate controls for subject assignments, decoding resampling, and
 label permutations; its ensemble panel averages decoding resamples within each
 assignment before summarizing accuracy and absolute coefficient magnitude.
+
+## MEG behavioral eligibility
+
+All MEG selection uses `MEG/Blocks3456_csv` (override its location with the
+`MEG_BEHAVIOR_DIR` environment variable when needed). Accuracy is the number of
+correct responses divided by the number of old/new trials, pooled over available
+Blocks 3–6. Stimuli containing `old` require response 1; those containing `new`
+require response 2. Missing, invalid, or zero responses count as incorrect.
+Other stimulus types and export footers are ignored. Participants with accuracy
+below 0.50 are excluded; exactly 0.50 is retained. This is pooled trial accuracy,
+not an average of block accuracies or balanced accuracy across stimulus classes.
+
+The demographic notebook applies this rule inside `prepare_for_matching` before
+selecting pairs. Raw/averaged preparation, MEG roster discovery, random pairing,
+and existing trial-cache loading use the same rule. Unknown participant IDs or
+missing behavioral files cause an explicit error rather than silently retaining
+an unassessed participant. Numeric questionnaire IDs and `SUBJ_0001` recording
+IDs are resolved to the same behavioral identity.
+
+If an older saved demographic match contains an excluded MEG participant, that
+pair is removed and a warning identifies it. Rerun demographic matching to retain
+the full iEEG cohort by selecting replacements from eligible MEG participants.
+Random analyses use the same retained iEEG cohort until that match is regenerated.
+
+Preparation saves `meg_behavior_eligibility.csv` alongside its manifest, and the
+matching notebook exports the same audit. Behavioral file contents and the rule
+are included in cache/result provenance. Default trial caches now live in
+`out/trial_cache_full_meg/<behavior-content-hash>/`; previous caches are preserved
+and the new default is populated by rerunning the PLSSVD preparation command.
+Subject-pairing output namespaces also incorporate the behavioral content hash.

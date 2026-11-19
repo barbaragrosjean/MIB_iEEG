@@ -1,4 +1,4 @@
-"""Shared MEG eligibility from pooled old/new recognition trials in Blocks 3–6."""
+"""Shared MEG eligibility from pooled old/new trials in available Blocks 3–6."""
 from pathlib import Path
 from functools import lru_cache
 import hashlib
@@ -38,7 +38,7 @@ def _behavior_files(directory):
 
 def behavior_provenance():
     files = _behavior_files(behavior_directory())
-    signatures = [(str(p), hashlib.sha256(p.read_bytes()).hexdigest()) for p, _, _ in files]
+    signatures = [(p.name, hashlib.sha256(p.read_bytes()).hexdigest()) for p, _, _ in files]
     payload = dict(min_accuracy=MIN_ACCURACY, blocks=[3, 4, 5, 6],
                    scoring='pooled old=1,new=2; missing/invalid responses incorrect', files=signatures)
     payload['sha256'] = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
@@ -74,8 +74,6 @@ def _performance(signatures):
     if (summary.n_trials == 0).any():
         raise ValueError('No scorable old/new trials for participants: ' + ', '.join(summary.index[summary.n_trials == 0]))
     summary['n_blocks'] = blocks.groupby('subject').block.nunique()
-    if (summary.n_blocks != 4).any():
-        raise ValueError('Missing behavioral blocks for participants: ' + ', '.join(summary.index[summary.n_blocks != 4]))
     summary['accuracy'] = summary.n_correct / summary.n_trials
     summary['eligible'] = summary.accuracy >= MIN_ACCURACY
     return summary.reset_index()

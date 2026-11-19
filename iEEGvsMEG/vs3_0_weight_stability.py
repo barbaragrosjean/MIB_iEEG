@@ -7,6 +7,7 @@ python -u vs3_0_weight_stability.py --iterations 100 --components 3
 from pathlib import Path
 from copy import copy
 import argparse
+import vs0_load_and_config as shared_data
 import json
 import numpy as np
 import pandas as pd
@@ -209,7 +210,7 @@ def load_weight_summary(root, *, model, component, meg_kind, block_scaling, n_co
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     base = Path(__file__).resolve().parent
-    p.add_argument('--cache-dir', type=Path, default=__import__('vs0_load_and_config').trial_cache_directory(base))
+    p.add_argument('--cache-dir', type=Path, default=shared_data.trial_cache_directory(base))
     p.add_argument('--output-dir', type=Path, default=base/'out/weight_stability/paired_coverage')
     p.add_argument('--meg-kind', choices=['full_average','full_concatenated','coverage_average','paired_coverage','random_control'], default='paired_coverage')
     p.add_argument('--models', nargs='+', choices=MODELS, default=list(MODELS))
@@ -227,7 +228,6 @@ def main():
     p.add_argument('--roi-level', choices=LEVELS, default='region')
     p.add_argument('--summarize-only', action='store_true')
     args = p.parse_args()
-    import vs0_load_and_config as shared_data
     if args.iterations < 1 or args.components < 1: p.error('Need >=1 iteration and >=1 component')
     for condition in args.conditions:
         run = copy(args); run.variation = condition; run.weight_only = True

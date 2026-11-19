@@ -8,6 +8,7 @@ Uses the completed out/trial_cache. Fits PCA, PLSSVD and joint PCA on paired_cov
 """
 from pathlib import Path
 import argparse
+import vs0_load_and_config as shared_data
 import hashlib
 import json
 from itertools import combinations
@@ -270,13 +271,11 @@ def fit_iterations(args):
             offset += len(s.positions)
     provenance = [_fingerprint(args.cache_dir/'manifest.json')]
     if trials.pairing is not None:
-        import vs0_load_and_config as shared_data
         provenance.append(_fingerprint(shared_data.pairing_settings(
             getattr(args, 'use_matched_pairs', None), getattr(args, 'matched_pairs_csv', None))[1]))
     provenance += [_fingerprint(args.cache_dir/f) for record in manifest['records'] for f in record['files']]
     provenance += [_fingerprint(path) for path in coordinate_sources.path]
     provenance += [_fingerprint(p) for p in (args.atlas_image, args.atlas_labels) if p is not None]
-    import vs0_load_and_config as shared_data
     config = dict(subject_pairing_iteration=shared_data.subject_pairing_iteration(), pairing=trials.pairing, schema_version=1, meg_kind=meg_kind, iterations=args.iterations,
                   components=args.components, models=list(model_names), seed=args.seed,
                   split_unit=args.split_unit, block_scaling=args.block_scaling,
@@ -568,7 +567,7 @@ def plot_results(root, component=1, iteration=0, space='patterns'):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     base = Path(__file__).resolve().parent
-    parser.add_argument('--cache-dir', type=Path, default=__import__('vs0_load_and_config').trial_cache_directory(base))
+    parser.add_argument('--cache-dir', type=Path, default=shared_data.trial_cache_directory(base))
     parser.add_argument('--output-dir', type=Path, default=base/'out/spatial_reliability/paired_coverage')
     parser.add_argument('--iterations', type=int, default=100)
     parser.add_argument('--components', type=int, default=3)

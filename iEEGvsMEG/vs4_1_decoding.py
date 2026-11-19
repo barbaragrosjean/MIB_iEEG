@@ -30,7 +30,6 @@ from sklearn.svm import SVC
 ROOT = Path(__file__).resolve().parent
 import vs0_load_and_config as shared_data
 CACHE_DIR = shared_data.trial_cache_directory(ROOT)
-import vs0_load_and_config as shared_data
 OUT_PATH = shared_data.analysis_output_root(ROOT) / 'decoding'
 MEG_KIND = 'paired_coverage'
 BLOCK_SCALING = 'equal_variance'
