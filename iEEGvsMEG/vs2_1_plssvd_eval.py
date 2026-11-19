@@ -100,7 +100,7 @@ def main():
     meg_dir = args.meg_dir or shared_data.MEG_DATA_DIR
     ieeg_dir = args.ieeg_dir or root / 'ieeg_shortWOBS_fs250'
     output_root = shared_data.analysis_output_root(root, args.use_matched_pairs, args.matched_pairs_csv)
-    cache_dir = args.cache_dir or root / 'out' / 'trial_cache'
+    cache_dir = args.cache_dir or shared_data.trial_cache_directory(root)
     output_dir = args.output_dir or output_root / ('plssvd_eval_equal_var' if args.block_scaling == 'equal_variance' else 'plssvd_eval') / args.meg_kind / validation_run_name(args.perm, args.perm_type)
     options = ValidationOptions(repeats=args.repeats, n_components=args.n_components,
                                 n_iterations=args.n_iterations, perm=args.perm, perm_type=args.perm_type,
@@ -113,9 +113,6 @@ def main():
     meg_subjects, ieeg_subjects, _, pairing = shared_data.select_subjects(
         meg_dir, ieeg_subjects, use_matched_pairs=args.use_matched_pairs,
         matched_pairs_csv=args.matched_pairs_csv, seed=args.seed)
-    if pairing is not None:
-        from dataclasses import replace
-        options = replace(options, n_iterations=1)
     if not meg_subjects or not ieeg_subjects:
         raise FileNotFoundError(f'No subjects found: check {meg_dir} and {ieeg_dir}.')
     prepare_output_directory(output_dir, args.n_components)
@@ -141,6 +138,8 @@ def main():
                                  ieeg_coordinate_unit='m', meg_coordinate_unit='m',
                                  trial_metadata_csv=args.trial_metadata_csv,
                                  use_matched_pairs=args.use_matched_pairs, matched_pairs_csv=args.matched_pairs_csv)
+    from vs2_1_plssvd_eval_utils import load_trial_cache
+    trials = load_trial_cache(cache_dir, use_matched_pairs=args.use_matched_pairs, matched_pairs_csv=args.matched_pairs_csv)
     trial_counts = pd.DataFrame([
         dict(modality=modality, subject=subject.subject, condition=condition,
              n_trials=len(array), n_channels=array.shape[1], n_times=array.shape[2])

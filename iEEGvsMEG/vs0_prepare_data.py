@@ -85,6 +85,7 @@ def _request(options, metadata_dependencies=(), preparation_revision='1'):
         settings['electrode_metadata'] = dict(
             sha256=hashlib.sha256(frame.to_json(orient='table', index=False).encode()).hexdigest())
     payload = dict(schema_version=SCHEMA_VERSION, revision=str(preparation_revision),
+                   meg_behavior=raw.behavior_provenance(),
                    settings=settings, source_files=signatures,
                    meg_files=sorted((s, str(Path(files[s]).resolve())) for s in meg),
                    ieeg_subjects=sorted(ieeg))
@@ -136,6 +137,8 @@ def prepare_data(*, prepared_cache_dir=None, metadata_dependencies=(),
     for i, subject in enumerate(inputs['ieeg_subjects']):
         rows = np.flatnonzero(inputs['electrode_subjects'] == subject)
         save(f'ieeg_{i:04d}', inputs['ieeg'][:, rows, :])
+    from vs0_meg_behavior import meg_behavior_performance
+    meg_behavior_performance().to_csv(stage / 'meg_behavior_eligibility.csv', index=False)
     for name in ('electrode_metadata', 'trial_counts'):
         (stage / f'{name}.json').write_text(inputs[name].to_json(orient='table', index=False))
     # Confirm that raw files were not modified while preparation was running.

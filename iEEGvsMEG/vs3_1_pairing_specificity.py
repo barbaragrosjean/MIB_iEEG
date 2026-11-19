@@ -23,6 +23,10 @@ def compatible_run(root, fit, options):
         cfg = json.loads((root/'config.json').read_text())
         enabled, csv = shared_data.pairing_settings(fit['data'].get('use_matched_pairs'), fit['data'].get('matched_pairs_csv'))
         expected_pairing = dict(zip(*[shared_data.read_matched_pairs(csv)[c] for c in ('ieeg_subject', 'meg_subject')])) if enabled else None
+        if shared_data.subject_pairing_iteration() is not None and not enabled:
+            manifest = json.loads((Path(options['cache_dir'])/'manifest.json').read_text())
+            expected_pairing = shared_data.random_subject_pairing(
+                shared_data.read_matched_pairs(csv).ieeg_subject.tolist(), manifest['config']['meg_subjects'])
         expected = dict(pairing=expected_pairing, schema_version=2, variation='pairing', meg_kind='paired_coverage',
                         components=fit['n_components'], seed=fit['seed'],
                         split_unit=options['split_unit'], condition_mode='average',

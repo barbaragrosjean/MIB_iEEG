@@ -11,6 +11,7 @@ from contextlib import contextmanager
 import shutil
 import hashlib
 import json
+import os
 import pickle
 import warnings
 import numpy as np
@@ -83,10 +84,13 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
     Without a manifest, source data rebuilds the metadata and validates existing
     trial files; matching files are preserved and missing/partial files written.
     """
-    enabled, csv = shared_data.pairing_settings(use_matched_pairs, matched_pairs_csv)
-    meg_subjects, ieeg_subjects, meg_files, fixed_pairing = shared_data.select_subjects(
-        meg_raw_dir, ieeg_subjects, use_matched_pairs=enabled,
-        matched_pairs_csv=csv, meg_subjects=meg_subjects if not enabled else None)
+    # Cache all MEG recordings once. Assignment is a view, never a cache cohort.
+    _, csv = shared_data.pairing_settings(use_matched_pairs, matched_pairs_csv)
+    meg_files = shared_data.meg_recordings(meg_raw_dir)
+    meg_subjects = sorted(meg_files)
+    if len(meg_subjects) < len(ieeg_subjects):
+        raise ValueError('Insufficient MEG participants for one-to-one assignment.')
+    enabled, fixed_pairing = False, None
     root=Path(cache_dir); root.mkdir(parents=True,exist_ok=True)
     meta=electrode_metadata.copy(); meta['subject']=meta.subject.astype(str)
     conditions=tuple(conditions)
@@ -94,8 +98,8 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
         raise ValueError('This validation currently uses exactly two conditions and their difference.')
     xyz=coordinates_mm(meta[['x','y','z']],ieeg_coordinate_unit)
     meta[['x','y','z']]=xyz
-    config=dict(use_matched_pairs=enabled, matched_pairs_csv=str(csv),
-        matched_pairs_signature=_signature(csv) if enabled else None, meg_files=meg_files, pairing=fixed_pairing,
+    config=dict(meg_behavior=shared_data.behavior_provenance(), full_meg_pool=True, use_matched_pairs=enabled, matched_pairs_csv=str(csv),
+        matched_pairs_signature=None, meg_files=meg_files, pairing=None,
         meg_subjects=list(meg_subjects),ieeg_subjects=list(ieeg_subjects),conditions=list(conditions),
         meg_unit=meg_coordinate_unit,
         metadata_hash=hashlib.sha256(meta.to_csv(index=False).encode()).hexdigest(),
@@ -223,7 +227,11 @@ def prepare_trial_cache(meg_raw_dir, ieeg_dir, cache_dir, meg_subjects, ieeg_sub
 
 def load_trial_cache(cache_dir, *, use_matched_pairs=None, matched_pairs_csv=None):
     root=Path(cache_dir);m=json.loads((root/'manifest.json').read_text());modalities={'ieeg':[],'meg':[]}
+    eligible_meg = set(shared_data.eligible_meg_subjects(
+        row['subject'] for row in m['records'] if row['modality'] == 'meg'))
     for row in m['records']:
+        if row['modality'] == 'meg' and row['subject'] not in eligible_meg:
+            continue
         arrays=[np.load(root/f,mmap_mode='r') for f in row['files']]
         if any(a.ndim!=3 for a in arrays):raise ValueError('Cache must contain individual trials.')
         modalities[row['modality']].append(TrialSubject(row['subject'],tuple(m['config']['conditions']),arrays,
@@ -231,7 +239,24 @@ def load_trial_cache(cache_dir, *, use_matched_pairs=None, matched_pairs_csv=Non
     enabled, csv = shared_data.pairing_settings(use_matched_pairs, matched_pairs_csv)
     pairing = None
     if enabled:
-        table = shared_data.read_matched_pairs(csv)
+        table = shared_data.read_matched_pairs(csv).copy()
+        # Demographic CSV IDs (e.g. 1) and recording IDs (SUBJ_0001) may differ.
+        from vs0_meg_behavior import meg_subject_key
+        available = {s.subject for s in modalities['meg']}
+        file_lookup = {str(Path(path).resolve()): str(subject)
+                       for subject, path in m['config'].get('meg_files', {}).items()}
+        resolved = []
+        for row in table.itertuples():
+            if row.meg_subject in available:
+                resolved.append(row.meg_subject)
+            elif row.path_to_meg in file_lookup:
+                resolved.append(file_lookup[row.path_to_meg])
+            else:
+                matches = [s for s in available if meg_subject_key(s) == meg_subject_key(row.meg_subject)]
+                if len(matches) != 1:
+                    raise ValueError(f'Cannot uniquely resolve cached MEG participant {row.meg_subject}.')
+                resolved.append(matches[0])
+        table['meg_subject'] = resolved
         pairing = dict(zip(table.ieeg_subject, table.meg_subject))
         source_paths = {v['path'] for v in m['source_files']}
         missing_paths = set(table.path_to_meg) - source_paths
@@ -243,13 +268,25 @@ def load_trial_cache(cache_dir, *, use_matched_pairs=None, matched_pairs_csv=Non
             missing = set(table[column]) - set(lookup)
             if missing:
                 raise ValueError(f'Trial cache missing matched {modality} subjects: {sorted(missing)}')
-            modalities[modality] = [lookup[v] for v in table[column]]
+            if modality == 'ieeg' or shared_data.subject_pairing_iteration() is None:
+                modalities[modality] = [lookup[v] for v in table[column]]
     else:
+        if shared_data.subject_pairing_iteration() is not None:
+            if not m['config'].get('full_meg_pool', False):
+                raise ValueError('Random assignments require a full MEG cache. Rebuild in trial_cache_full_meg.')
+            table = shared_data.read_matched_pairs(csv)
+            lookup = {s.subject: s for s in modalities['ieeg']}
+            missing = set(table.ieeg_subject) - set(lookup)
+            if missing:
+                raise ValueError(f'Trial cache missing iEEG participants: {sorted(missing)}')
+            modalities['ieeg'] = [lookup[s] for s in table.ieeg_subject]
         n = len(modalities['ieeg'])
         if len(modalities['meg']) < n:
             raise ValueError('Insufficient cached MEG subjects for random pairing.')
-        indices = np.random.default_rng(2026).choice(len(modalities['meg']), n, replace=False)
-        modalities['meg'] = [modalities['meg'][i] for i in indices]
+        iteration = shared_data.subject_pairing_iteration()
+        if iteration is not None:
+            pairing = shared_data.random_subject_pairing(
+                [v.subject for v in modalities['ieeg']], [v.subject for v in modalities['meg']])
     return TrialData(modalities['ieeg'],modalities['meg'],np.asarray(m['times']),tuple(m['config']['conditions']),pairing)
 
 
@@ -631,11 +668,16 @@ def _validate_iteration(trials,meg_kind,options=None,output_dir='out/plssvd_eval
             # notebook evaluation never needs to decompress feature weights.
             np.savez_compressed(out/f'model_{repeat:03d}.npz', **model)
             np.savez_compressed(out/f'scores_{repeat:03d}.npz', **collect_statistics(fold, scores, model))
-            if repeat == 0 and not (out.parent/'matching.csv').exists():
-                audit.to_csv(out.parent/'matching.csv', index=False)
-                (out.parent/'pairing.json').write_text(json.dumps(pairing, indent=2))
+            if repeat == 0:
+                audit.to_csv(out/'matching.csv', index=False)
+                (out/'pairing.json').write_text(json.dumps(pairing, indent=2))
                 for m in ('ieeg','meg'):
-                    fold['train'][m].metadata.to_csv(out.parent/f'{m}_features.csv',index=False)
+                    fold['train'][m].metadata.to_csv(out/f'{m}_features.csv',index=False)
+                if not (out.parent/'matching.csv').exists():
+                    audit.to_csv(out.parent/'matching.csv', index=False)
+                    (out.parent/'pairing.json').write_text(json.dumps(pairing, indent=2))
+                    for m in ('ieeg', 'meg'):
+                        fold['train'][m].metadata.to_csv(out.parent/f'{m}_features.csv', index=False)
             np.savez_compressed(out/f'preprocessing_{repeat:03d}.npz', **{
                 f'{m}_{subject}_{label}': value for m, subjects in scalers.items() for subject, params in subjects.items()
                 for label, value in zip(['mean','std','multiplier'], params)})
@@ -1072,13 +1114,11 @@ def fit_plssvd(trials, meg_kind, options=None, output_dir='out/plssvd_eval_kfold
     iterations are available even if a later iteration is interrupted.
     """
     options = _checked_options(options or ValidationOptions())
-    if trials.pairing is not None:
-        options = replace(options, n_iterations=1)
     out = Path(output_dir)
     if (out/'validation_options.json').exists() or any(out.glob('iteration_*')):
         raise FileExistsError('Choose a new output directory; fits are not overwritten.')
     out.mkdir(parents=True, exist_ok=True)
-    settings = dict(options.__dict__, pairing=trials.pairing, schema_version=6, meg_kind=meg_kind,
+    settings = dict(options.__dict__, subject_pairing=dict(iteration=shared_data.subject_pairing_iteration(), seed=int(os.environ.get('SUBJECT_PAIRING_SEED', options.seed))), pairing=trials.pairing, schema_version=6, meg_kind=meg_kind,
                     condition_mode='average', iteration_layout='iteration_000/model_000.npz')
     (out/'validation_options.json').write_text(json.dumps(settings, indent=2))
     np.savez_compressed(out/'trial_axes.npz',times=trials.times,conditions=trials.conditions)

@@ -2,7 +2,7 @@
 
 python -u vs3_1_run_modality_specificity.py --config CONFIG --analysis weights
 """
-from vs0_load_and_config import matching_provenance
+from vs0_load_and_config import matching_provenance, pairing_cache_identity
 from pathlib import Path
 from datetime import datetime, timezone
 import argparse
@@ -10,6 +10,7 @@ import hashlib
 import json
 import pickle
 import shlex
+from vs0_run_pairings import format_command
 import sys
 
 import pandas as pd
@@ -24,6 +25,8 @@ VERSION = 1
 
 def result_directory(config, analysis):
     payload = dict(version=VERSION, fit=config['fit'], matching=matching_provenance(config['fit'].get('data')))
+    # Assignment identity is already isolated by the outer output namespace.
+    payload['matching'].pop('subject_pairing_iteration', None)
     if analysis == 'pairing_cross_modal':
         payload['cross_modal_summary_version'] = 2  # Retain and pool individual comparisons
     if analysis == 'pairing_profiles':
@@ -34,7 +37,7 @@ def result_directory(config, analysis):
         payload['pairing'] = config['pairing']
     if analysis != 'weights':
         payload['options'] = config['analyses'][analysis]
-    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+    digest = hashlib.sha256(json.dumps(pairing_cache_identity(payload), sort_keys=True).encode()).hexdigest()[:16]
     return Path(config['output_dir']) / analysis / digest
 
 
@@ -62,7 +65,7 @@ def prepare_analysis(config, analysis, config_file, recompute=False):
                '--analysis', analysis]
     if recompute:
         command.append('--recompute')
-    print('# Run analysis:', shlex.join(command), sep='\n')
+    print('# Run analysis:', format_command(command), sep='\n')
     if recompute:
         print('# Recompute requested; rerun this cell with RECOMPUTE=False after the job completes.')
         return None
@@ -84,7 +87,7 @@ def compute_weights(fit):
     datasets = {'iEEG': ieeg, 'MEG': meg}
     metadata = shared_coordinate_regions(datasets)
     return dict(weights={'iEEG': model.ieeg_weights, 'MEG': model.meg_weights},
-                metadata=metadata, counts=regional_channel_counts(metadata))
+                metadata=metadata, counts=regional_channel_counts(metadata), pairing=meg.pairing)
 
 
 def compute(config, analysis):

@@ -239,9 +239,14 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
     coordinate_sources.to_csv(out/'coordinate_sources.csv',index=False)
     manifest = json.loads((Path(cache_dir)/'manifest.json').read_text())
     for modality, subjects in (('ieeg', trials.ieeg), ('meg', trials.meg)):
-        if not subjects or {s.subject for s in subjects} != set(map(str, manifest['config'][modality+'_subjects'])):
+        expected = manifest['config'][modality+'_subjects']
+        if modality == 'meg':
+            from vs0_load_and_config import eligible_meg_subjects
+            expected = eligible_meg_subjects(expected)
+        if not subjects or not {s.subject for s in subjects} <= set(map(str, expected)):
             raise ValueError('Trial cache is incomplete. Finish prepare_trial_cache first.')
-    config = dict(schema_version=4,condition_mode='average', full_data_repeat=-1, cache_dir=str(Path(cache_dir).resolve()), meg_kind=meg_kind, models=list(models),
+    import vs0_load_and_config as shared_data
+    config = dict(subject_pairing_iteration=shared_data.subject_pairing_iteration(), pairing=trials.pairing, schema_version=4,condition_mode='average', full_data_repeat=-1, cache_dir=str(Path(cache_dir).resolve()), meg_kind=meg_kind, models=list(models),
                   dimensions=dimensions, repeats=repeats, seed=seed, block_scaling=block_scaling,
                   split_unit=split_unit, cluster_counts=list(cluster_counts), ridge_grid=list(ridge_grid),
                   max_gram_gib=max_gram_gib, scope='new trials at fixed participant locations',
@@ -618,7 +623,7 @@ def main():
     matplotlib.use('Agg')
     out = args.output_dir or args.root/'out'/'compare_subspace'/args.meg_kind
     if not args.plot_only:
-        run_comparison(args.cache_dir or args.root/'out'/'trial_cache', out,
+        run_comparison(args.cache_dir or __import__('vs0_load_and_config').trial_cache_directory(args.root), out,
                        meg_kind=args.meg_kind, models=args.models, dimensions=args.dimensions,
                        repeats=args.repeats, seed=args.seed, block_scaling=args.block_scaling,
                        split_unit=args.split_unit, cluster_counts=args.cluster_counts,

@@ -1,4 +1,4 @@
-"""Fixed-cohort random-assignment stability of PCA time courses and weights.
+"""Full-pool random-assignment stability of PCA time courses and weights.
 
 All reported metrics are mean absolute Pearson correlations after one-to-one
 component assignment. Domains are matched independently; weight rows retain iEEG electrode order.
@@ -102,7 +102,7 @@ def load_stability_results(output_dir, expected_experiment=None):
 
 def run_pairing_stability(reference, *, n_subjects=None, repeats=20, n_components=3, seed=2026,
                           baseline_pairing=None, max_gram_gib=2., output_dir=None):
-    """Freeze participant identities/counts, vary only MEG-to-iEEG assignment.
+    """Freeze iEEG participants and sample MEG assignments from the complete pool.
 
     A single random source-index permutation PER MEG SUBJECT is fixed across all
     assignments. Applying it to the anatomical indices creates the random control,
@@ -133,32 +133,34 @@ def run_pairing_stability(reference, *, n_subjects=None, repeats=20, n_component
         fixed_meg = [meg_ids[i] for i in sorted(rng.choice(len(meg_ids), count, replace=False))]
         baseline = dict(zip(fixed_ieeg, rng.permutation(fixed_meg).tolist()))
     if count < 2: raise ValueError('Pairing sensitivity requires at least two subjects per modality.')
+    eligible_meg = fixed_meg if matched else meg_ids
     anchor_dataset, electrode_rows = _ieeg_dataset(reference, fixed_ieeg)
     config = dict(experiment='pairing', n_subjects=count, repeats=repeats, n_components=k, seed=int(seed),
-        ieeg_subjects=fixed_ieeg, meg_subjects=fixed_meg, baseline_pairing=baseline,
+        ieeg_subjects=fixed_ieeg, meg_subjects=eligible_meg, baseline_pairing=baseline,
         condition_mode=reference.condition_mode, metric='one-to-one matched mean absolute Pearson r',
         random_control='one fixed source-index permutation per MEG participant; no new source draws per assignment',
         block_scaling=reference.block_scaling, weight_correspondence='fixed iEEG electrode slots',
-        preprocessing=s.get('load_config', {}), scope='fixed-cohort assignment sensitivity, not validation of subject identity')
+        preprocessing=s.get('load_config', {}), scope='full-pool assignment sensitivity, not validation of subject identity')
     out = _open_output(output_dir, config)
     normalize_dataset(anchor_dataset, reference.block_scaling)
     anchor_fit = fit_block_pca(anchor_dataset, k, max_gram_gib=max_gram_gib)
     anchor = {'timecourses': anchor_fit.scores, 'weights': anchor_fit.weights}
     saved = {f'fixed_ieeg_{key}': value for key, value in anchor.items()}
-    indices = {v: meg_ids.index(v) for v in fixed_meg}
-    nearest = {v: cKDTree(s['meg_positions'][indices[v]]).query(s['electrode_positions'][electrode_rows])[1] for v in fixed_meg}
+    # Random assignments sample the entire available MEG roster.
+    indices = {v: meg_ids.index(v) for v in eligible_meg}
+    nearest = {v: cKDTree(s['meg_positions'][indices[v]]).query(s['electrode_positions'][electrode_rows])[1] for v in eligible_meg}
     control_rng = np.random.default_rng(control_seq)
-    permutations = {v: control_rng.permutation(s['meg'][indices[v]].shape[1]) for v in fixed_meg}
+    permutations = {v: control_rng.permutation(s['meg'][indices[v]].shape[1]) for v in eligible_meg}
     if out is not None:
-        np.savez_compressed(out/'control_source_permutations.npz', **{f'subject_{i}': permutations[v] for i, v in enumerate(fixed_meg)})
+        np.savez_compressed(out/'control_source_permutations.npz', **{f'subject_{i}': permutations[v] for i, v in enumerate(eligible_meg)})
         s['electrode_metadata'].iloc[electrode_rows].to_csv(out/'ieeg_features.csv', index=False)
     metrics, pairs, participants, mappings, assignments = [], [], [], [], []
-    for m, roster in [('ieeg', fixed_ieeg), ('meg', fixed_meg)]:
+    for m, roster in [('ieeg', fixed_ieeg), ('meg', eligible_meg)]:
         participants.extend(dict(modality=m, subject=v) for v in roster)
     baseline_scores, resampled = {}, {v: [] for v in ('paired_coverage', 'random_control')}
     rng = np.random.default_rng(assignment_seq)
     for repeat in range(-1, repeats):
-        pairing = baseline if repeat == -1 else dict(zip(fixed_ieeg, rng.permutation(fixed_meg).tolist()))
+        pairing = baseline if repeat == -1 else dict(zip(fixed_ieeg, rng.choice(eligible_meg, count, replace=False).tolist()))
         assignments.extend(dict(repeat=repeat, ieeg_subject=a, meg_subject=b) for a, b in pairing.items())
         shape = (s['ieeg'].shape[0], len(electrode_rows), s['ieeg'].shape[-1])
         arrays = {kind: np.empty(shape, dtype=float) for kind in resampled}

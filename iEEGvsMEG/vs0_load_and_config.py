@@ -1,40 +1,108 @@
 """Shared recording loading, metadata and preprocessing corrections."""
 from pathlib import Path
 import json
+import os
 import pickle
 import warnings
 import numpy as np
 import pandas as pd
+from vs0_meg_behavior import eligible_meg_subjects, behavior_provenance
 
-# Project-wide defaults. Set False to retain random subject selection/pairing.
+# Legacy default; notebook workflows select an explicit outer assignment ID.
 USE_MATCHED_PAIRS = True
 MATCHED_PAIRS_CSV = Path(__file__).resolve().parent / 'out/demographic_matching/matched_pairs.csv'
 MEG_DATA_DIR = Path('/projects/MINDLAB2020_MEG-AuditoryPatternRecognition/scratch/leonardo/after_maxfilter_v2/Source_LBPD/Block_3/Beam_abs_0_sens_1_freq_broadband_invers_5')
 
 
+def subject_pairing_iteration():
+    """Outer assignment ID; -1 is the CSV, nonnegative IDs are random draws.
+
+    The environment is an explicit subprocess interface used by vs0_run_pairings.
+    It never controls trial folds or temporal surrogate permutations.
+    """
+    value = os.environ.get('SUBJECT_PAIRING_ITERATION')
+    if value is None:
+        return None
+    iteration = int(value)
+    if iteration < -1:
+        raise ValueError('Subject pairing iteration must be -1 or nonnegative.')
+    return iteration
+
+
+def subject_pairing_seed(seed=2026, iteration=None):
+    seed = int(os.environ.get('SUBJECT_PAIRING_SEED', seed))
+    iteration = subject_pairing_iteration() if iteration is None else iteration
+    if iteration is None or iteration == -1:
+        return int(seed)
+    return int(np.random.SeedSequence([int(seed), int(iteration), 731]).generate_state(1)[0])
+
+
+def random_subject_pairing(ieeg_subjects, meg_subjects, seed=2026):
+    """Sample distinct MEG participants from the full roster in a stable order."""
+    ieeg_subjects = list(map(str, ieeg_subjects))
+    roster = sorted(eligible_meg_subjects(meg_subjects))
+    if len(set(roster)) != len(roster) or len(set(ieeg_subjects)) != len(ieeg_subjects):
+        raise ValueError('Participant IDs must be unique.')
+    if len(roster) < len(ieeg_subjects):
+        raise ValueError('Insufficient MEG subjects for one-to-one assignment.')
+    selected = np.random.default_rng(subject_pairing_seed(seed)).choice(roster, len(ieeg_subjects), replace=False)
+    return dict(zip(ieeg_subjects, map(str, selected)))
+
+
 def pairing_settings(use_matched_pairs=None, matched_pairs_csv=None):
-    enabled = USE_MATCHED_PAIRS if use_matched_pairs is None else use_matched_pairs
+    iteration = subject_pairing_iteration()
+    enabled = (iteration == -1) if iteration is not None else (USE_MATCHED_PAIRS if use_matched_pairs is None else use_matched_pairs)
     if not isinstance(enabled, bool):
         raise ValueError('use_matched_pairs must be True or False.')
     return enabled, Path(matched_pairs_csv or MATCHED_PAIRS_CSV).expanduser().resolve()
+
+
+def pairing_cache_identity(value):
+    """Canonicalize assignment namespaces for stable relative result paths.
+
+    Assignment IDs remain in saved provenance and parent directories. They must
+    not also change child hashes used by downstream commands for every draw.
+    """
+    import re
+    if isinstance(value, dict):
+        return {k: pairing_cache_identity(v) for k, v in value.items()
+                if k != 'subject_pairing_iteration'}
+    if isinstance(value, (list, tuple)):
+        return [pairing_cache_identity(v) for v in value]
+    if isinstance(value, str):
+        return re.sub(r'(/subject_pairings/[^/]+/iteration_)-?\d+(?=/|$)',
+                      lambda m: m[1] + 'ASSIGNMENT', value)
+    return value
 
 
 def matching_provenance(options=None):
     import hashlib
     options = options or {}
     enabled, csv = pairing_settings(options.get('use_matched_pairs'), options.get('matched_pairs_csv'))
-    return dict(use_matched_pairs=enabled, matched_pairs_csv=str(csv) if enabled else None,
-                csv_sha256=hashlib.sha256(csv.read_bytes()).hexdigest() if enabled else None)
+    return dict(subject_pairing_iteration=subject_pairing_iteration(), use_matched_pairs=enabled, matched_pairs_csv=str(csv) if enabled else None,
+                csv_sha256=hashlib.sha256(csv.read_bytes()).hexdigest() if enabled or subject_pairing_iteration() is not None else None,
+                subject_pairing_seed=int(os.environ.get('SUBJECT_PAIRING_SEED', 2026)),
+                meg_behavior=behavior_provenance())
 
 
 def analysis_output_root(root, use_matched_pairs=None, matched_pairs_csv=None):
     """Keep matched outputs separate from existing random-pairing artifacts."""
     enabled, csv = pairing_settings(use_matched_pairs, matched_pairs_csv)
+    iteration = subject_pairing_iteration()
+    if iteration is not None:
+        import hashlib
+        digest = hashlib.sha256(csv.read_bytes() + behavior_provenance()['sha256'].encode()).hexdigest()[:12]
+        return Path(root) / 'out' / 'subject_pairings' / digest / f'iteration_{iteration}'
     if not enabled:
         return Path(root) / 'out'
     import hashlib
-    digest = hashlib.sha256(csv.read_bytes()).hexdigest()[:12]
+    digest = hashlib.sha256(csv.read_bytes() + behavior_provenance()['sha256'].encode()).hexdigest()[:12]
     return Path(root) / 'out' / 'matched_pairs' / digest
+
+
+def trial_cache_directory(root):
+    """Behavior changes select a fresh trial cache without overwriting old data."""
+    return Path(root) / 'out' / 'trial_cache_full_meg' / behavior_provenance()['sha256'][:12]
 
 
 def read_matched_pairs(path=None):
@@ -53,7 +121,28 @@ def read_matched_pairs(path=None):
         value = Path(value).expanduser()
         return str((value if value.is_absolute() else path.parent / value).resolve())
     table['path_to_meg'] = table.path_to_meg.map(resolve)
+    eligible = set(eligible_meg_subjects(table.meg_subject))
+    excluded = table.loc[~table.meg_subject.isin(eligible)]
+    if not excluded.empty:
+        warnings.warn('Removed saved pairs with MEG accuracy below 50%: ' + ', '.join(excluded.meg_subject)
+                      + '. Rerun demographic matching to retain the full iEEG cohort.', stacklevel=2)
+    table = table.loc[table.meg_subject.isin(eligible)].reset_index(drop=True)
+    if table.empty:
+        raise ValueError('No behaviorally eligible MEG participants remain in the saved matching.')
     return table
+
+
+def meg_recordings(meg_dir):
+    """Discover the complete MEG roster without applying a pairing view."""
+    directory = Path(meg_dir)
+    files = {p.name.removesuffix('_source.p'): str(p) for p in sorted(directory.glob('*_source.p'))}
+    for p in sorted(directory.glob('*.mat')):
+        subject = p.stem.removesuffix('_norm0_abs_0')
+        if subject in files:
+            raise ValueError(f'Ambiguous MEG files for {subject} in {directory}.')
+        files[subject] = str(p)
+    eligible = set(eligible_meg_subjects(files))
+    return {s: path for s, path in files.items() if s in eligible}
 
 
 def select_subjects(meg_dir, ieeg_subjects, *, use_matched_pairs=None,
@@ -66,26 +155,32 @@ def select_subjects(meg_dir, ieeg_subjects, *, use_matched_pairs=None,
         missing = set(table.ieeg_subject) - set(ieeg_subjects)
         if missing:
             raise ValueError(f'CSV iEEG participants missing from data: {sorted(missing)}')
-        if meg_subjects is not None and set(map(str, meg_subjects)) != set(table.meg_subject):
+        if meg_subjects is not None and set(eligible_meg_subjects(meg_subjects)) != set(table.meg_subject):
             raise ValueError('Explicit MEG subjects differ from the matched CSV cohort.')
         return (table.meg_subject.tolist(), table.ieeg_subject.tolist(),
                 dict(zip(table.meg_subject, table.path_to_meg)),
                 dict(zip(table.ieeg_subject, table.meg_subject)))
-    directory = Path(meg_dir)
-    files = {p.name.removesuffix('_source.p'): str(p) for p in sorted(directory.glob('*_source.p'))}
-    for p in sorted(directory.glob('*.mat')):
-        subject = p.stem.removesuffix('_norm0_abs_0')
-        if subject in files:
-            raise ValueError(f'Ambiguous MEG files for {subject} in {directory}.')
-        files[subject] = str(p)
-    available = sorted(files) if meg_subjects is None else list(map(str, meg_subjects))
+    if subject_pairing_iteration() is not None:
+        table = read_matched_pairs(csv)
+        missing = set(table.ieeg_subject) - set(ieeg_subjects)
+        if missing:
+            raise ValueError(f'CSV iEEG participants missing from data: {sorted(missing)}')
+        ieeg_subjects = table.ieeg_subject.tolist()
+    files = meg_recordings(meg_dir)
+    available = sorted(files) if meg_subjects is None else eligible_meg_subjects(meg_subjects)
     if len(available) < len(ieeg_subjects):
         raise ValueError('Not enough MEG subjects for one-to-one random selection.')
     missing = set(available) - set(files)
     if missing:
         raise FileNotFoundError(f'MEG recordings unavailable for {sorted(missing)}')
-    selected = np.random.default_rng(seed).choice(available, len(ieeg_subjects), replace=False).tolist()
-    return selected, ieeg_subjects, {v: files[v] for v in selected}, None
+    # Keep the full pool available for assignment, rather than preselecting a cohort.
+    iteration = subject_pairing_iteration()
+    if iteration is not None and meg_subjects is not None and set(available) != set(files):
+        raise ValueError('Random subject pairing requires the entire MEG dataset; remove meg_subjects.')
+    pairing = None
+    if iteration is not None:
+        pairing = random_subject_pairing(ieeg_subjects, available, seed)
+    return available, ieeg_subjects, {v: files[v] for v in available}, pairing
 
 
 def load_meg_mat(path):

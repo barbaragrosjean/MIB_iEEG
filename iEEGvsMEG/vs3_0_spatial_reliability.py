@@ -250,7 +250,7 @@ def fit_iterations(args):
     root.mkdir(parents=True, exist_ok=True)
     trials = load_trial_cache(args.cache_dir, use_matched_pairs=getattr(args, 'use_matched_pairs', None),
                               matched_pairs_csv=getattr(args, 'matched_pairs_csv', None))
-    if trials.pairing is not None:
+    if trials.pairing is not None and variation == 'pairing':
         from copy import copy
         args = copy(args)
         args.iterations = 1
@@ -276,7 +276,8 @@ def fit_iterations(args):
     provenance += [_fingerprint(args.cache_dir/f) for record in manifest['records'] for f in record['files']]
     provenance += [_fingerprint(path) for path in coordinate_sources.path]
     provenance += [_fingerprint(p) for p in (args.atlas_image, args.atlas_labels) if p is not None]
-    config = dict(pairing=trials.pairing, schema_version=1, meg_kind=meg_kind, iterations=args.iterations,
+    import vs0_load_and_config as shared_data
+    config = dict(subject_pairing_iteration=shared_data.subject_pairing_iteration(), pairing=trials.pairing, schema_version=1, meg_kind=meg_kind, iterations=args.iterations,
                   components=args.components, models=list(model_names), seed=args.seed,
                   split_unit=args.split_unit, block_scaling=args.block_scaling,
                   pool_hemispheres=args.pool_hemispheres, condition_mode='average',
@@ -567,7 +568,7 @@ def plot_results(root, component=1, iteration=0, space='patterns'):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     base = Path(__file__).resolve().parent
-    parser.add_argument('--cache-dir', type=Path, default=base/'out/trial_cache')
+    parser.add_argument('--cache-dir', type=Path, default=__import__('vs0_load_and_config').trial_cache_directory(base))
     parser.add_argument('--output-dir', type=Path, default=base/'out/spatial_reliability/paired_coverage')
     parser.add_argument('--iterations', type=int, default=100)
     parser.add_argument('--components', type=int, default=3)

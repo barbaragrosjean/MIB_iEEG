@@ -2,12 +2,13 @@
 
 python vs1_run_coverage.py --config out/coverage/config.json --analysis all
 """
-from vs0_load_and_config import matching_provenance
+from vs0_load_and_config import matching_provenance, pairing_cache_identity
 from pathlib import Path
 import argparse
 import hashlib
 import json
 import shlex
+from vs0_run_pairings import format_command
 import sys
 from datetime import datetime, timezone
 import numpy as np
@@ -40,7 +41,7 @@ def load_datasets(config):
 
 def analysis_directory(config, analysis):
     payload = _run_config(config, analysis)
-    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+    digest = hashlib.sha256(json.dumps(pairing_cache_identity(payload), sort_keys=True).encode()).hexdigest()[:16]
     return Path(config['output_dir']) / analysis / digest
 
 
@@ -53,7 +54,7 @@ def prepare_analysis(config, analysis, config_file, recompute=False):
                '--analysis', analysis]
     if recompute:
         command.append('--recompute')
-    print(shlex.join(command))
+    print(format_command(command))
     out = analysis_directory(config, analysis)
     marker = out / 'RUN_COMPLETE.json'
     if not recompute and marker.exists():
@@ -108,6 +109,7 @@ def run_analysis(config, analysis, datasets, recompute=False):
             output_dir=out, max_gram_gib=memory)
     else:
         raise ValueError(f'Unknown analysis: {analysis}')
+    (out / 'pairing.json').write_text(json.dumps(datasets['paired_coverage'].pairing, indent=2))
     (out / 'RUN_COMPLETE.json').write_text(json.dumps(_run_config(config, analysis), indent=2))
     return out
 

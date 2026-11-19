@@ -28,8 +28,10 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 
 ROOT = Path(__file__).resolve().parent
-CACHE_DIR = ROOT / 'out' / 'trial_cache'
-OUT_PATH = ROOT / 'out' / 'decoding'
+import vs0_load_and_config as shared_data
+CACHE_DIR = shared_data.trial_cache_directory(ROOT)
+import vs0_load_and_config as shared_data
+OUT_PATH = shared_data.analysis_output_root(ROOT) / 'decoding'
 MEG_KIND = 'paired_coverage'
 BLOCK_SCALING = 'equal_variance'
 
@@ -288,6 +290,8 @@ def decodingTS(method_pls, data_aug_method, iteration=100, PC_use=0, save=True,
         sumsum['data_aug_method'] = [data_aug_method]
         sumsum['iter'] = [iteration]
         sumsum['iter_perm'] = [iter_perm]
+        sumsum['subject_pairing_iteration'] = [shared_data.subject_pairing_iteration()]
+        sumsum['subject_pairing'] = [json.dumps(trials.pairing)]
         for key in ['y_pred','y_pred_sh','y_test','entropy','entropy_sh',
                     'weight','weight_sh','pca_weight','pca_weight_sh'] :
             sumsum[key] = [stored[modality][key]]
