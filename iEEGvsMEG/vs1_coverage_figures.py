@@ -366,34 +366,3 @@ def plot_meg_information(result):
             axes[2, col].text(j, value, f'{value:.2f}', ha='center', va='bottom')
     fig.suptitle('MEG construction comparisons · descriptive, in sample · no ground-truth construction')
     return fig
-
-
-def plot_elect_number_effect(result, *, min_channels=None, max_channels=None, figsize=(8, 8)):
-    import matplotlib.pyplot as plt
-
-    config = result['config']
-    full_count = config['n_full_channels']
-    rows = result['metrics']
-    if min_channels is not None:
-        rows = rows[rows.n_channels >= min_channels]
-    if max_channels is not None:
-        rows = rows[rows.n_channels <= max_channels]
-    endpoint = result['metrics'].loc[result['metrics'].n_channels == full_count]
-
-    fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True, layout='constrained')
-    color = SETUP_COLORS['full_concatenated']
-    for ax, (key, label) in zip(axes, (
-        ('variance_fraction_retained', 'Full-MEG variance fraction retained'),
-        ('subspace_overlap', 'Temporal subspace overlap'),
-    )):
-        values = rows.groupby('n_channels')[key].agg(['median', 'min', 'max'])
-        ax.plot(values.index, values['median'], 'o-', markersize=3, color=color)
-        if config['repeats'] > 1:
-            ax.fill_between(values.index, values['min'], values['max'], color=color, alpha=.2)
-        ax.hlines(ax.get_xlim()[0], ax.get_xlim()[1], endpoint[key].median(), color='k',ls=':',lw=3,  label='All sources')
-        ax.set(ylabel=label, ylim=(0, 1.02))
-        ax.grid(alpha=.2)
-    axes[0].legend()
-    axes[1].set_xlabel('Number of MEG sources')
-    fig.suptitle(f"Full-concatenated MEG subsampling · {config['n_components']} PCs")
-    return fig
