@@ -136,7 +136,7 @@ def _orthogonal_score_projection(scores, weights):
     return (scores @ vt[keep].T)/singular[keep]
 
 
-def evaluate_cov_models(models, plot=False):
+def evaluate_cov_models(models):
     """Return cumulative reconstruction EV and retained cross-covariance energy.
 
     Within-modality EV = 1 - ||X-Xhat||²/||X||², separately normalised for X/Y.
@@ -175,20 +175,8 @@ def evaluate_cov_models(models, plot=False):
                 sum_score_variance=vx+vy+2*cov,
                 combined_reconstruction_fraction=float((evx*tx+evy*ty)/(tx+ty))))
     table = pd.DataFrame(rows)
-    if plot:
-        from vs2_0_cov_models_figures import plot_variance_summary
-        plot_variance_summary(table)
     return table
 
-
-def plot_model_timecourses(*args, **kwargs):
-    from vs2_0_cov_models_figures import plot_model_timecourses as draw
-    return draw(*args, **kwargs)
-
-
-def plot_model_covariances(*args, **kwargs):
-    from vs2_0_cov_models_figures import plot_model_covariances as draw
-    return draw(*args, **kwargs)
 
 
 def _pearson(x, y):
@@ -197,7 +185,7 @@ def _pearson(x, y):
     return np.divide(x.T@y, den, out=np.full(den.shape,np.nan), where=den>0).clip(-1,1)
 
 
-def compare_cov_models(models, n_components=(1,2,3,5,10), plot=False):
+def compare_cov_models(models, n_components=(1,2,3,5,10)):
     """Compare to one fixed iEEG-PCA reference, and native component matching.
 
     Reuses coverage notebook metrics on each model's MEG-only scores versus
@@ -208,7 +196,7 @@ def compare_cov_models(models, n_components=(1,2,3,5,10), plot=False):
     anchor = models['separate_pca'].ieeg_scores
     reference = SimpleNamespace(scores=anchor)
     scores = {'iEEG': reference, **{name:SimpleNamespace(scores=m.meg_scores) for name,m in models.items()}}
-    table, anchor_pairs = compare_pca_to_ieeg(scores, n_components=n_components, plot=plot)
+    table, anchor_pairs = compare_pca_to_ieeg(scores, n_components=n_components, plot=False)
     table = table.rename(columns={'dataset':'model', 'rank':'rank_ieeg_reference'})
     rows, pairs = [], []
     for row in table.itertuples():
@@ -223,9 +211,6 @@ def compare_cov_models(models, n_components=(1,2,3,5,10), plot=False):
                               signed_r=float(r[i,j]),abs_r=float(abs(r[i,j]))))
     table = table.merge(pd.DataFrame(rows), on=['model','k'])
     table['rank_native_matching'] = table.groupby('k').native_matched_abs_r.rank(ascending=False,method='min').astype(int)
-    ev = evaluate_cov_models(models, plot=False)
+    ev = evaluate_cov_models(models)
     table = table.merge(ev[['model','k','ieeg_variance_explained','meg_variance_explained','shared_crosscov_fraction']],on=['model','k'])
-    if plot:
-        from vs2_0_cov_models_figures import plot_native_correlations
-        plot_native_correlations(models)
     return table, pd.DataFrame(pairs), anchor_pairs

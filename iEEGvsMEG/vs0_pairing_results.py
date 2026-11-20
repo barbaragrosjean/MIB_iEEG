@@ -255,7 +255,7 @@ def export_covariance_metrics(config, folder, models):
     from vs2_0_cov_models_utils import compare_cov_models
     import vs0_load_and_config as shared
     folder=Path(folder);baseline=matched_analysis_directory(config,'models');arrays={}
-    comparison,pairs,reference=compare_cov_models(models,n_components=range(1,config['n_components']+1),plot=False)
+    comparison,pairs,reference=compare_cov_models(models,n_components=range(1,config['n_components']+1))
     for name,table in [('model_comparison',comparison),('component_pairs',pairs),('reference_pairs',reference)]:table.to_csv(folder/f'{name}.csv',index=False)
     for name,model in models.items():
         x,y=model.ieeg_scores,model.meg_scores

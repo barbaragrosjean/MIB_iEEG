@@ -58,7 +58,7 @@ def run(config, recompute=False):
         max_gram_gib=config['max_gram_gib'])
     save_models(models, out)
     (out/'pairing.json').write_text(json.dumps(meg.pairing, indent=2))
-    evaluate_cov_models(models, plot=False).to_csv(out/'variance.csv', index=False)
+    evaluate_cov_models(models).to_csv(out/'variance.csv', index=False)
     within = compare_cov_models_within(models, ieeg, meg, dimensions=range(1, config['n_components']+1))
     for name, table in within.items(): table.to_csv(out/f'{name}.csv', index=False)
     from vs0_pairing_results import export_covariance_metrics
