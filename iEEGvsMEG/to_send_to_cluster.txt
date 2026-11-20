@@ -9,6 +9,15 @@ submit_to_cluster -n 2 -q long.q "python vs4_1_decoding.py --pc_use 3 --model Ra
 submit_to_cluster -n 2 -q long.q "python vs4_1_decoding.py --pc_use 3 --model SVC_linear --meg-kind paired_coverage --iteration 100 --method PCA"  --project MINDLAB2021_MEG-TempSeqAges
 
 
+Notebook 1. 
+submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs0_run_pairings.py --view matched --n-pairings 100 --seed 2026 -- python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs1_run_coverage.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/subject_pairings/3741a2c2e824/iteration_-1/coverage/config.json --analysis manipulations" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs0_run_pairings.py --view matched --n-pairings 100 --seed 2026 -- python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs1_run_coverage.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/subject_pairings/3741a2c2e824/iteration_-1/coverage/config.json --analysis channels" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs0_run_pairings.py --view matched --n-pairings 100 --seed 2026 -- python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs1_run_coverage.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/subject_pairings/3741a2c2e824/iteration_-1/coverage/config.json --analysis pca" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs0_run_pairings.py --view matched --n-pairings 100 --seed 2026 -- python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs1_run_coverage.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/subject_pairings/3741a2c2e824/iteration_-1/coverage/config.json --analysis stability" --project MINDLAB2021_MEG-TempSeqAges
+
+
+
+
 submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs2_1_plssvd_postprocess.py --runs-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/plssvd_eval_equal_var/paired_coverage --components 100 --perm both --perm-type time_block"  --project MINDLAB2021_MEG-TempSeqAges
 submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs1_run_channel_space.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/channel_space/config.json"  --project MINDLAB2021_MEG-TempSeqAges" --project MINDLAB2021_MEG-TempSeqAges
 submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs3_1_run_modality_specificity.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/modality_specificity/paired_coverage/plssvd/weights_config.json --analysis weights
@@ -27,7 +36,8 @@ submit_to_cluster -n 2 -q long.q "python -u vs2_1_plssvd_eval.py --root /users/b
 submit_to_cluster -n 2 -q long.q "python -u vs2_1_plssvd_eval.py --root /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG --output-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/plssvd_eval_equal_var/paired_coverage/ieeg__time_point_shared --cache-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/trial_cache --meg-kind paired_coverage --block-scaling equal_variance --max-components 100 --n-iterations 100 --n-splits 5 --seed 2026 --perm ieeg --perm-type time_point_shared" --project MINDLAB2021_MEG-TempSeqAges
 
 
-submit_to_cluster -n 2 -q long.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs2_1_plssvd_eval.py --root /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG --output-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/matched_pairs/09e2f460d4c3/plssvd_eval_equal_var/paired_coverage/none --cache-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/trial_cache --meg-kind paired_coverage --block-scaling equal_variance --max-components 100 --n-iterations 1 --n-splits 5 --seed 2026 --perm none --perm-type none" --project MINDLAB2021_MEG-TempSeqAges
+
+
 
 submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs2_1_plssvd_eval.py --root /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG --output-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/matched_pairs/09e2f460d4c3/plssvd_eval_equal_var/paired_coverage/meg__time_point --cache-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/trial_cache --meg-kind paired_coverage --block-scaling equal_variance --max-components 100 --n-iterations 1 --n-splits 5 --seed 2026 --perm meg --perm-type time_point" --project MINDLAB2021_MEG-TempSeqAges
 submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs2_1_plssvd_postprocess.py --runs-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/matched_pairs/09e2f460d4c3/plssvd_eval_equal_var/paired_coverage --components 100 --perm both --perm-type time_point" --project MINDLAB2021_MEG-TempSeqAges
