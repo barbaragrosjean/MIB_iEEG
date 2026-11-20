@@ -137,3 +137,63 @@ def test_prepare_filters_raw_arrays_and_saves_audit(behavioral_data,tmp_path):
     audit=pd.read_csv(folder/'meg_behavior_eligibility.csv')
     assert len(audit)==5 and audit.eligible.sum()==3
     assert 'meg_behavior' in json.loads((folder/'manifest.json').read_text())['request']
+
+
+def _write_behavior_xlsx(path, *, strict=True):
+    """Small fixture covering shared strings, inline strings and sparse cells."""
+    import zipfile
+    from xml.sax.saxutils import escape
+    namespace=('http://purl.oclc.org/ooxml/spreadsheetml/main' if strict else
+               'http://schemas.openxmlformats.org/spreadsheetml/2006/main')
+    relationship='http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    strings=['subj','response','0002bis2','old.wav','new.wav']
+    shared='<sst xmlns="'+namespace+'">'+''.join('<si><t>'+escape(v)+'</t></si>' for v in strings)+'</sst>'
+    worksheet=f'''<worksheet xmlns="{namespace}"><sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="inlineStr"><is><t>trial</t></is></c><c r="C1" t="s"><v>1</v></c></row>
+    <row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" t="s"><v>3</v></c><c r="C2"><v>1</v></c></row>
+    <row r="3"><c r="A3"><v>2</v></c><c r="B3" t="s"><v>4</v></c></row>
+    <row r="4"><c r="A4"><v>2</v></c><c r="B4" t="s"><v>4</v></c><c r="C4"><v>2</v></c></row>
+    </sheetData></worksheet>'''
+    with zipfile.ZipFile(path,'w') as z:
+        z.writestr('xl/sharedStrings.xml',shared)
+        z.writestr('xl/worksheets/sheet1.xml',worksheet)
+        z.writestr('xl/workbook.xml',f'<workbook xmlns="{namespace}" xmlns:r="{relationship}"><sheets><sheet name="Trials" sheetId="1" r:id="rId1"/></sheets></workbook>')
+        z.writestr('xl/_rels/workbook.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>')
+
+
+@pytest.mark.parametrize('strict',[True,False])
+def test_xlsx_formats_retake_aliases_and_sparse_responses(tmp_path,monkeypatch,strict):
+    monkeypatch.setenv('MEG_BEHAVIOR_DIR',str(tmp_path))
+    _write_behavior_xlsx(tmp_path/'Subj_0002bis_Block_3.xlsx',strict=strict)
+    (tmp_path/'._Subj_0002bis_Block_3.xlsx').write_text('not an Excel workbook')
+    (tmp_path/'Subj_0002bis_Project_PD.xlsx').write_text('different task: do not score')
+    (tmp_path/'~$Subj_0002bis_Block_4.xlsx').write_text('temporary lock file')
+    result=behavior.meg_behavior_performance().set_index('subject')
+    assert result.loc['2','n_trials']==3
+    assert result.loc['2','n_correct']==2
+    assert result.loc['2','n_blocks']==1
+    assert result.loc['2','accuracy']==2/3
+    assert behavior.eligible_meg_subjects(['SUBJ_0002','2','0002bis2'])==['SUBJ_0002','2','0002bis2']
+
+
+def test_duplicate_retake_files_rejected(tmp_path,monkeypatch):
+    monkeypatch.setenv('MEG_BEHAVIOR_DIR',str(tmp_path))
+    _write_behavior_xlsx(tmp_path/'Subj_0002bis_Block_3.xlsx')
+    _write_behavior_xlsx(tmp_path/'Subj_0002_Block_3.xlsx')
+    with pytest.raises(ValueError,match='Duplicate behavioral files'):
+        behavior.meg_behavior_performance()
+
+
+def test_default_behavior_directory_is_final_xlsx(monkeypatch):
+    monkeypatch.delenv('MEG_BEHAVIOR_DIR',raising=False)
+    assert behavior.behavior_directory().name=='Final_xlsx'
+
+
+def test_coverage_against_provided_roster_reports_missing_subjects_and_blocks(behavioral_data):
+    (behavioral_data/'Subj_0001_Block_3.csv').unlink()
+    report=behavior.meg_behavior_coverage(['1','SUBJ_0002','9']).set_index('subject')
+    assert report.loc['1','has_behavior']
+    assert report.loc['1','missing_blocks']=='3'
+    assert not report.loc['9','has_behavior']
+    assert report.loc['9','missing_blocks']=='3,4,5,6'
+    assert set(report.reference)=={'provided_roster'}

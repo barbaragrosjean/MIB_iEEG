@@ -65,7 +65,7 @@ assignment before summarizing accuracy and absolute coefficient magnitude.
 
 ## MEG behavioral eligibility
 
-All MEG selection uses `MEG/Blocks3456_csv` (override its location with the
+All MEG selection uses `MEG/Final_xlsx` (override its location with the
 `MEG_BEHAVIOR_DIR` environment variable when needed). Accuracy is the number of
 correct responses divided by the number of old/new trials, pooled over available
 Blocks 3–6. Stimuli containing `old` require response 1; those containing `new`
@@ -92,3 +92,12 @@ are included in cache/result provenance. Default trial caches now live in
 `out/trial_cache_full_meg/<behavior-content-hash>/`; previous caches are preserved
 and the new default is populated by rerunning the PLSSVD preparation command.
 Subject-pairing output namespaces also incorporate the behavioral content hash.
+
+The default performance source is now the final XLSX exports. Both Strict and
+standard OOXML workbooks are supported without modifying them. Files for
+`Project_PD`, macOS `._` sidecars, and Excel lock files are ignored. `bis` and
+`bis2` labels resolve to the same numeric participant ID; duplicate files for
+one participant/block are rejected rather than pooled. CSV input remains
+supported when an alternate directory is explicitly configured, but there is
+no automatic fallback to the older CSV folder. These files contain trial
+performance; demographic age/sex/instrument data still come from the questionnaire.

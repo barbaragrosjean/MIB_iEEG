@@ -5,10 +5,13 @@ import hashlib
 import json
 import os
 import re
+import posixpath
+import zipfile
+import xml.etree.ElementTree as ET
 
 import pandas as pd
 
-BEHAVIOR_DIR = Path(__file__).resolve().parent / 'MEG' / 'Blocks3456_csv'
+BEHAVIOR_DIR = Path(__file__).resolve().parent / 'MEG' / 'Final_xlsx'
 MIN_ACCURACY = 0.5
 
 
@@ -19,27 +22,86 @@ def behavior_directory():
 def meg_subject_key(subject):
     """Map questionnaire IDs and SUBJ_0001 recording IDs to the same identity."""
     value = str(subject).strip()
-    match = re.fullmatch(r'(?:subj[_ -]?)?(\d+)(?:\.0+)?', value, flags=re.I)
+    match = re.fullmatch(r'(?:subj[_ -]?)?(\d+)(?:bis\d*)?(?:\.0+)?', value, flags=re.I)
     if match is None:
         raise ValueError(f'Cannot map MEG participant {subject!r} to behavioral files.')
     return str(int(match[1]))
 
 
+def _behavior_file_identity(path):
+    return re.fullmatch(r'Subj_(\d+)(?:bis\d*)?_Block_([3456])\.(?:xlsx|csv)', path.name, flags=re.I)
+
+
 def _behavior_files(directory):
     files = []
-    for path in sorted(Path(directory).glob('*.csv')):
-        match = re.fullmatch(r'Subj_(\d+)_Block_([3456])\.csv', path.name, flags=re.I)
+    seen = set()
+    for path in sorted(Path(directory).iterdir()):
+        if path.name.startswith(('._', '~$')):
+            continue
+        match = _behavior_file_identity(path)
         if match:
-            files.append((path, str(int(match[1])), int(match[2])))
+            subject, block = str(int(match[1])), int(match[2])
+            if (subject, block) in seen:
+                raise ValueError(f'Duplicate behavioral files for participant {subject}, Block {block}; select one session/format.')
+            seen.add((subject, block))
+            files.append((path, subject, block))
     if not files:
-        raise FileNotFoundError(f'No Blocks 3–6 behavioral CSVs found in {directory}.')
+        raise FileNotFoundError(f'No Blocks 3–6 behavioral XLSX/CSV files found in {directory}.')
     return files
+
+
+def _read_behavior_table(path):
+    """Read trial tables, including Strict OOXML XLSX exports unsupported by openpyxl.
+
+    Only stored cell values are read. Original workbooks are never modified.
+    """
+    if path.suffix.lower() == '.csv':
+        return pd.read_csv(path, sep=None, engine='python', dtype=str)
+    with zipfile.ZipFile(path) as book:
+        strings = []
+        if 'xl/sharedStrings.xml' in book.namelist():
+            for node in ET.fromstring(book.read('xl/sharedStrings.xml')):
+                strings.append(''.join(t.text or '' for t in node.findall('.//{*}t')))
+        workbook = ET.fromstring(book.read('xl/workbook.xml'))
+        sheet = workbook.find('.//{*}sheet')
+        if sheet is None:
+            raise ValueError(f'{path}: no worksheet found.')
+        relation = next((v for k, v in sheet.attrib.items() if k.endswith('}id')), None)
+        relationships = ET.fromstring(book.read('xl/_rels/workbook.xml.rels'))
+        target = next((node.get('Target') for node in relationships if node.get('Id') == relation), None)
+        if target is None:
+            raise ValueError(f'{path}: cannot resolve the first worksheet.')
+        worksheet = target.lstrip('/') if target.startswith('/') else posixpath.normpath(posixpath.join('xl', target))
+        rows = []
+        for row in ET.fromstring(book.read(worksheet)).findall('.//{*}sheetData/{*}row'):
+            cells = {}
+            for cell in row:
+                letters = re.match(r'[A-Z]+', cell.get('r', ''))
+                if letters is None:
+                    raise ValueError(f'{path}: worksheet cell has no column reference.')
+                column = 0
+                for letter in letters[0]:
+                    column = column * 26 + ord(letter) - ord('A') + 1
+                value = cell.find('{*}v')
+                value = value.text if value is not None else None
+                if cell.get('t') == 's' and value is not None:
+                    value = strings[int(value)]
+                elif cell.get('t') == 'inlineStr':
+                    value = ''.join(t.text or '' for t in cell.findall('.//{*}t'))
+                cells[column-1] = value
+            if any(value is not None for value in cells.values()):
+                rows.append(cells)
+    if not rows:
+        raise ValueError(f'{path}: empty worksheet.')
+    width = max(rows[0]) + 1
+    headers = [str(rows[0].get(i, '')).strip() for i in range(width)]
+    return pd.DataFrame([[row.get(i) for i in range(width)] for row in rows[1:]], columns=headers)
 
 
 def behavior_provenance():
     files = _behavior_files(behavior_directory())
     signatures = [(p.name, hashlib.sha256(p.read_bytes()).hexdigest()) for p, _, _ in files]
-    payload = dict(min_accuracy=MIN_ACCURACY, blocks=[3, 4, 5, 6],
+    payload = dict(min_accuracy=MIN_ACCURACY, blocks=[3, 4, 5, 6], reader_version=2,
                    scoring='pooled old=1,new=2; missing/invalid responses incorrect', files=signatures)
     payload['sha256'] = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     return payload
@@ -50,9 +112,9 @@ def _performance(signatures):
     rows = []
     for name, _, _ in signatures:
         path = Path(name)
-        match = re.fullmatch(r'Subj_(\d+)_Block_([3456])\.csv', path.name, flags=re.I)
+        match = _behavior_file_identity(path)
         subject = str(int(match[1]))
-        table = pd.read_csv(path, sep=None, engine='python', dtype=str)
+        table = _read_behavior_table(path)
         table.columns = table.columns.str.strip()
         if not {'trial', 'response'} <= set(table):
             raise ValueError(f'{path}: required columns are trial and response.')
@@ -103,3 +165,25 @@ def filter_meg_demographics(frame, subject_column='subject'):
     """Apply the same eligibility rule before demographic matching."""
     keep = set(eligible_meg_subjects(frame[subject_column]))
     return frame.loc[frame[subject_column].astype(str).isin(keep)].copy()
+
+
+def meg_behavior_coverage(subjects=None):
+    """Audit missing subjects/blocks against an explicit roster or inferred ID range.
+
+    With no roster, gaps between 1 and the largest observed numeric ID are
+    reported as possible missing subjects, not confirmed missing recordings.
+    """
+    files = _behavior_files(behavior_directory())
+    observed = {}
+    for _, subject, block in files:
+        observed.setdefault(subject, set()).add(block)
+    if subjects is None:
+        expected = [str(i) for i in range(1, max(map(int, observed)) + 1)]
+        basis = 'inferred_id_range'
+    else:
+        expected = list(dict.fromkeys(meg_subject_key(s) for s in subjects))
+        basis = 'provided_roster'
+    return pd.DataFrame([dict(subject=subject, has_behavior=subject in observed,
+                              available_blocks=','.join(map(str, sorted(observed.get(subject, set())))),
+                              missing_blocks=','.join(map(str, sorted({3,4,5,6} - observed.get(subject, set())))),
+                              reference=basis) for subject in expected])
