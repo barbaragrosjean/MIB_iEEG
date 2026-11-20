@@ -147,3 +147,21 @@ the full iEEG cohort with eligible replacements. Random analyses use the same
 retained iEEG cohort until the match is regenerated. Eligibility audits are saved
 with prepared data and demographic-matching outputs. Behavioral content hashes
 and the eligibility rule are included in cache/result provenance.
+
+## Standalone metadata and decoding helpers
+
+Active scripts and notebook code no longer import the external legacy `src`
+package or add the `LB` tree to their module search path. `GetInfo`, `FindRegion`,
+`REGION`, `PROJECT_PATH`, the decoding CSV cleaner, and post-projection data
+augmentation are defined in `vs0_load_and_config.py`.
+
+The default `PROJECT_PATH` retains the legacy relative project location, resolved
+against this module's directory rather than the terminal working directory.
+Override it with `data.project_path` in a JSON configuration, `--project-path`
+where supported, or the `IEEG_PROJECT_PATH` environment variable. Coordinate CSVs
+remain at `<ieeg_dir>/<subject>_coords.csv`; electrode labels are read from
+`<PROJECT_PATH>/misc/electrodes/<subject>_electrodes.csv`. Preparation fingerprints
+both inputs and the shared helper code, so metadata edits select a fresh cache.
+Coordinate corrections and the original first-contact region mapping are
+preserved. When deploying, synchronize the shared module and its updated callers
+together before rerunning the preparation command.

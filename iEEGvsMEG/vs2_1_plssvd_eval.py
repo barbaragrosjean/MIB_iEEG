@@ -89,12 +89,12 @@ def parse_args():
 def main():
     args = parse_args()
     root = args.root.expanduser().resolve()
-    for directory in (root, root.parent, root.parent / 'LB'):
+    for directory in (root,):
         sys.path.insert(0, str(directory))
 
     import numpy as np
     import pandas as pd
-    from src.setting import GetInfo, PROJECT_PATH
+    from vs0_load_and_config import GetInfo, PROJECT_PATH
     from vs2_1_plssvd_eval_utils import ValidationOptions, prepare_trial_cache, fit_plssvd, validation_run_name, _checked_options
 
     meg_dir = args.meg_dir or shared_data.MEG_DATA_DIR

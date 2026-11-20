@@ -1,4 +1,4 @@
-"""Adapted from LB/LB5_decodingCluster.py mainTS and LB/src/decoding.py.
+"""Standalone adaptation of the legacy two-condition decoding workflow.
 
 submit_to_cluster -n 2 -q short.q "python vs4_1_decoding.py --pc_use 0 --model LR --meg-kind paired_coverage --iteration 20" --project MINDLAB2021_MEG-TempSeqAges
 
@@ -51,30 +51,7 @@ def select_model(model_name) :
 
     return classifiers[model_name], param_grids[model_name]
 
-def DataAugmentation(TFRtr, event_ids, data_aug_method='mean', nb_trials=23) :
-    # Adapted from src.decomposition.DataAugmentation; applied after linear projection.
-    # This avoids materializing trials across all concatenated MEG sources.
-    if data_aug_method not in ['mean', 'duplicat'] :
-        raise ValueError('Select mean or duplicat augmentation.')
-    samples = []
-    truth = []
-    for ids in event_ids :
-        ids = list(ids)
-        if not ids :
-            raise ValueError('Each condition needs at least one training trial.')
-        selected = random.sample(ids, min(nb_trials, len(ids)))
-        data = TFRtr[selected].copy()
-        true_trials = np.arange(nb_trials) < len(selected)
-        missing = nb_trials - len(selected)
-        if missing > 0 :
-            if data_aug_method == 'mean' :
-                extra = np.repeat(data.mean(axis=0, keepdims=True), missing, axis=0)
-            else :
-                extra = TFRtr[random.choices(ids, k=missing)]
-            data = np.concatenate([data, extra], axis=0)
-        samples.append(data)
-        truth.append(true_trials)
-    return np.concatenate(samples, axis=0), np.stack(truth, axis=1)
+from vs0_load_and_config import DataAugmentation
 
 
 def _fit_pca(train, n_components, options):

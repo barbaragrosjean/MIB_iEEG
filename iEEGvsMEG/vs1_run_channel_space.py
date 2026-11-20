@@ -127,7 +127,7 @@ def main():
     parser.add_argument('--roi-brain-maps', action='store_true', help='Project saved ROI shell means onto MEG coordinates without refitting.')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
-    sys.path.extend([str(root.parent),str(root.parent/'LB')])
+    sys.path.insert(0, str(root))
     config = json.loads(args.config.read_text())
     print(run_roi_brain_maps(config) if args.roi_brain_maps else run(config, args.recompute))
 

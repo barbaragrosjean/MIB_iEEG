@@ -183,7 +183,7 @@ def main():
     parser.add_argument('--recompute', action='store_true')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
-    sys.path.extend([str(root.parent), str(root.parent / 'LB')])
+    sys.path.insert(0, str(root))
     print(run(json.loads(args.config.read_text()), args.analysis, args.recompute))
 
 

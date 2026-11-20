@@ -14,6 +14,163 @@ MATCHED_PAIRS_CSV = Path(__file__).resolve().parent / 'out/demographic_matching/
 MEG_DATA_DIR = Path('/projects/MINDLAB2020_MEG-AuditoryPatternRecognition/scratch/leonardo/after_maxfilter_v2/Source_LBPD/Block_3/Beam_abs_0_sens_1_freq_broadband_invers_5')
 
 
+
+# Standalone settings migrated from the legacy configuration. Resolve relative to
+# this module rather than the shell's working directory; metadata remain external.
+PROJECT_ROOT = Path(__file__).resolve().parent
+_project_setting = Path(os.environ.get('IEEG_PROJECT_PATH',
+    '../../MINDLAB2021_MEG-TempSeqAges/scratch/learning_bach_iEEG')).expanduser()
+PROJECT_PATH = str((_project_setting if _project_setting.is_absolute()
+                    else PROJECT_ROOT / _project_setting).resolve())
+OUT_PATH = str(PROJECT_ROOT / 'outs')
+
+# Preserve the legacy insertion order: overlapping labels use the first match.
+REGION = {
+    'parietal': ['IPS','IP','SP','SPL','AG','SMG','TPJ'],
+    'premotor': ['FEF','SMA'],
+    'DLPFC': ['MFG','SFS','IFS','SFG'],
+    'M1': ['preCG','M1','PreCG'],
+    'S1': ['postCG','PostCG'],
+    'INS': ['INS'],
+    'VLPFC': ['IFG','FOP','IFS'],
+    'EC': ['EC','MEC','LEC'],
+    'PRH': ['PRH'],
+    'A1': ['A1'],
+    'MTG': ['MTG'],
+    'AMY': ['AMY'],
+    'PCC': ['PCC'],
+    'ACC': ['ACC','MCC'],
+    'HPC': ['HPC'],
+    'PHC': ['PHC','PHG'],
+    'STG': ['STG'],
+    'STS': ['STS'],
+    'TP': ['TP'],
+    'OFC': ['OFC'],
+    'VS': ['LG','FUG','ITG','ITS'],
+    'THAL': ['THAL'],
+}
+
+
+def resolve_project_path(project_path=None):
+    """Resolve the electrode-label project independently of the current directory."""
+    path = Path(PROJECT_PATH if project_path is None else project_path).expanduser()
+    return (path if path.is_absolute() else PROJECT_ROOT / path).resolve()
+
+
+def get_info_files(subj_included, project_path=None, data_path=None):
+    """Metadata inputs used by GetInfo; also tracked by the preparation cache."""
+    project = resolve_project_path(project_path)
+    data = Path(OUT_PATH) / 'Data' if data_path is None else Path(data_path).expanduser()
+    return [path for subject in map(str, subj_included)
+            for path in (data / f'{subject}_coords.csv',
+                         project / 'misc' / 'electrodes' / f'{subject}_electrodes.csv')]
+
+
+def FindRegion(label):
+    """Legacy first-match anatomical region assignment; unknown labels are N."""
+    for region, labels in REGION.items():
+        if label in labels:
+            return region
+    return 'N'
+
+
+def GetInfo(subj_included, project_path=None, data_path=None, save=False):
+    """Read ordered iEEG coordinates and electrode labels without legacy imports.
+
+    Coordinates are returned unchanged; the established coordinate correction is
+    applied separately by the recording loader. For compatibility, both area
+    columns use the first contact's label, as in the legacy function.
+    """
+    subjects = list(map(str, subj_included))
+    files = get_info_files(subjects, project_path, data_path)
+    coord, areas, electrodes, owners = [], [], [], []
+    for subject, coord_path, label_path in zip(subjects, files[::2], files[1::2]):
+        frame = pd.read_csv(coord_path)
+        if 'channels' not in frame and 'Unnamed: 0' in frame:
+            frame = frame.rename(columns={'Unnamed: 0': 'channels'})
+        if not {'channels','x','y','z'} <= set(frame):
+            raise ValueError(f'{coord_path}: required columns are channels (or Unnamed: 0), x, y, z.')
+        labels = pd.read_csv(label_path, dtype={'electrode': str})
+        if not {'electrode','label'} <= set(labels):
+            raise ValueError(f'{label_path}: required columns are electrode and label.')
+        if labels.electrode.duplicated().any():
+            raise ValueError(f'{label_path}: duplicate electrode identifiers.')
+        labels = labels.set_index('electrode')
+        channels = frame.channels.astype(str).tolist()
+        contacts = [channel.split('_')[0] for channel in channels]
+        missing = sorted(set(contacts) - set(labels.index))
+        if missing:
+            raise ValueError(f'{label_path}: missing electrode labels for {missing}.')
+        locations = frame[['x','y','z']].to_numpy(dtype=float)
+        if not np.isfinite(locations).all():
+            raise ValueError(f'{coord_path}: coordinates must be finite.')
+        coord.extend(locations)
+        areas.extend(np.asarray([[labels.loc[contact,'label']]*2 for contact in contacts], dtype=object))
+        electrodes.extend(channels)
+        owners.extend([subject]*len(channels))
+    regions = [FindRegion(area[0]) for area in areas]
+    if save:
+        table = pd.DataFrame(coord, columns=['x','y','z'])
+        table['area1'] = [a[0] for a in areas]
+        table['area2'] = [a[1] for a in areas]
+        table['elect'], table['subj'], table['region'] = electrodes, owners, regions
+        data = Path(OUT_PATH) / 'Data' if data_path is None else Path(data_path).expanduser()
+        table.to_csv(data / 'grp_info.csv')
+        return None
+    return coord, areas, electrodes, owners, regions
+
+
+def _legacy_decoding_numbers(value):
+    """Parse stored NumPy/list representations without evaluating Python code."""
+    import re
+    if not isinstance(value, str):
+        return np.asarray(value, dtype=float).ravel()
+    text = re.sub(r'(?:np|numpy)\.(?:u?int(?:8|16|32|64)?|float(?:16|32|64|128)?)\s*\(', '(', value)
+    tokens = re.findall(r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?|[-+]?(?:nan|inf)', text, flags=re.I)
+    return np.asarray([float(token) for token in tokens], dtype=float)
+
+
+def cleandfdecodingTS(df_final, shape_time):
+    """Standalone port of the legacy decoding CSV cleaner and its array layout.
+
+    Preserve existing summary statistics and reshaping conventions. No model is
+    fitted and no external analysis package is imported while reading results.
+    """
+    if len(df_final) != 1:
+        raise ValueError('A decoding summary must contain exactly one row.')
+    if not isinstance(shape_time, (int, np.integer)) or shape_time < 1:
+        raise ValueError('shape_time must be a positive integer.')
+    row = df_final.iloc[0]
+    iterations, permutations = int(row['iter']), int(row['iter_perm'])
+    if iterations < 1 or permutations < 0:
+        raise ValueError('Invalid decoding iteration/permutation counts.')
+    array = lambda key: _legacy_decoding_numbers(row[key])
+    y_pred, y_test = array('y_pred').astype(int), array('y_test').astype(int)
+    if y_pred.shape != y_test.shape or len(y_test) != 2*iterations:
+        raise ValueError('Decoding predictions/labels must contain two observations per iteration.')
+    # Retain the legacy serialized prediction/permutation layout for compatibility.
+    y_pred_sh = array('y_pred_sh').astype(int).reshape(2*iterations, permutations)
+    entropy, entropy_sh = array('entropy'), array('entropy_sh').reshape(iterations, permutations)
+    weight = array('weight').reshape(-1, shape_time)
+    result = dict(y_pred=y_pred, y_pred_sh=y_pred_sh, y_test=y_test,
+                  weight=weight, weight_mean=weight.mean(0), weight_std=weight.std(0),
+                  acc=float(np.mean(y_pred == y_test)),
+                  acc_sh=float(np.mean(y_pred_sh == y_test[:,None])) if permutations else np.nan,
+                  pca_weight=array('pca_weight'), pca_weight_sh=array('pca_weight_sh'),
+                  entropy=entropy, entropy_sh=entropy_sh,
+                  entropy_sh_mean=entropy_sh.mean(axis=1) if permutations else np.full(iterations,np.nan),
+                  entropy_sh_std=entropy_sh.std(axis=1) if permutations else np.full(iterations,np.nan),
+                  weight_sh=None, weight_sh_mean=[], weight_sh_std=[])
+    try:
+        shuffled = array('weight_sh').reshape(iterations, permutations, shape_time).reshape(-1,shape_time)
+        result.update(weight_sh=shuffled,
+                      weight_sh_mean=shuffled.mean(0) if len(shuffled) else np.full(shape_time,np.nan),
+                      weight_sh_std=shuffled.std(0) if len(shuffled) else np.full(shape_time,np.nan))
+    except ValueError:
+        pass  # Nonlinear classifiers may not provide coefficient time courses.
+    return result
+
+
 def subject_pairing_iteration():
     """Outer assignment ID; -1 is the CSV, nonnegative IDs are random draws.
 
@@ -373,10 +530,6 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
         meta = meta.set_index(['subject', 'channel_index']).reindex(expected).reset_index()
         coord = meta[['x', 'y', 'z']].to_numpy()
     else:
-        try:
-            from src.setting import GetInfo, PROJECT_PATH
-        except ImportError as exc:
-            raise ImportError('Provide METADATA_CSV or restore the original src.setting/GetInfo module.') from exc
         coord, areas, electrodes, reported_owners, regions = GetInfo(
             ieeg_subjects, data_path=str(ieeg_dir),
             project_path=str(project_path if project_path is not None else PROJECT_PATH))
@@ -446,4 +599,31 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
                     meg_scaling=meg_scaling, ieeg_scaling=ieeg_scaling, ieeg_multiplier=ieeg_multiplier,
                     meg_times_file=str(meg_times_file) if meg_times_file is not None else None,
                     meg_tmin=meg_tmin, sfreq=sfreq, conditions=list(conditions)))
+
+
+
+def DataAugmentation(TFRtr, event_ids, data_aug_method='mean', nb_trials=23) :
+    import random
+    # This avoids materializing trials across all concatenated MEG sources.
+    if data_aug_method not in ['mean', 'duplicat'] :
+        raise ValueError('Select mean or duplicat augmentation.')
+    samples = []
+    truth = []
+    for ids in event_ids :
+        ids = list(ids)
+        if not ids :
+            raise ValueError('Each condition needs at least one training trial.')
+        selected = random.sample(ids, min(nb_trials, len(ids)))
+        data = TFRtr[selected].copy()
+        true_trials = np.arange(nb_trials) < len(selected)
+        missing = nb_trials - len(selected)
+        if missing > 0 :
+            if data_aug_method == 'mean' :
+                extra = np.repeat(data.mean(axis=0, keepdims=True), missing, axis=0)
+            else :
+                extra = TFRtr[random.choices(ids, k=missing)]
+            data = np.concatenate([data, extra], axis=0)
+        samples.append(data)
+        truth.append(true_trials)
+    return np.concatenate(samples, axis=0), np.stack(truth, axis=1)
 

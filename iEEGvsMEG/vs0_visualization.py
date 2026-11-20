@@ -47,9 +47,6 @@ def compute_weights(output_dir=OUTPUT_DIR, abs=False):
     """
     from vs1_coverage_matching_utils import load_dataset
     from vs2_0_cov_models_utils import fit_cov_models
-    import sys
-    for directory in (ROOT.parent, ROOT.parent/'LB'):
-        sys.path.insert(0, str(directory))
     if MODEL not in ('separate_pca','joint_pca','plssvd'):
         raise ValueError('Unknown MODEL.')
     if isinstance(COMPONENT,bool) or not isinstance(COMPONENT,int) or COMPONENT<1:

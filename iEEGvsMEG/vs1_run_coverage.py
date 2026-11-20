@@ -131,7 +131,7 @@ def main():
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     root = Path(__file__).resolve().parent
-    sys.path.extend([str(root.parent), str(root.parent / 'LB')])
+    sys.path.insert(0, str(root))
     prepare_data(**data_options(config))
     datasets = load_datasets(config)
     for analysis in (['manipulations', 'channels', 'pca', 'stability'] if args.analysis == 'all' else [args.analysis]):

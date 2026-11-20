@@ -65,13 +65,12 @@ def _request(options, metadata_dependencies=(), preparation_revision='1'):
         if options[name] is not None:
             paths.append(Path(options[name]))
     paths.extend(Path(p) for p in metadata_dependencies)
-    # GetInfo can depend on external metadata. Record its code/project and allow
-    # callers to declare those additional files through metadata_dependencies.
+    # Track the local helper and its coordinate/electrode-label CSV inputs.
+    # Additional external metadata may be declared through metadata_dependencies.
     if options['metadata_csv'] is None and options['electrode_metadata'] is None:
-        from src.setting import GetInfo, PROJECT_PATH
-        if options['project_path'] is None:
-            options['project_path'] = str(PROJECT_PATH)
-        source = inspect.getsourcefile(GetInfo)
+        options['project_path'] = str(raw.resolve_project_path(options['project_path']))
+        paths.extend(raw.get_info_files(ieeg, options['project_path'], ieeg_dir))
+        source = inspect.getsourcefile(raw.GetInfo)
         if source is not None:
             paths.append(Path(source))
     signatures = [_signature(p) for p in sorted(set(map(lambda p: str(Path(p).resolve()), paths)))]
