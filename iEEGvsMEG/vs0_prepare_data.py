@@ -48,7 +48,7 @@ def _request(options, metadata_dependencies=(), preparation_revision='1'):
     meg, ieeg, files, pairing = raw.select_subjects(
         options['meg_dir'], ieeg, use_matched_pairs=options['use_matched_pairs'],
         matched_pairs_csv=options['matched_pairs_csv'], seed=options['selection_seed'],
-        meg_subjects=options['meg_subjects'])
+        meg_subjects=options['meg_subjects'], include_all_meg=options['include_all_meg'])
     if not ieeg or not meg:
         raise FileNotFoundError('No participants selected for preparation.')
     # Resolve the legacy pickle time-axis default identically for prepare and load.
@@ -218,7 +218,9 @@ def main():
     parser.add_argument('--config', type=Path, required=True)
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
-    print(prepare_data(**(data_options(config) if 'data' in config else config)))
+    from vs0_run_pairings import pairing_context
+    with pairing_context(-1, config.get('pairing_seed', config.get('seed', 2026))):
+        print(prepare_data(**(data_options(config) if 'data' in config else config)))
 
 
 if __name__ == '__main__':

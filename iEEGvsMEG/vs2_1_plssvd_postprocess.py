@@ -436,4 +436,7 @@ def main():
                     print(f'Comparison not yet available: {exc}',flush=True)
 
 
-if __name__=='__main__':main()
+if __name__ == '__main__':
+    from vs0_run_pairings import terminal_batch
+    if not terminal_batch(__file__):
+        main()

@@ -19,7 +19,7 @@ from vs1_coverage_matching_utils import (
 from vs0_prepare_data import prepare_data, data_options
 from vs1_elect_number_effect import CHANNEL_SWEEP_SCHEMA_VERSION
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _run_config(config, analysis):
@@ -54,7 +54,7 @@ def prepare_analysis(config, analysis, config_file, recompute=False):
                '--analysis', analysis]
     if recompute:
         command.append('--recompute')
-    print(format_command(command))
+    print(format_command(command, scope='once' if analysis in ('channels','stability') else 'all'))
     out = analysis_directory(config, analysis)
     marker = out / 'RUN_COMPLETE.json'
     if not recompute and marker.exists():
@@ -98,15 +98,24 @@ def run_analysis(config, analysis, datasets, recompute=False):
             step=config['channel_step'], repeats=config['channel_repeats'], seed=config['seed'],
             n_components=k, output_dir=out, max_gram_gib=memory)
     elif analysis == 'pca':
+        pca = {}
         for name, dataset in datasets.items():
             result = fit_block_pca(dataset, k, max_gram_gib=memory)
+            result.dataset = dataset
+            pca[name] = result
             np.savez_compressed(out / f'{name}.npz', scores=result.scores, weights=result.weights,
                 explained_variance=result.explained_variance,
                 explained_variance_ratio=result.explained_variance_ratio, total_variance=result.total_variance)
+        from vs0_pairing_results import export_pca_metrics
+        export_pca_metrics(config, out, pca)
     elif analysis == 'stability':
-        run_pairing_stability(datasets['iEEG'], repeats=config['stability_repeats'],
+        stability = run_pairing_stability(datasets['iEEG'], repeats=config['stability_repeats'],
             n_components=k, seed=config['seed'], baseline_pairing=datasets['paired_coverage'].pairing,
-            output_dir=out, max_gram_gib=memory)
+            output_dir=out, max_gram_gib=memory, n_pairings=config.get('n_pairings',100), pairing_seed=config.get('pairing_seed',config['seed']))
+        from vs1_coverage_stability import compare_to_full_concatenated
+        full = fit_block_pca(datasets['full_concatenated'], k, max_gram_gib=memory)
+        full.dataset = datasets['full_concatenated']
+        compare_to_full_concatenated(stability, out, full).to_csv(out/'full_component_pairs.csv', index=False)
     else:
         raise ValueError(f'Unknown analysis: {analysis}')
     (out / 'pairing.json').write_text(json.dumps(datasets['paired_coverage'].pairing, indent=2))
@@ -126,8 +135,15 @@ def main():
     prepare_data(**data_options(config))
     datasets = load_datasets(config)
     for analysis in (['manipulations', 'channels', 'pca', 'stability'] if args.analysis == 'all' else [args.analysis]):
+        if analysis in ('channels','stability'):
+            from vs0_load_and_config import subject_pairing_iteration
+            if subject_pairing_iteration() != -1:
+                continue
         run_analysis(config, analysis, datasets, args.recompute)
 
 
 if __name__ == '__main__':
-    main()
+    from vs0_run_pairings import terminal_batch
+    scope = 'once' if any(a in sys.argv for a in ('channels','stability')) else 'all'
+    if not terminal_batch(__file__, scope):
+        main()

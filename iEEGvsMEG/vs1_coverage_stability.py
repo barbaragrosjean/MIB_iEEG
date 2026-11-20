@@ -101,7 +101,7 @@ def load_stability_results(output_dir, expected_experiment=None):
 
 
 def run_pairing_stability(reference, *, n_subjects=None, repeats=20, n_components=3, seed=2026,
-                          baseline_pairing=None, max_gram_gib=2., output_dir=None):
+                          baseline_pairing=None, max_gram_gib=2., output_dir=None, n_pairings=None, pairing_seed=None):
     """Freeze iEEG participants and sample MEG assignments from the complete pool.
 
     A single random source-index permutation PER MEG SUBJECT is fixed across all
@@ -111,7 +111,8 @@ def run_pairing_stability(reference, *, n_subjects=None, repeats=20, n_component
     their distribution measures dependence on pairing, not biological identity.
     """
     matched = reference.source_data.get('pairing') is not None
-    k = _integer(n_components, 'n_components'); repeats = 0 if matched else _integer(repeats, 'repeats', 2)
+    k = _integer(n_components, 'n_components')
+    repeats = _integer(n_pairings, 'n_pairings', 2) if n_pairings is not None else (0 if matched else _integer(repeats, 'repeats', 2))
     if matched:
         baseline_pairing = reference.source_data['pairing']
     s, owners, ieeg_ids, meg_ids = _context(reference)
@@ -133,7 +134,7 @@ def run_pairing_stability(reference, *, n_subjects=None, repeats=20, n_component
         fixed_meg = [meg_ids[i] for i in sorted(rng.choice(len(meg_ids), count, replace=False))]
         baseline = dict(zip(fixed_ieeg, rng.permutation(fixed_meg).tolist()))
     if count < 2: raise ValueError('Pairing sensitivity requires at least two subjects per modality.')
-    eligible_meg = fixed_meg if matched else meg_ids
+    eligible_meg = fixed_meg if matched and n_pairings is None else meg_ids
     anchor_dataset, electrode_rows = _ieeg_dataset(reference, fixed_ieeg)
     config = dict(experiment='pairing', n_subjects=count, repeats=repeats, n_components=k, seed=int(seed),
         ieeg_subjects=fixed_ieeg, meg_subjects=eligible_meg, baseline_pairing=baseline,
@@ -160,7 +161,15 @@ def run_pairing_stability(reference, *, n_subjects=None, repeats=20, n_component
     baseline_scores, resampled = {}, {v: [] for v in ('paired_coverage', 'random_control')}
     rng = np.random.default_rng(assignment_seq)
     for repeat in range(-1, repeats):
-        pairing = baseline if repeat == -1 else dict(zip(fixed_ieeg, rng.choice(eligible_meg, count, replace=False).tolist()))
+        if repeat == -1:
+            pairing = baseline
+        elif n_pairings is not None:
+            from vs0_run_pairings import pairing_context
+            from vs0_load_and_config import random_subject_pairing
+            with pairing_context(repeat, seed if pairing_seed is None else pairing_seed):
+                pairing = random_subject_pairing(fixed_ieeg, eligible_meg, seed)
+        else:
+            pairing = dict(zip(fixed_ieeg, rng.choice(eligible_meg, count, replace=False).tolist()))
         assignments.extend(dict(repeat=repeat, ieeg_subject=a, meg_subject=b) for a, b in pairing.items())
         shape = (s['ieeg'].shape[0], len(electrode_rows), s['ieeg'].shape[-1])
         arrays = {kind: np.empty(shape, dtype=float) for kind in resampled}

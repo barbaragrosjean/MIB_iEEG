@@ -156,4 +156,6 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    from vs0_run_pairings import terminal_batch
+    if not terminal_batch(__file__):
+        main()

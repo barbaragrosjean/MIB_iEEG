@@ -136,11 +136,12 @@ def summarize_weights(root, roi_level='region'):
             raise ValueError(f'Iteration {i} is incomplete')
     marker = root/'WEIGHT_SUMMARY_COMPLETE.json'
     if marker.exists(): marker.unlink()
-    anchor = pd.read_csv(root/'iteration_000/ieeg_features.csv', dtype={'subject': str}).reset_index(drop=True)
+    reference_dir = Path(cfg.get('reference_dir', root/'iteration_000'))
+    anchor = pd.read_csv(reference_dir/'ieeg_features.csv', dtype={'subject': str}).reset_index(drop=True)
     matrices, roi_rows, trajectories, feature_rows, matches = [], [], [], [], []
     cross_rows, temporal_rows = [], []
     for model in cfg['models']:
-        ref = _load_bundle(root/'iteration_000'/f'{model}_A.npz')
+        ref = _load_bundle(reference_dir/f'{model}_A.npz')
         values = {m: [] for m in MODALITIES}
         scores = {m: [] for m in MODALITIES}
         for i in range(cfg['iterations']):
@@ -211,7 +212,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     base = Path(__file__).resolve().parent
     p.add_argument('--cache-dir', type=Path, default=shared_data.trial_cache_directory(base))
-    p.add_argument('--output-dir', type=Path, default=base/'out/weight_stability/paired_coverage')
+    p.add_argument('--output-dir', type=Path)
     p.add_argument('--meg-kind', choices=['full_average','full_concatenated','coverage_average','paired_coverage','random_control'], default='paired_coverage')
     p.add_argument('--models', nargs='+', choices=MODELS, default=list(MODELS))
     p.add_argument('--conditions', nargs='+', choices=CONDITIONS, default=list(CONDITIONS))
@@ -228,6 +229,7 @@ def main():
     p.add_argument('--roi-level', choices=LEVELS, default='region')
     p.add_argument('--summarize-only', action='store_true')
     args = p.parse_args()
+    args.output_dir = args.output_dir or shared_data.analysis_output_root(base)/'weight_stability'/'paired_coverage'
     if args.iterations < 1 or args.components < 1: p.error('Need >=1 iteration and >=1 component')
     for condition in args.conditions:
         run = copy(args); run.variation = condition; run.weight_only = True
@@ -237,4 +239,7 @@ def main():
         print(f'Completed {condition}: {run.output_dir}', flush=True)
 
 
-if __name__ == '__main__': main()
+if __name__ == '__main__':
+    from vs0_run_pairings import terminal_batch
+    if not terminal_batch(__file__):
+        main()

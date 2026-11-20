@@ -331,6 +331,8 @@ def run_comparison(cache_dir, output_dir, meg_kind='paired_coverage', models=MOD
             frame = pd.DataFrame(rows)
             if not (table.startswith('within_model_') and frame.empty):
                 frame.to_csv(out/f'{table}.csv', index=False)
+    from vs0_pairing_results import export_subspace_reference_matches
+    export_subspace_reference_matches(out)
     (out/'COMPLETE.json').write_text(json.dumps(dict(repeats=repeats, models=list(models))))
     return {name: pd.DataFrame(rows) for name, rows in tables.items()}
 
@@ -626,7 +628,7 @@ def main():
     args = parser.parse_args()
     import matplotlib
     matplotlib.use('Agg')
-    out = args.output_dir or args.root/'out'/'compare_subspace'/args.meg_kind
+    out = args.output_dir or shared_data.analysis_output_root(args.root)/'compare_subspace'/args.meg_kind
     if not args.plot_only:
         run_comparison(args.cache_dir or shared_data.trial_cache_directory(args.root), out,
                        meg_kind=args.meg_kind, models=args.models, dimensions=args.dimensions,
@@ -639,4 +641,6 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    from vs0_run_pairings import terminal_batch
+    if not terminal_batch(__file__):
+        main()

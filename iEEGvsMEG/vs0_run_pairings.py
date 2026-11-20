@@ -12,24 +12,25 @@ import re
 import shlex
 import subprocess
 import sys
+from contextlib import contextmanager
 
 
-def activate(view='matched', n_pairings=100, seed=2026):
-    """Select notebook output namespace; full commands run all random assignments."""
+def activate(view='matched', n_pairings=100, seed=2026, *, display_only=False):
+    """Select a display context; computational commands always run the full batch."""
     if view not in ('matched', 'full'):
         raise ValueError("PAIRING_VIEW must be 'matched' or 'full'.")
     if not isinstance(n_pairings, int) or n_pairings < 1:
         raise ValueError('N_PAIRINGS must be a positive integer.')
-    os.environ['SUBJECT_PAIRING_ITERATION'] = '-1' if view == 'matched' else '0'
+    os.environ['SUBJECT_PAIRING_ITERATION'] = '-1' if display_only or view == 'matched' else '0'
     os.environ['SUBJECT_PAIRING_SEED'] = str(seed)
     os.environ['SUBJECT_PAIRING_VIEW'] = view
     os.environ['SUBJECT_PAIRING_COUNT'] = str(n_pairings)
     return view
 
 
-def command(command, view='matched', n_pairings=100, seed=2026):
+def command(command, view='matched', n_pairings=100, seed=2026, scope='all'):
     return shlex.join(['python', '-u', str(Path(__file__).resolve()),
-                       '--view', view, '--n-pairings', str(n_pairings), '--seed', str(seed),
+                       '--view', view, '--scope', scope, '--n-pairings', str(n_pairings), '--seed', str(seed),
                        '--', *map(str, command)])
 
 
@@ -44,17 +45,41 @@ def _replace(value, iteration):
     return value
 
 
-def run(command, view, n_pairings, seed):
-    ids = [-1] if view == 'matched' else list(range(n_pairings))
+def run(command, view, n_pairings, seed, scope='all'):
+    if scope not in ('all', 'matched', 'once'):
+        raise ValueError('scope must be all, matched or once')
+    ids = [-1, *range(n_pairings)] if scope == 'all' else [-1]
     for iteration in ids:
-        env = dict(os.environ, SUBJECT_PAIRING_ITERATION=str(iteration), SUBJECT_PAIRING_SEED=str(seed))
+        env = dict(os.environ, SUBJECT_PAIRING_ITERATION=str(iteration), SUBJECT_PAIRING_SEED=str(seed),
+                   SUBJECT_PAIRING_COUNT=str(n_pairings), SUBJECT_PAIRING_BATCH_CHILD='1')
         args = [_replace(arg, iteration) for arg in command]
+        from vs0_load_and_config import analysis_output_root
+        with pairing_context(iteration, seed):
+            csv = args[args.index('--matched-pairs-csv')+1] if '--matched-pairs-csv' in args else None
+            if csv is None and '--config' in command:
+                initial = json.loads(Path(command[command.index('--config')+1]).read_text())
+                csv = initial.get('data',initial.get('fit',{}).get('data',{})).get('matched_pairs_csv')
+            namespace_root = analysis_output_root(Path(__file__).parent, matched_pairs_csv=csv)
+        def routed(value):
+            if '/subject_pairings/' in str(value):
+                return _replace(str(value), iteration)
+            path=Path(value)
+            try:relative=path.resolve().relative_to(Path(__file__).parent/'out')
+            except ValueError:relative=Path(path.name)
+            return str(namespace_root/relative)
+        for flag in ('--output-dir','--out-path','--run-dir','--runs-dir'):
+            if flag in args:
+                at=args.index(flag)+1;args[at]=routed(args[at])
         # Derive an independent configuration with paths for this assignment.
         if '--config' in args:
             at = args.index('--config') + 1
             original = Path(command[at])
             config = _replace(json.loads(original.read_text()), iteration)
-            target = Path(args[at]).with_name(original.stem + f'_pairing_{iteration}.json')
+            if 'output_dir' in config:
+                config['output_dir'] = routed(config['output_dir'])
+                config['n_pairings'] = n_pairings
+                config['pairing_seed'] = seed
+            target = Path(config.get('output_dir', namespace_root))/'batch_configs'/(original.stem + f'_pairing_{iteration}.json')
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(json.dumps(config, indent=2))
             args[at] = str(target)
@@ -67,6 +92,8 @@ def run(command, view, n_pairings, seed):
                          config=config if '--config' in args else None,
                          code={p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                                for p in sorted(Path(__file__).parent.glob('*.py'))})
+        if namespace is None:
+            namespace = [str(namespace_root)]
         if namespace is not None:
             key = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
             receipt = Path(namespace[0])/'pairing_commands'/f'{key}.json'
@@ -78,6 +105,49 @@ def run(command, view, n_pairings, seed):
         if receipt is not None:
             receipt.parent.mkdir(parents=True, exist_ok=True)
             receipt.write_text(json.dumps(signature, indent=2))
+
+
+    # These metrics depend on variability across assignments, not within one fit.
+    if scope == 'all' and any(Path(arg).name == 'vs3_0_weight_stability.py' for arg in command):
+        from vs0_pairing_results import finalize_weight_batch
+        output = command[command.index('--output-dir')+1] if '--output-dir' in command else str(namespace_root/'weight_stability'/'paired_coverage')
+        roi = command[command.index('--roi-level')+1] if '--roi-level' in command else 'region'
+        finalize_weight_batch(output,n_pairings,roi)
+
+
+@contextmanager
+def pairing_context(iteration, seed=2026):
+    """Temporary assignment context; never modifies trial/permutation seeds."""
+    keys = ('SUBJECT_PAIRING_ITERATION', 'SUBJECT_PAIRING_SEED')
+    before = {k: os.environ.get(k) for k in keys}
+    os.environ[keys[0]], os.environ[keys[1]] = str(iteration), str(seed)
+    try:
+        yield
+    finally:
+        for key, value in before.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def assignment_config(config, iteration):
+    """Resolve one saved assignment, independently of the notebook view."""
+    return _replace(config, iteration)
+
+
+def terminal_batch(script, scope='all'):
+    """Terminal entry points run the complete batch unless called as a child."""
+    if os.environ.get('SUBJECT_PAIRING_BATCH_CHILD') == '1' or '--help' in sys.argv or '-h' in sys.argv:
+        return False
+    # Notebook display contexts must never shrink a computational batch.
+    if os.environ.get('SUBJECT_PAIRING_SINGLE_RUN') == '1':
+        return False
+    options = json.loads(Path(sys.argv[sys.argv.index('--config')+1]).read_text()) if '--config' in sys.argv else {}
+    run([sys.executable, str(Path(script).resolve()), *sys.argv[1:]], 'full',
+        int(os.environ.get('SUBJECT_PAIRING_COUNT', options.get('n_pairings',100))),
+        int(os.environ.get('SUBJECT_PAIRING_SEED', options.get('pairing_seed',2026))), scope)
+    return True
 
 
 def summarize(root, n_pairings, relative_csv, keys, metrics):
@@ -121,6 +191,7 @@ def plot_summary(values, metric, x, group=None):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--view', choices=['matched', 'full'], default='full')
+    p.add_argument('--scope', choices=['all','matched','once'], default='all')
     p.add_argument('--n-pairings', type=int, default=100)
     p.add_argument('--seed', type=int, default=2026)
     p.add_argument('command', nargs=argparse.REMAINDER)
@@ -130,17 +201,17 @@ def main():
     cmd = a.command[1:] if a.command[:1] == ['--'] else a.command
     if not cmd:
         p.error('Provide the analysis command after --')
-    run(cmd, a.view, a.n_pairings, a.seed)
+    run(cmd, a.view, a.n_pairings, a.seed, a.scope)
 
 
 
-def format_command(args):
+def format_command(args, scope='all'):
     """Notebook-aware cluster command, with a separate outer assignment loop."""
     view = os.environ.get('SUBJECT_PAIRING_VIEW')
     if view is None:
         return shlex.join(list(map(str, args)))
     return command(args, view, int(os.environ['SUBJECT_PAIRING_COUNT']),
-                   int(os.environ.get('SUBJECT_PAIRING_SEED', 2026)))
+                   int(os.environ.get('SUBJECT_PAIRING_SEED', 2026)), scope=scope)
 
 
 def display_ensemble(root, n_pairings, patterns):

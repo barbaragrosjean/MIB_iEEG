@@ -66,7 +66,7 @@ def pairing_cache_identity(value):
     import re
     if isinstance(value, dict):
         return {k: pairing_cache_identity(v) for k, v in value.items()
-                if k != 'subject_pairing_iteration'}
+                if k not in ('subject_pairing_iteration','use_matched_pairs','matched_pairs_csv')}
     if isinstance(value, (list, tuple)):
         return [pairing_cache_identity(v) for v in value]
     if isinstance(value, str):
@@ -91,12 +91,12 @@ def analysis_output_root(root, use_matched_pairs=None, matched_pairs_csv=None):
     iteration = subject_pairing_iteration()
     if iteration is not None:
         import hashlib
-        digest = hashlib.sha256(csv.read_bytes() + behavior_provenance()['sha256'].encode()).hexdigest()[:12]
+        digest = hashlib.sha256(csv.read_bytes() + behavior_provenance()['sha256'].encode() + b'pairing-batch-v2' + str(os.environ.get('SUBJECT_PAIRING_SEED', 2026)).encode()).hexdigest()[:12]
         return Path(root) / 'out' / 'subject_pairings' / digest / f'iteration_{iteration}'
     if not enabled:
         return Path(root) / 'out'
     import hashlib
-    digest = hashlib.sha256(csv.read_bytes() + behavior_provenance()['sha256'].encode()).hexdigest()[:12]
+    digest = hashlib.sha256(csv.read_bytes() + behavior_provenance()['sha256'].encode() + b'pairing-batch-v2' + str(os.environ.get('SUBJECT_PAIRING_SEED', 2026)).encode()).hexdigest()[:12]
     return Path(root) / 'out' / 'matched_pairs' / digest
 
 
@@ -146,10 +146,39 @@ def meg_recordings(meg_dir):
 
 
 def select_subjects(meg_dir, ieeg_subjects, *, use_matched_pairs=None,
-                    matched_pairs_csv=None, seed=2026, meg_subjects=None):
+                    matched_pairs_csv=None, seed=2026, meg_subjects=None, include_all_meg=False):
     """Return ordered cohorts, explicit file paths and the optional fixed pairing."""
     enabled, csv = pairing_settings(use_matched_pairs, matched_pairs_csv)
     ieeg_subjects = list(map(str, ieeg_subjects))
+    if include_all_meg:
+        from vs0_meg_behavior import meg_subject_key
+        files = meg_recordings(meg_dir)
+        table = read_matched_pairs(csv)
+        missing = set(table.ieeg_subject) - set(ieeg_subjects)
+        if missing:
+            raise ValueError(f'CSV iEEG participants missing from data: {sorted(missing)}')
+        lookup = {}
+        for subject in files:
+            key = meg_subject_key(subject)
+            if key in lookup:
+                raise ValueError(f'Ambiguous MEG recording aliases for participant {key}.')
+            lookup[key] = subject
+        fixed = {}
+        for row in table.itertuples():
+            key = meg_subject_key(row.meg_subject)
+            if key not in lookup:
+                raise FileNotFoundError(f'Matched MEG participant {row.meg_subject} is absent from the full recording pool.')
+            subject = lookup[key]
+            files[subject] = row.path_to_meg  # Preserve exact CSV recordings in every assignment/cache.
+            fixed[row.ieeg_subject] = subject
+        available = sorted(files)
+        if meg_subjects is not None and set(eligible_meg_subjects(meg_subjects)) != set(available):
+            raise ValueError('Preparation requires the entire eligible MEG pool; remove meg_subjects.')
+        owners = table.ieeg_subject.tolist()
+        if len(available) < len(owners):
+            raise ValueError('Not enough eligible MEG subjects for one-to-one pairing.')
+        pairing = fixed if enabled else random_subject_pairing(owners, available, seed)
+        return available, owners, files, pairing
     if enabled:
         table = read_matched_pairs(csv)
         missing = set(table.ieeg_subject) - set(ieeg_subjects)
@@ -260,7 +289,7 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
                       ieeg_coordinate_unit='mm', meg_scaling='channel_zscore',
                       ieeg_scaling='none', ieeg_multiplier=1000.,
                       meg_times_file=None, meg_tmin=None, sfreq=250.,
-                      conditions=(1, 2), use_matched_pairs=None, matched_pairs_csv=None, selection_seed=2026):
+                      conditions=(1, 2), use_matched_pairs=None, matched_pairs_csv=None, selection_seed=2026, include_all_meg=True):
     """Low-level raw import and preprocessing, used by prepare_data().
 
     Analysis loaders use load_prepared_data() instead of calling this importer.
@@ -285,7 +314,8 @@ def load_project_data(meg_dir, ieeg_dir, *, metadata_csv=None,
                      if ieeg_subjects is None else list(map(str, ieeg_subjects)))
     meg_subjects, ieeg_subjects, meg_files, fixed_pairing = select_subjects(
         meg_dir, ieeg_subjects, use_matched_pairs=use_matched_pairs,
-        matched_pairs_csv=matched_pairs_csv, seed=selection_seed, meg_subjects=meg_subjects)
+        matched_pairs_csv=matched_pairs_csv, seed=selection_seed, meg_subjects=meg_subjects,
+        include_all_meg=include_all_meg)
     if len(set(meg_subjects)) != len(meg_subjects) or len(set(ieeg_subjects)) != len(ieeg_subjects):
         raise ValueError('Participant lists must not contain duplicates.')
     if metadata_csv is not None and electrode_metadata is not None:

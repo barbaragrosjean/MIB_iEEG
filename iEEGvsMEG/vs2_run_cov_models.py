@@ -61,6 +61,8 @@ def run(config, recompute=False):
     evaluate_cov_models(models, plot=False).to_csv(out/'variance.csv', index=False)
     within = compare_cov_models_within(models, ieeg, meg, dimensions=range(1, config['n_components']+1))
     for name, table in within.items(): table.to_csv(out/f'{name}.csv', index=False)
+    from vs0_pairing_results import export_covariance_metrics
+    export_covariance_metrics(config, out, models)
     (out/'RUN_COMPLETE.json').write_text(json.dumps(dict(config, schema_version=SCHEMA_VERSION), indent=2))
     return out
 
@@ -76,4 +78,6 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    from vs0_run_pairings import terminal_batch
+    if not terminal_batch(__file__):
+        main()
