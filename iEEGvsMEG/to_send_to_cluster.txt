@@ -10,6 +10,8 @@ submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEE
 
 
 
+Notebook 2.
+submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs0_run_pairings.py --view matched --scope all --n-pairings 100 --seed 2026 -- python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs2_run_cov_models.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/subject_pairings/9b08db76e28b/iteration_-1/covariance/config.json" --project MINDLAB2021_MEG-TempSeqAges
 
 
 
