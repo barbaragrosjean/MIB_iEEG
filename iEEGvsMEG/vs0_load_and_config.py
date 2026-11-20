@@ -124,7 +124,7 @@ def read_matched_pairs(path=None):
     eligible = set(eligible_meg_subjects(table.meg_subject))
     excluded = table.loc[~table.meg_subject.isin(eligible)]
     if not excluded.empty:
-        warnings.warn('Removed saved pairs with MEG accuracy below 50%: ' + ', '.join(excluded.meg_subject)
+        warnings.warn('Removed saved pairs with MEG accuracy below 50% or missing behavioral performance: ' + ', '.join(excluded.meg_subject)
                       + '. Rerun demographic matching to retain the full iEEG cohort.', stacklevel=2)
     table = table.loc[table.meg_subject.isin(eligible)].reset_index(drop=True)
     if table.empty:

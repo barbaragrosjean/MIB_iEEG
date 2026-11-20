@@ -4,6 +4,7 @@ from functools import lru_cache
 import hashlib
 import json
 import os
+import warnings
 import re
 import posixpath
 import zipfile
@@ -101,7 +102,7 @@ def _read_behavior_table(path):
 def behavior_provenance():
     files = _behavior_files(behavior_directory())
     signatures = [(p.name, hashlib.sha256(p.read_bytes()).hexdigest()) for p, _, _ in files]
-    payload = dict(min_accuracy=MIN_ACCURACY, blocks=[3, 4, 5, 6], reader_version=2,
+    payload = dict(min_accuracy=MIN_ACCURACY, blocks=[3, 4, 5, 6], reader_version=3, missing_behavior='exclude',
                    scoring='pooled old=1,new=2; missing/invalid responses incorrect', files=signatures)
     payload['sha256'] = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     return payload
@@ -133,10 +134,8 @@ def _performance(signatures):
                          n_ignored=int((~selected).sum())))
     blocks = pd.DataFrame(rows)
     summary = blocks.groupby('subject', sort=True)[['n_trials','n_correct','n_old','n_new','n_ignored']].sum()
-    if (summary.n_trials == 0).any():
-        raise ValueError('No scorable old/new trials for participants: ' + ', '.join(summary.index[summary.n_trials == 0]))
     summary['n_blocks'] = blocks.groupby('subject').block.nunique()
-    summary['accuracy'] = summary.n_correct / summary.n_trials
+    summary['accuracy'] = summary.n_correct / summary.n_trials.where(summary.n_trials > 0)
     summary['eligible'] = summary.accuracy >= MIN_ACCURACY
     return summary.reset_index()
 
@@ -149,7 +148,7 @@ def meg_behavior_performance():
 
 
 def eligible_meg_subjects(subjects):
-    """Filter a cohort without changing its IDs/order; missing behavior is an error."""
+    """Keep assessed participants with accuracy >=50%; exclude missing performance."""
     subjects = list(map(str, subjects))
     if not subjects:
         return []
@@ -157,8 +156,9 @@ def eligible_meg_subjects(subjects):
     keys = [meg_subject_key(s) for s in subjects]
     missing = sorted(set(keys) - set(performance.index))
     if missing:
-        raise ValueError('Missing MEG behavioral data for participants: ' + ', '.join(missing))
-    return [subject for subject, key in zip(subjects, keys) if bool(performance.loc[key, 'eligible'])]
+        warnings.warn('Excluded MEG participants with missing behavioral performance: '
+                      + ', '.join(missing), stacklevel=2)
+    return [subject for subject, key in zip(subjects, keys) if key in performance.index and bool(performance.loc[key, 'eligible'])]
 
 
 def filter_meg_demographics(frame, subject_column='subject'):

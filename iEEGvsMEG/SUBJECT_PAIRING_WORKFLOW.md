@@ -76,12 +76,12 @@ not an average of block accuracies or balanced accuracy across stimulus classes.
 
 The demographic notebook applies this rule inside `prepare_for_matching` before
 selecting pairs. Raw/averaged preparation, MEG roster discovery, random pairing,
-and existing trial-cache loading use the same rule. Unknown participant IDs or
-missing behavioral files cause an explicit error rather than silently retaining
-an unassessed participant. Numeric questionnaire IDs and `SUBJ_0001` recording
+and existing trial-cache loading use the same rule. Missing behavioral files or no scorable old/new trials exclude the participant.
+Missing-file exclusions are reported as warnings. Unrecognized participant ID
+formats still cause an explicit error. Numeric questionnaire IDs and `SUBJ_0001` recording
 IDs are resolved to the same behavioral identity.
 
-If an older saved demographic match contains an excluded MEG participant, that
+If an older saved demographic match contains a MEG participant with low or missing performance, that
 pair is removed and a warning identifies it. Rerun demographic matching to retain
 the full iEEG cohort by selecting replacements from eligible MEG participants.
 Random analyses use the same retained iEEG cohort until that match is regenerated.
