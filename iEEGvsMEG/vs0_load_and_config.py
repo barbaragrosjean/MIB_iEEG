@@ -133,11 +133,22 @@ def read_matched_pairs(path=None):
 
 
 def meg_recordings(meg_dir):
-    """Discover the complete MEG roster without applying a pairing view."""
+    """Discover participant recordings, excluding aggregate/auxiliary files.
+
+    Source directories also contain group-level MATLAB outputs. Only filenames
+    carrying a participant ID may enter behavioral screening or subject pairing.
+    """
+    import re
     directory = Path(meg_dir)
-    files = {p.name.removesuffix('_source.p'): str(p) for p in sorted(directory.glob('*_source.p'))}
-    for p in sorted(directory.glob('*.mat')):
-        subject = p.stem.removesuffix('_norm0_abs_0')
+    subject_pattern = r'(?i:(?:subj[_ -]?)?\d+(?:bis\d*)?(?:\.0+)?)'
+    recording_pattern = re.compile(
+        rf'(?P<subject>{subject_pattern})(?:_source\.p|(?:_norm0_abs_0)?\.mat)')
+    files = {}
+    for p in sorted(directory.iterdir()):
+        match = recording_pattern.fullmatch(p.name)
+        if match is None or not p.is_file():
+            continue
+        subject = match['subject']
         if subject in files:
             raise ValueError(f'Ambiguous MEG files for {subject} in {directory}.')
         files[subject] = str(p)
