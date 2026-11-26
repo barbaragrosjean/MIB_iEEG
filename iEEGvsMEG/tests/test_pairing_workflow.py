@@ -209,4 +209,20 @@ class WorkflowTests(unittest.TestCase):
             self.assertTrue((folder/'COMPLETE.json').exists())
 
 
+    def test_14_duplicate_demographics_keep_first(self):
+        from vs0_utils_load_and_config import select_subject
+        cfg=read_config(self.out/'vs0_pairs/config.json')['parameters'].copy()
+        duplicate=self.base/'duplicate.csv'
+        pd.DataFrame(dict(subject=['I00',' I00 ','I01'],age=[20,99,30],sex=['F','M','M'])).to_csv(duplicate,index=False)
+        cfg['ieeg_dem_csv']=str(duplicate)
+        keys=('ieeg_dem_csv','meg_dem_xlsx','ieeg_dir','meg_dir','behavior_dir','project_path','meg_sheet')
+        ieeg,meg,audit=select_subject(**{k:cfg[k] for k in keys})
+        self.assertEqual(ieeg.subject.tolist(),['I00','I01'])
+        self.assertEqual(ieeg.iloc[0].age,20)
+        self.assertEqual(ieeg.iloc[0].sex,'female')
+        ignored=audit.loc[audit.reason.eq('duplicate_demographic_row_keep_first')]
+        self.assertEqual(len(ignored),1)
+        self.assertFalse(ignored.iloc[0].eligible)
+
+
 if __name__=='__main__':unittest.main()

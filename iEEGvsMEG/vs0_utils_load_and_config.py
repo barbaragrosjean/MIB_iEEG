@@ -370,6 +370,8 @@ def select_subject(ieeg_dem_csv, meg_dem_xlsx, ieeg_dir, meg_dir=MEG_DATA_DIR,
                    meg_sheet='Background questionnaire'):
     """Return eligible iEEG/MEG tables and an explicit exclusion audit.
 
+    Keep the first demographic row per normalized participant ID, even when
+    later rows differ. Record ignored duplicates in the selection audit.
     iEEG demographics are already behaviorally screened. MEG requires >=.5 in
     each condition and >=24 total old/new trials (omissions remain in denominators).
     """
@@ -401,7 +403,10 @@ def select_subject(ieeg_dem_csv, meg_dem_xlsx, ieeg_dir, meg_dir=MEG_DATA_DIR,
             else:
                 key = meg_subject_key(original) if modality == 'meg' else original
                 if key in seen:
-                    raise ValueError(f'Duplicate {modality} participant {key}')
+                    audit.append(dict(modality=modality, subject=original,
+                                      recording_subject=available.get(key, original) if modality == 'meg' else original,
+                                      eligible=False, reason='duplicate_demographic_row_keep_first'))
+                    continue
                 seen.add(key)
             if not np.isfinite(row['age']) or row['age'] <= 0:
                 reasons.append('missing_or_invalid_age')
