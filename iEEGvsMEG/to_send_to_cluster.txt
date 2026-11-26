@@ -1,35 +1,19 @@
+# Current vs1-vs3 workflow. Run from the repository root.
+# Edit iEEGvsMEG/out/vs0_pairs/config.json before generating pairs.
+python -u iEEGvsMEG/vs0_run_create_pairs.py --config iEEGvsMEG/out/vs0_pairs/config.json
+python iEEGvsMEG/vs0_run_pipeline.py --dry-run
 
-submit_to_cluster -n 2 -q long.q "python vs4_1_decoding.py --pc_use 3 --model LR --meg-kind paired_coverage --iteration 100 --method PLSSVD"  --project MINDLAB2021_MEG-TempSeqAges
-submit_to_cluster -n 2 -q long.q "python vs4_1_decoding.py --pc_use 3 --model RandomForest --meg-kind paired_coverage --iteration 100 --method PLSSVD"  --project MINDLAB2021_MEG-TempSeqAges
-submit_to_cluster -n 2 -q long.q "python vs4_1_decoding.py --pc_use 3 --model SVC_linear --meg-kind paired_coverage --iteration 100 --method PLSSVD"  --project MINDLAB2021_MEG-TempSeqAges
+# Example submission: one analysis over all 22 pairings, dependencies reused.
+submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_pca/config.json" --project MINDLAB2021_MEG-TempSeqAges
 
+# Or run the complete sequential workflow in an appropriate cluster job:
+# python -u iEEGvsMEG/vs0_run_pipeline.py
+# See PAIRING_WORKFLOW.md for output layout and recomputation.
 
-submit_to_cluster -n 2 -q long.q "python vs4_1_decoding.py --pc_use 3 --model LR --meg-kind paired_coverage --iteration 100 --method PCA"  --project MINDLAB2021_MEG-TempSeqAges
-submit_to_cluster -n 2 -q long.q "python vs4_1_decoding.py --pc_use 3 --model RandomForest --meg-kind paired_coverage --iteration 100 --method PCA"  --project MINDLAB2021_MEG-TempSeqAges
-submit_to_cluster -n 2 -q long.q "python vs4_1_decoding.py --pc_use 3 --model SVC_linear --meg-kind paired_coverage --iteration 100 --method PCA"  --project MINDLAB2021_MEG-TempSeqAges
-
-
-submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs2_1_plssvd_postprocess.py --runs-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/plssvd_eval_equal_var/paired_coverage --components 100 --perm both --perm-type time_block"  --project MINDLAB2021_MEG-TempSeqAges
-submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs1_run_channel_space.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/channel_space/config.json"  --project MINDLAB2021_MEG-TempSeqAges" --project MINDLAB2021_MEG-TempSeqAges
-submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs3_1_run_modality_specificity.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/modality_specificity/paired_coverage/plssvd/weights_config.json --analysis weights
-
-submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs2_1_plssvd_select_components.py --runs-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/plssvd_eval_equal_var/paired_coverage --components 100 --perm both --perm-type time_point" --project MINDLAB2021_MEG-TempSeqAges
-
-submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs1_run_channel_space.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/channel_space/config.json" --project MINDLAB2021_MEG-TempSeqAges
-
-submit_to_cluster -n 2 -q highmem_short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs3_1_weight_clustering.py --input-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/modality_specificity/paired_coverage/plssvd/weights/c2a261e925a3bff6/absolute_weight_clustering --n-clusters auto --n-components 6 --k-min 2 --k-max 10 --seed 2026 --methods kmeans minibatch gmm birch" --project MINDLAB2021_MEG-TempSeqAges
-submit_to_cluster -n 2 -q highmem_short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs1_run_coverage.py --config /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/coverage/config.json --analysis channels" --project MINDLAB2021_MEG-TempSeqAges
-
-
-
-submit_to_cluster -n 2 -q long.q "python -u vs2_1_plssvd_eval.py --root /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG --output-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/plssvd_eval_equal_var/paired_coverage/both__time_point_shared --cache-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/trial_cache --meg-kind paired_coverage --block-scaling equal_variance --max-components 100 --n-iterations 100 --n-splits 5 --seed 2026 --perm both --perm-type time_point_shared" --project MINDLAB2021_MEG-TempSeqAges
-submit_to_cluster -n 2 -q long.q "python -u vs2_1_plssvd_eval.py --root /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG --output-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/plssvd_eval_equal_var/paired_coverage/meg__time_point_shared --cache-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/trial_cache --meg-kind paired_coverage --block-scaling equal_variance --max-components 100 --n-iterations 100 --n-splits 5 --seed 2026 --perm meg --perm-type time_point_shared" --project MINDLAB2021_MEG-TempSeqAges
-submit_to_cluster -n 2 -q long.q "python -u vs2_1_plssvd_eval.py --root /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG --output-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/plssvd_eval_equal_var/paired_coverage/ieeg__time_point_shared --cache-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/trial_cache --meg-kind paired_coverage --block-scaling equal_variance --max-components 100 --n-iterations 100 --n-splits 5 --seed 2026 --perm ieeg --perm-type time_point_shared" --project MINDLAB2021_MEG-TempSeqAges
-
-
-submit_to_cluster -n 2 -q short.q "python -u vs2_1_plssvd_postprocess.py --runs-dir out/plssvd_eval_equal_var/paired_coverage --components 100 --perm both --perm-type time_point_shared" --project MINDLAB2021_MEG-TempSeqAges
-submit_to_cluster -n 2 -q short.q "python -u vs2_1_plssvd_postprocess.py --runs-dir out/plssvd_eval_equal_var/paired_coverage --components 100 --perm ieeg --perm-type time_point_shared" --project MINDLAB2021_MEG-TempSeqAges
-submit_to_cluster -n 2 -q short.q "python -u vs2_1_plssvd_postprocess.py --runs-dir out/plssvd_eval_equal_var/paired_coverage --components 100 --perm meg --perm-type time_point_shared" --project MINDLAB2021_MEG-TempSeqAges
-
-
-submit_to_cluster -n 2 -q short.q "python -u /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/vs2_1_plssvd_eval.py --runs-dir /users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/out/plssvd_eval_equal_var/paired_coverage --components 100 --perm none --perm-type none
+# Existing vs4 commands (outside this reorganization; run from iEEGvsMEG):
+submit_to_cluster -n 2 -q long.q "python vs4_1_run_decoding.py --pc_use 3 --model LR --meg-kind paired_coverage --iteration 100 --method PLSSVD"  --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python vs4_1_run_decoding.py --pc_use 3 --model RandomForest --meg-kind paired_coverage --iteration 100 --method PLSSVD"  --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python vs4_1_run_decoding.py --pc_use 3 --model SVC_linear --meg-kind paired_coverage --iteration 100 --method PLSSVD"  --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python vs4_1_run_decoding.py --pc_use 3 --model LR --meg-kind paired_coverage --iteration 100 --method PCA"  --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python vs4_1_run_decoding.py --pc_use 3 --model RandomForest --meg-kind paired_coverage --iteration 100 --method PCA"  --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python vs4_1_run_decoding.py --pc_use 3 --model SVC_linear --meg-kind paired_coverage --iteration 100 --method PCA"  --project MINDLAB2021_MEG-TempSeqAges

@@ -1,0 +1,19 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs3_pairing_weights/config.json",
+  "schema_version": 1,
+  "analysis": "vs3_pairing_weights",
+  "pairings": "all",
+  "parameters": {
+    "normalize": false,
+    "percentile": 95,
+    "bins": 50,
+    "pairing": {
+      "existing_dir": "{OUT}/vs3_weight_stability",
+      "cache_dir": "{OUT}/vs1_construct/shared/trials",
+      "iterations": 1,
+      "split_unit": "trial",
+      "atlas_image": null,
+      "atlas_labels": null
+    }
+  }
+}

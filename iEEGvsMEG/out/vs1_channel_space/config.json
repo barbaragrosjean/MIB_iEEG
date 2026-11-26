@@ -1,0 +1,36 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_channel_space/config.json",
+  "schema_version": 1,
+  "analysis": "vs1_channel_space",
+  "pairings": "all",
+  "parameters": {
+    "block_scaling": true,
+    "sequence_metric": "cosine",
+    "shell_edges_mm": [
+      0,
+      5,
+      10,
+      15,
+      20,
+      25,
+      30,
+      35,
+      40,
+      45,
+      50,
+      55,
+      60,
+      65,
+      70,
+      75,
+      80,
+      85,
+      90,
+      95,
+      100
+    ],
+    "time_window": null,
+    "roi_column": "region",
+    "pool_hemispheres": true
+  }
+}

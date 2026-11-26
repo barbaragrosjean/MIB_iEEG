@@ -1,0 +1,17 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs2_plssvd_permutation/config.json",
+  "schema_version": 1,
+  "analysis": "vs2_plssvd_permutation",
+  "pairings": "all",
+  "parameters": {
+    "modes": [
+      "meg",
+      "ieeg",
+      "both"
+    ],
+    "perm_type": "time_point_shared",
+    "components": [
+      100
+    ]
+  }
+}

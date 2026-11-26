@@ -1,0 +1,15 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs3_weights/config.json",
+  "schema_version": 1,
+  "analysis": "vs3_weights",
+  "pairings": "all",
+  "parameters": {
+    "block_scaling": true,
+    "condition_mode": "average",
+    "n_components": 5,
+    "seed": 2026,
+    "max_gram_gib": 2.0,
+    "model": "plssvd",
+    "meg_kind": "paired_coverage"
+  }
+}

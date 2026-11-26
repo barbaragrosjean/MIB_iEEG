@@ -1,0 +1,35 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs3_subspace/config.json",
+  "schema_version": 1,
+  "analysis": "vs3_subspace",
+  "pairings": "all",
+  "parameters": {
+    "meg_kind": "paired_coverage",
+    "models": [
+      "separate_pca",
+      "plssvd"
+    ],
+    "dimensions": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "repeats": 5,
+    "seed": 2026,
+    "block_scaling": "equal_variance",
+    "split_unit": "trial",
+    "cluster_counts": [
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "ridge_grid": [
+      0.01
+    ],
+    "max_gram_gib": 2.0
+  }
+}

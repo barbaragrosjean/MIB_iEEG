@@ -1,0 +1,17 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs3_spatial_profiles/config.json",
+  "schema_version": 1,
+  "analysis": "vs3_spatial_profiles",
+  "pairings": "all",
+  "parameters": {
+    "n_components": 2,
+    "spatial_scope": "within_participant",
+    "fold_hemispheres": true,
+    "target_hemisphere": "left",
+    "bin_edges": null,
+    "distance_bin_width_mm": 10.0,
+    "n_permutations": 199,
+    "n_bootstrap": 500,
+    "min_norm_quantile": 0.1
+  }
+}

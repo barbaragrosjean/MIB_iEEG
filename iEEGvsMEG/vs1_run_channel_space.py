@@ -8,14 +8,16 @@ import shlex
 import sys
 import numpy as np
 import pandas as pd
-from vs0_load_and_config import load_project_data, coordinates_mm
-from vs1_1_channel_space import analyze_channel_space, roi_shell_source_maps
+from vs0_utils_load_and_config import load_project_data, coordinates_mm
+from vs1_1_utils_channel_space import analyze_channel_space, roi_shell_source_maps
 
 VERSION = 2
 TABLES = ('metadata', 'correlations', 'electrode_summary', 'roi_subjects', 'roi_summary', 'scaling', 'shell_table')
 
 
 def result_directory(config):
+    if config.get('_managed_output'):
+        return Path(config['_managed_output'])
     payload = dict(config, version=VERSION)
     if config.get('sequence_metric', 'correlation') == 'correlation':
         payload['correlation_method'] = 'pearson'
@@ -68,7 +70,7 @@ def run(config, recompute=False):
     data = load_project_data(**options)
     roi_column = config['roi_column']
     if roi_column not in data['electrode_metadata']:
-        from vs0_region_labels import get_region_label
+        from vs0_utils_region_labels import get_region_label
         data['electrode_metadata'][roi_column] = get_region_label(data['electrode_metadata'][['x','y','z']]/1000.)
     result = analyze_channel_space(data, shell_edges_mm=config['shell_edges_mm'],
         block_scaling=config['block_scaling'], time_window=config['time_window'],
@@ -85,7 +87,8 @@ def run(config, recompute=False):
     for subject in data['ieeg_subjects']:
         paths.extend(Path(options['ieeg_dir'])/f'{subject}{suffix}' for suffix in ['_epochs.p','_info.json'])
     for subject in data['meg_subjects']:
-        paths.extend(Path(options['meg_dir'])/f'{subject}{suffix}' for suffix in ['_source.p','_pos.csv'])
+        raw_path = Path(options['meg_dir'])/f'{subject}_norm0_abs_0.mat'
+        paths.extend([raw_path] if raw_path.exists() else [Path(options['meg_dir'])/f'{subject}{suffix}' for suffix in ['_source.p','_pos.csv']])
     paths.extend(Path(options[name]) for name in ['metadata_csv','meg_times_file'] if options.get(name))
     files = [dict(path=str(path.resolve()),size=path.stat().st_size,mtime_ns=path.stat().st_mtime_ns) for path in paths]
     (folder/'RUN_COMPLETE.json').write_text(json.dumps(dict(version=VERSION,config=config,input_files=files),indent=2))
@@ -116,9 +119,12 @@ def main():
     parser.add_argument('--roi-brain-maps', action='store_true', help='Project saved ROI shell means onto MEG coordinates without refitting.')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
-    sys.path.extend([str(root.parent),str(root.parent/'LB')])
+    sys.path.extend([str(root.parent)])
     config = json.loads(args.config.read_text())
     print(run_roi_brain_maps(config) if args.roi_brain_maps else run(config, args.recompute))
 
 
-if __name__ == '__main__': main()
+if __name__ == '__main__':
+    from vs0_run_analysis import dispatch_managed
+    if not dispatch_managed():
+        main()

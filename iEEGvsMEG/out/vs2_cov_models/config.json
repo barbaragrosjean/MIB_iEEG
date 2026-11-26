@@ -1,0 +1,14 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs2_cov_models/config.json",
+  "schema_version": 1,
+  "analysis": "vs2_cov_models",
+  "pairings": "all",
+  "parameters": {
+    "block_scaling": true,
+    "condition_mode": "average",
+    "n_components": 10,
+    "seed": 2026,
+    "max_gram_gib": 2.0,
+    "meg_kind": "paired_coverage"
+  }
+}

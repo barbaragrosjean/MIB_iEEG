@@ -1,0 +1,20 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs3_weight_stability/config.json",
+  "schema_version": 1,
+  "analysis": "vs3_weight_stability",
+  "pairings": "all",
+  "parameters": {
+    "conditions": [
+      "trials"
+    ],
+    "models": [
+      "separate_pca",
+      "plssvd"
+    ],
+    "components": 5,
+    "iterations": 100,
+    "seed": 2026,
+    "block_scaling": "equal_variance",
+    "roi_level": "region"
+  }
+}

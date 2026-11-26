@@ -1,0 +1,7 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_roi_shell_maps/config.json",
+  "schema_version": 1,
+  "analysis": "vs1_roi_shell_maps",
+  "pairings": "all",
+  "parameters": {}
+}

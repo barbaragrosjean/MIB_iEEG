@@ -1,0 +1,17 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs3_gradients/config.json",
+  "schema_version": 1,
+  "analysis": "vs3_gradients",
+  "pairings": "all",
+  "parameters": {
+    "n_components": 2,
+    "spatial_scope": "within_subject",
+    "neighborhood_mm": null,
+    "top_percent": 1,
+    "max_peaks": null,
+    "fit_radius_mm": 30.0,
+    "fold_hemispheres": true,
+    "target_hemisphere": "left",
+    "fit_model": "quadratic"
+  }
+}

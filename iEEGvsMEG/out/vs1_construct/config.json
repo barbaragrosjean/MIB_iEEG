@@ -1,0 +1,33 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_construct/config.json",
+  "schema_version": 1,
+  "analysis": "vs1_construct",
+  "pairings": "all",
+  "parameters": {
+    "block_scaling": true,
+    "condition_mode": "average",
+    "n_components": 10,
+    "seed": 2026,
+    "max_gram_gib": 2.0,
+    "data": {
+      "meg_dir": "/projects/MINDLAB2020_MEG-AuditoryPatternRecognition/scratch/leonardo/after_maxfilter_v2/Source_LBPD/Block_3/Beam_abs_0_sens_1_freq_broadband_invers_5",
+      "ieeg_dir": "{ROOT}/ieeg_shortWOBS_fs250",
+      "project_path": "/users/barbara/Desktop/MINDLAB2021_MEG-TempSeqAges/scratch/learning_bach_iEEG",
+      "metadata_csv": null,
+      "meg_coordinate_unit": "m",
+      "ieeg_coordinate_unit": "mm",
+      "meg_scaling": "channel_zscore",
+      "ieeg_scaling": "none",
+      "ieeg_multiplier": 1000.0,
+      "sfreq": 250.0,
+      "conditions": [
+        1,
+        2
+      ],
+      "meg_tmin": null,
+      "meg_times_file": null,
+      "average_cache_dir": "{OUT}/vs1_construct/shared/meg_averages"
+    },
+    "export_trials": true
+  }
+}

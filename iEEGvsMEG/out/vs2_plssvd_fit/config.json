@@ -1,0 +1,38 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs2_plssvd_fit/config.json",
+  "schema_version": 1,
+  "analysis": "vs2_plssvd_fit",
+  "pairings": "all",
+  "parameters": {
+    "meg_kind": "paired_coverage",
+    "options": {
+      "repeats": 5,
+      "n_components": 100,
+      "n_iterations": 100,
+      "block_seconds": 0.36,
+      "seed": 2026,
+      "split_unit": "trial",
+      "block_scaling": "equal_variance",
+      "max_gram_gib": 2.0
+    },
+    "variants": [
+      {
+        "perm": "none",
+        "perm_type": "none"
+      },
+      {
+        "perm": "meg",
+        "perm_type": "time_point_shared"
+      },
+      {
+        "perm": "ieeg",
+        "perm_type": "time_point_shared"
+      },
+      {
+        "perm": "both",
+        "perm_type": "time_point_shared"
+      }
+    ],
+    "scratch_dir": null
+  }
+}

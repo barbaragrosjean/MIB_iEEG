@@ -1,0 +1,24 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs3_pairing_clustering/config.json",
+  "schema_version": 1,
+  "analysis": "vs3_pairing_clustering",
+  "pairings": "all",
+  "parameters": {
+    "component_counts": [
+      2,
+      3,
+      4,
+      5
+    ],
+    "methods": [
+      "kmeans",
+      "minibatch",
+      "gmm",
+      "birch"
+    ],
+    "k_min": 2,
+    "k_max": 10,
+    "use_thresholded": false,
+    "silhouette_sample_size": 2000
+  }
+}

@@ -1,6 +1,10 @@
 outs/
 
-iEEGvsMEG/out/
+# Keep editable analysis configurations; ignore recordings/results.
+iEEGvsMEG/out/**
+!iEEGvsMEG/out/vs*/
+iEEGvsMEG/out/vs*/**
+!iEEGvsMEG/out/vs*/config.json
 iEEGvsMEG/out_old/
 iEEGvsMEG/OLD/
 iEEGvsMEG/MEG/

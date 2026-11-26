@@ -1,0 +1,11 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs3_cross_modal_profiles/config.json",
+  "schema_version": 1,
+  "analysis": "vs3_cross_modal_profiles",
+  "pairings": "all",
+  "parameters": {
+    "n_components": 2,
+    "normalize_weights": true,
+    "distance_bin_width_mm": 5.0
+  }
+}

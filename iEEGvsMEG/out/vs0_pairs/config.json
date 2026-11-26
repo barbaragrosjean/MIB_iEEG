@@ -1,0 +1,22 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_create_pairs.py --config iEEGvsMEG/out/vs0_pairs/config.json",
+  "schema_version": 1,
+  "analysis": "vs0_pairs",
+  "pairings": "all",
+  "parameters": {
+    "n_random": 20,
+    "seed": 42,
+    "matching_weights": {
+      "age_weight": 0.9,
+      "sex_weight": 1.0
+    },
+    "ieeg_dem_csv": "/users/barbara/Desktop/MINDLAB2021_MEG-TempSeqAges/scratch/learning_bach_iEEG/misc/clean_dataset.csv",
+    "meg_dem_xlsx": "/users/barbara/Desktop/MIB_iEEG/iEEGvsMEG/MEG/SubjectsDataCollection_APR2020_TEMP.xlsx",
+    "meg_sheet": "Background questionnaire",
+    "ieeg_dir": "{ROOT}/ieeg_shortWOBS_fs250",
+    "meg_dir": "/projects/MINDLAB2020_MEG-AuditoryPatternRecognition/scratch/leonardo/after_maxfilter_v2/Source_LBPD/Block_3/Beam_abs_0_sens_1_freq_broadband_invers_5",
+    "behavior_dir": "{ROOT}/MEG/Final_xlsx",
+    "project_path": "/users/barbara/Desktop/MINDLAB2021_MEG-TempSeqAges/scratch/learning_bach_iEEG",
+    "meg_coordinate_unit": "m"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs2_plssvd_pca/config.json",
+  "schema_version": 1,
+  "analysis": "vs2_plssvd_pca",
+  "pairings": "all",
+  "parameters": {
+    "components": 100,
+    "meg_kind": "paired_coverage",
+    "block_scaling": "equal_variance",
+    "absolute": true,
+    "n_iterations": null
+  }
+}

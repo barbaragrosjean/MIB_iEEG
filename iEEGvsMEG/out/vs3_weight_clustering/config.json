@@ -1,0 +1,25 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs3_weight_clustering/config.json",
+  "schema_version": 1,
+  "analysis": "vs3_weight_clustering",
+  "pairings": "all",
+  "parameters": {
+    "component_counts": [
+      2,
+      3,
+      4,
+      5
+    ],
+    "methods": [
+      "kmeans",
+      "minibatch",
+      "gmm",
+      "birch"
+    ],
+    "n_clusters": "auto",
+    "use_thresholded": false,
+    "k_min": 2,
+    "k_max": 10,
+    "seed": 2026
+  }
+}

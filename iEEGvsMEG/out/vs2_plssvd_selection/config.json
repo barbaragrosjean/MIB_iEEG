@@ -1,0 +1,13 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs2_plssvd_selection/config.json",
+  "schema_version": 1,
+  "analysis": "vs2_plssvd_selection",
+  "pairings": "all",
+  "parameters": {
+    "n_components": 100,
+    "null_quantile": 0.95,
+    "min_support": 0.9,
+    "perm": "both",
+    "perm_type": "time_point_shared"
+  }
+}

@@ -6,10 +6,10 @@ import json
 from datetime import datetime, timezone
 import sys
 import numpy as np
-from vs1_coverage_matching_utils import load_dataset
+from vs1_utils_coverage_matching import load_dataset
 from vs1_run_coverage import analysis_directory, SCHEMA_VERSION
-from vs2_0_cov_models_utils import CovModel, fit_cov_models, evaluate_cov_models
-from vs2_0_compare_models import compare_cov_models_within
+from vs2_0_utils_cov_models import CovModel, fit_cov_models, evaluate_cov_models
+from vs2_0_utils_compare_models import compare_cov_models_within
 
 
 def load_selected_datasets(config):
@@ -71,9 +71,11 @@ def main():
     parser.add_argument('--recompute', action='store_true')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
-    sys.path.extend([str(root.parent), str(root.parent/'LB')])
+    sys.path.extend([str(root.parent)])
     print(run(json.loads(args.config.read_text()), args.recompute))
 
 
 if __name__ == '__main__':
-    main()
+    from vs0_run_analysis import dispatch_managed
+    if not dispatch_managed():
+        main()

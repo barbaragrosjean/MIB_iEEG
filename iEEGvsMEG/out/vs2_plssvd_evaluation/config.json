@@ -1,0 +1,12 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs2_plssvd_evaluation/config.json",
+  "schema_version": 1,
+  "analysis": "vs2_plssvd_evaluation",
+  "pairings": "all",
+  "parameters": {
+    "components": [
+      100
+    ],
+    "n_iterations": null
+  }
+}

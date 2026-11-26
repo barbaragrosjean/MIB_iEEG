@@ -1,0 +1,41 @@
+{
+  "command": "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs3_radius_search/config.json",
+  "schema_version": 1,
+  "analysis": "vs3_radius_search",
+  "pairings": "all",
+  "parameters": {
+    "metric": "quadratic",
+    "n_components": 2,
+    "spatial_scope": "within_subject",
+    "fold_hemispheres": true,
+    "target_hemisphere": "left",
+    "max_peaks": null,
+    "min_points": 6,
+    "min_peaks": 3,
+    "min_valid_fraction": 0.8,
+    "fit_radii": [
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100
+    ],
+    "neighborhood_radii": [
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100
+    ]
+  }
+}

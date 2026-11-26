@@ -10,11 +10,11 @@ import shlex
 import sys
 from datetime import datetime, timezone
 import numpy as np
-from vs1_coverage_matching_utils import (
+from vs1_utils_coverage_matching import (
     SETUP_NAMES, load_dataset, fit_block_pca, PCAResult,
 )
 
-from vs1_elect_number_effect import CHANNEL_SWEEP_SCHEMA_VERSION
+from vs1_utils_elect_number_effect import CHANNEL_SWEEP_SCHEMA_VERSION
 
 SCHEMA_VERSION = 1
 
@@ -42,6 +42,8 @@ def load_datasets(config):
 
 
 def analysis_directory(config, analysis):
+    if config.get('_managed_output'):
+        return Path(config['_managed_output'])
     payload = _run_config(config, analysis)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
     return Path(config['output_dir']) / analysis / digest
@@ -77,9 +79,9 @@ def load_pca_results(directory, datasets):
 
 
 def run_analysis(config, analysis, datasets, recompute=False):
-    from vs1_coverage_information import compare_meg_information, save_information
-    from vs1_elect_number_effect import run_elect_number_effect
-    from vs1_coverage_stability import run_pairing_stability
+    from vs1_utils_coverage_information import compare_meg_information, save_information
+    from vs1_utils_elect_number_effect import run_elect_number_effect
+    from vs1_utils_coverage_stability import run_pairing_stability
     out = analysis_directory(config, analysis)
     if (out / 'RUN_COMPLETE.json').exists() and not recompute:
         print(f'Already complete: {out}', flush=True)
@@ -123,11 +125,13 @@ def main():
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     root = Path(__file__).resolve().parent
-    sys.path.extend([str(root.parent), str(root.parent / 'LB')])
+    sys.path.extend([str(root.parent)])
     datasets = load_datasets(config)
     for analysis in (['manipulations', 'channels', 'pca', 'stability'] if args.analysis == 'all' else [args.analysis]):
         run_analysis(config, analysis, datasets, args.recompute)
 
 
 if __name__ == '__main__':
-    main()
+    from vs0_run_analysis import dispatch_managed
+    if not dispatch_managed():
+        main()
