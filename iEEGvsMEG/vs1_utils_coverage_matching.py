@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 from scipy.linalg import eigh
 from scipy.optimize import linear_sum_assignment
-from scipy.spatial import cKDTree
 import vs0_utils_load_and_config as shared_data
 
 # Existing sections may continue importing these shared helpers here.
@@ -73,10 +72,11 @@ def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_position
     Full concatenation is a list of participant blocks.
     Group coverage is one nearest-source feature per pooled iEEG electrode,
     selected separately in EVERY MEG participant, then participant-averaged.
-    Pairing uses all available MEG subjects as the sampling pool, without
-    replacement. The control keeps that pairing and randomises source locations.
-    By default it also preserves matched-source duplication multiplicities.
+    Participant associations, anatomical indices, coverage indices, and control
+    indices are read from the saved pairing CSV. No matching is performed here.
     """
+    if not random_preserve_duplicates:
+        raise ValueError('Control mappings are fixed in the CSV; regenerate them rather than changing construction options.')
     requested = set(SETUP_NAMES if kinds is None else kinds)
     if not requested or not requested <= set(SETUP_NAMES):
         raise ValueError(f'Unknown MEG setup: {requested - set(SETUP_NAMES)}')
@@ -100,27 +100,19 @@ def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_position
     # Average existing source rows directly; no coordinate alignment or reordering.
     if len(subjects) > len(meg_subjects):
         raise ValueError('Not enough MEG participants for one-to-one pairing; supply a justified alternative upstream.')
-    pair_rng, control_rng = [np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(2)]
-    from vs0_utils_pairing import fixed_mapping, explicit_source_indices
+    from vs0_utils_pairing import fixed_mapping, saved_source_maps
     fixed = fixed_mapping(subjects, meg_subjects)
-    if fixed is not None:
-        if pairing is not None and pairing != fixed:
-            raise ValueError('Internal pairing conflicts with explicit outer pairing.')
-        pairing = fixed
-    if pairing is None:
-        pairing = dict(zip(subjects, pair_rng.choice(meg_subjects, len(subjects), replace=False)))
-    pairing = {str(k): str(v) for k, v in pairing.items()}
-    if set(pairing) != set(subjects) or not set(pairing.values()) <= set(meg_subjects):
-        raise ValueError('Pairing must map every iEEG subject to an existing MEG subject.')
-    if len(set(pairing.values())) != len(pairing):
-        raise ValueError('Pairing must be one-to-one.')
+    if fixed is None:
+        raise ValueError('An explicit CSV pairing is required; participant associations are never generated during analysis.')
+    if pairing is not None and pairing != fixed:
+        raise ValueError('Internal pairing conflicts with saved CSV.')
+    pairing = fixed
     lookup = {s: i for i, s in enumerate(meg_subjects)}
     n = len(coords)
-    nearest, distances = [], []
-    for pos in meg_positions:
-        ix, d = shared_data.match_sources(coords, pos, seed=seed)
-        nearest.append(ix)
-        distances.append(d)
+    need_coverage=bool(requested.intersection({'full_average','coverage_average'}))
+    saved_rows,nearest=saved_source_maps(subjects,owners,coords,meg_subjects,meg_positions,need_coverage=need_coverage)
+    distances=[np.where(ix>=0,np.linalg.norm(np.asarray(pos)[np.maximum(ix,0)]-coords,axis=1),np.nan)
+               for pos,ix in zip(meg_positions,nearest)]
     working_dtype = np.result_type(np.float32, *[a.dtype for a in meg])
     matched_shape = (shape[0], n, shape[2])
     avg = np.zeros(shape, dtype=working_dtype) if 'full_average' in requested else None
@@ -142,18 +134,13 @@ def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_position
     for subject in subjects:
         rows = np.flatnonzero(owners == subject)
         j = lookup[pairing[subject]]
-        explicit = explicit_source_indices(subject, len(rows), meg_positions[j], coords[rows])
-        if explicit is not None:
-            nearest[j][rows] = explicit
-            distances[j][rows] = np.linalg.norm(meg_positions[j][explicit] - coords[rows], axis=1)
         ix = nearest[j][rows]
-        if random_preserve_duplicates:
-            unique, inverse = np.unique(ix, return_inverse=True)
-            rx = control_rng.choice(meg[j].shape[1], len(unique), replace=False)[inverse]
-        else:
-            if len(rows) > meg[j].shape[1]:
-                raise ValueError('More electrodes than available random sources.')
-            rx = control_rng.choice(meg[j].shape[1], len(rows), replace=False)
+        controls=saved_rows.iloc[rows].random_source_index.to_numpy(float)
+        if not np.isfinite(controls).all() or not np.equal(controls,np.floor(controls)).all():
+            raise ValueError('Saved control source indices must be finite integers.')
+        rx=controls.astype(int)
+        if np.any(rx<0) or np.any(rx>=meg[j].shape[1]):
+            raise ValueError('Saved control source index outside recording.')
         if paired is not None:
             paired[:, rows, :] = np.take(meg[j], ix, axis=1)
         if control is not None:
@@ -170,7 +157,7 @@ def construct_five_datasets(meg, meg_positions, meg_subjects, electrode_position
                               random_distance_mm=float(np.linalg.norm(meg_positions[j][random_source] - coords[row]))))
     full_meta = (pd.concat([_metadata(p, s) for p, s in zip(meg_positions, meg_subjects)], ignore_index=True)
                  if 'full_concatenated' in requested else None)
-    group_pos = np.mean([p[ix] for p, ix in zip(meg_positions, nearest)], axis=0)
+    group_pos = np.mean([p[ix] for p, ix in zip(meg_positions, nearest)], axis=0) if 'coverage_average' in requested else None
     builders = {
         'full_average': lambda: Dataset('full_average', [avg], _metadata(meg_positions[0], 'participant_average'), nearest[0], condition_mode),
         'full_concatenated': lambda: Dataset('full_concatenated', meg, full_meta, full_map, condition_mode),

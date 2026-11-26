@@ -12,11 +12,11 @@ Edit `out/vs0_pairs/config.json`, including the cluster input paths, then run:
 python -u iEEGvsMEG/vs0_run_create_pairs.py --config iEEGvsMEG/out/vs0_pairs/config.json
 ```
 
-This creates 44 CSV files: demographic and electrode/source tables for `match`, `order`, and `random_001` through `random_020`. iEEG participants remain fixed. Each pairing samples distinct MEG participants; participants may recur across different pairings. Demographic matching follows the notebook's greedy standardized-age/sex cost, with no instrument term. Equal-distance source ties are seeded and saved explicitly.
+This creates 44 CSV files: demographic and electrode/source tables for `match`, `order`, and `random_001` through `random_020`. iEEG participants remain fixed. Each pairing samples distinct MEG participants; participants may recur across different pairings. Demographic matching follows the notebook's greedy standardized-age/sex cost, with no instrument term. Equal-distance source ties are seeded and saved explicitly. Each electrode CSV also stores `coverage_source_indices` (a JSON dictionary of source indices for every MEG participant selected in that pairing) and `random_source_index` for the control. These are resolved only by pair creation; analyses never regenerate participant associations or nearest-source matches.
 
 MEG eligibility requires accuracy >=0.5 separately in old and new conditions, using actual condition-specific trial denominators, and >=24 trials across those conditions. Missing/invalid responses count as incorrect. Available behavioral Blocks 3–6 are combined within each condition. Missing age, sex, behavior, or required recording/metadata files excludes the participant. The iEEG demographic roster is already behaviorally screened. The selection audit records exclusions.
 
-Existing pairing files are protected; deliberate regeneration requires `--overwrite`. Regenerating pairings invalidates analyses referencing changed CSVs.
+Electrode CSVs generated before `coverage_source_indices` and `random_source_index` were added must be regenerated once with `--overwrite`; incomplete correspondence now raises an error instead of triggering rematching. Existing pairing files are protected; deliberate regeneration requires `--overwrite`. Regenerating pairings invalidates analyses referencing changed CSVs.
 
 ## 2. Review configurations and the run plan
 
@@ -60,7 +60,7 @@ Each result lives in `out/<analysis>/<pairing>/`, with a manifest recording its 
 
 PLSSVD fits, evaluation, PCA comparison, permutation comparison, and selection outputs reside in their respective analysis folders. Fit variants (baseline and nulls), trial iterations, and folds remain nested below their outer participant pairing.
 
-Within each outer pairing, participant correspondence stays fixed through trial folds. `vs3_weight_stability` defaults to trial-only repetitions; participant-association variation is represented by the 20 outer random pairings. `vs3_pairing_weights` uses one fixed-half-trial fit per outer pairing, avoiding repeated identical association fits. SD across associations is undefined within a single pairing; cross-pair summaries should use the outer random results. The dedicated `vs1_stability` analysis retains its original within-selected-cohort assignment perturbations around each explicit baseline pairing.
+Within each outer pairing, participant correspondence stays fixed through trial folds. `vs3_weight_stability` defaults to trial-only repetitions; participant-association variation is represented by the 20 outer random pairings. `vs3_pairing_weights` uses one fixed-half-trial fit per outer pairing, avoiding repeated identical association fits. SD across associations is undefined within a single pairing; cross-pair summaries should use the outer random results. The dedicated `vs1_stability` analysis compares each explicit baseline against the random pairing CSVs listed in its `comparison_pairings` configuration. It excludes the baseline itself when it is in that list. It does not generate further permutations. Spatial comparisons with a baseline full-concatenated PCA are omitted when a comparison pairing contains MEG participants absent from that baseline; time-course comparisons remain available.
 
 Canonical modality-specificity results use CSV tables, compressed numerical arrays, and `result_index.json`, without a duplicate pickle copy. Existing legacy completion/configuration records may remain inside result subdirectories for compatibility; only the analysis-root `config.json` is editable.
 
@@ -70,4 +70,4 @@ Select `PAIRING_ID` in each notebook header. Header/loading cells display the sa
 
 ## Validation
 
-`tests/test_pairing_workflow.py` uses synthetic recordings and local atlas-label stubs. It exercises all analysis types, nearest-source ties, unequal behavioral denominators, explicit participant/source correspondence, PLSSVD output routing, and actual PCA runs for all 22 pairings. Full cluster validation still requires the real inputs. Packages include NumPy, pandas, SciPy, scikit-learn, Matplotlib, nilearn, nibabel, openpyxl, and mat73 for MATLAB v7.3 files.
+`tests/test_pairing_workflow.py` uses synthetic recordings and local atlas-label stubs. It exercises all analysis types, nearest-source ties, unequal behavioral denominators, explicit participant/source correspondence, analysis execution with nearest-source matching disabled, saved-association stability comparisons, PLSSVD output routing, and actual PCA runs for all 22 pairings. Full cluster validation still requires the real inputs. Packages include NumPy, pandas, SciPy, scikit-learn, Matplotlib, nilearn, nibabel, openpyxl, and mat73 for MATLAB v7.3 files.

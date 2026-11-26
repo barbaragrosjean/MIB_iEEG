@@ -108,8 +108,21 @@ def run_analysis(config, analysis, datasets, recompute=False):
                 explained_variance=result.explained_variance,
                 explained_variance_ratio=result.explained_variance_ratio, total_variance=result.total_variance)
     elif analysis == 'stability':
-        run_pairing_stability(datasets['iEEG'], repeats=config['stability_repeats'],
-            n_components=k, seed=config['seed'], baseline_pairing=datasets['paired_coverage'].pairing,
+        from vs0_utils_pairing import pairing_context, active_pairing_id, PAIRING_IDS
+        if not config.get('_managed_output'):
+            raise ValueError('Use the managed stability config to compare saved CSV pairings.')
+        root=Path(config['_managed_output']).parent.parent
+        baseline_id=active_pairing_id()
+        names=config.get('comparison_pairings',[name for name in PAIRING_IDS if name.startswith('random_')])
+        if not set(names)<=set(PAIRING_IDS):raise ValueError('Unknown saved comparison pairing.')
+        def alternatives():
+            for name in names:
+                if name==baseline_id:continue
+                with pairing_context(root/'vs0_pairs',name):
+                    selected=load_datasets(config)
+                yield name,selected
+        run_pairing_stability(datasets['iEEG'], n_components=k, seed=config['seed'],
+            baseline_datasets=datasets,saved_alternatives=alternatives(),
             output_dir=out, max_gram_gib=memory)
     else:
         raise ValueError(f'Unknown analysis: {analysis}')

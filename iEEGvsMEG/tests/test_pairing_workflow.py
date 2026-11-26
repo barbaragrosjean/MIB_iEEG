@@ -50,7 +50,7 @@ class WorkflowTests(unittest.TestCase):
             if name=='vs1_construct':p['data'].update(ieeg_dir=str(ieeg),meg_dir=str(meg),project_path=str(project));p['export_trials']=True
             if 'n_components' in p:p['n_components']=2
             if name=='vs1_channels':p.update(channel_step=2,channel_repeats=2)
-            if name=='vs1_stability':p['stability_repeats']=2
+            if name=='vs1_stability':p['comparison_pairings']=['random_001','random_002']
             if name=='vs2_plssvd_fit':p['options'].update(n_components=2,repeats=2,n_iterations=2)
             if name in ('vs2_plssvd_evaluation','vs2_plssvd_permutation'):p['components']=[2]
             if name=='vs2_plssvd_pca':p['components']=2
@@ -64,9 +64,12 @@ class WorkflowTests(unittest.TestCase):
             (folder/'config.json').write_text(json.dumps(cfg,indent=2))
         with patch('vs0_utils_region_labels.get_region_label',side_effect=lambda f:['HPC']*len(f)):
             create_pairs(cls.out/'vs0_pairs/config.json')
+        cls.no_rematching=patch('vs0_utils_load_and_config.match_sources',side_effect=AssertionError('Analyses must use saved CSV source indices.'))
+        cls.no_rematching.start()
 
     @classmethod
-    def tearDownClass(cls):cls.temporary.cleanup()
+    def tearDownClass(cls):
+        cls.no_rematching.stop();cls.temporary.cleanup()
 
     def test_01_pairs(self):
         files=list((self.out/'vs0_pairs').glob('*_pairing_*.csv'));self.assertEqual(len(files),44)
@@ -105,6 +108,10 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(pairs,dict(zip(dem.ieeg_subject,dem.meg_subject)))
                 elect=pd.read_csv(pairing_paths(self.out/'vs0_pairs',name)[1])
                 np.testing.assert_array_equal(audit.source_index,elect.source_index)
+                np.testing.assert_array_equal(audit.random_source_index,elect.random_source_index)
+                _,other,_=construct_five_datasets(source['meg'],source['meg_positions'],source['meg_subjects'],source['electrode_positions'],source['electrode_subjects'],seed=999)
+                np.testing.assert_array_equal(other.source_index,audit.source_index)
+                np.testing.assert_array_equal(other.random_source_index,audit.random_source_index)
 
     def test_05_all_plans(self):
         outputs=set()
@@ -223,6 +230,47 @@ class WorkflowTests(unittest.TestCase):
         ignored=audit.loc[audit.reason.eq('duplicate_demographic_row_keep_first')]
         self.assertEqual(len(ignored),1)
         self.assertFalse(ignored.iloc[0].eligible)
+
+
+    def test_15_saved_correspondence_required(self):
+        from vs1_utils_coverage_matching import construct_five_datasets
+        with self.assertRaisesRegex(ValueError,'explicit CSV pairing'):
+            construct_five_datasets([np.ones((2,2,4))],[np.zeros((2,3))],['M'],np.zeros((1,3)),['I'])
+        assignments=pd.read_csv(self.out/'vs1_stability/match/assignments.csv')
+        self.assertEqual(set(assignments.pairing_id),{'match','random_001','random_002'})
+        for name,rows in assignments.groupby('pairing_id'):
+            dem=pd.read_csv(pairing_paths(self.out/'vs0_pairs',name)[0])
+            self.assertEqual(dict(zip(rows.ieeg_subject,rows.meg_subject)),dict(zip(dem.ieeg_subject,dem.meg_subject)))
+
+
+    def test_16_csv_indices_are_authoritative_and_missing_fields_fail(self):
+        import shutil
+        from vs1_utils_coverage_matching import construct_five_datasets
+        folder=self.base/'authoritative';folder.mkdir()
+        for source in pairing_paths(self.out/'vs0_pairs','match'):shutil.copy2(source,folder/source.name)
+        elect_path=pairing_paths(folder,'match')[1]
+        elect=pd.read_csv(elect_path)
+        subject=elect.loc[0,'meg_subject']
+        original=int(elect.loc[0,'source_index'])
+        replacement=(original+1)%3
+        elect.loc[0,'source_index']=replacement
+        elect.loc[0,'meg_x']=10.*(replacement+1)
+        elect.loc[0,'distance_mm']=abs(elect.loc[0,'meg_x']-elect.loc[0,'ieeg_x'])
+        coverage=json.loads(elect.loc[0,'coverage_source_indices']);coverage[subject]=replacement
+        elect.loc[0,'coverage_source_indices']=json.dumps(coverage)
+        elect.to_csv(elect_path,index=False)
+        cfg=read_config(self.out/'vs1_construct/config.json')['parameters']['data']
+        with pairing_context(folder,'match'):
+            source=load_project_data(**cfg)
+            args=(source['meg'],source['meg_positions'],source['meg_subjects'],source['electrode_positions'],source['electrode_subjects'])
+            datasets,audit,_=construct_five_datasets(*args)
+            self.assertEqual(audit.iloc[0].source_index,replacement)
+            j=source['meg_subjects'].index(subject)
+            np.testing.assert_array_equal(datasets['paired_coverage'].arrays[0][:,0,:],source['meg'][j][:,replacement,:])
+        elect.drop(columns=['coverage_source_indices']).to_csv(elect_path,index=False)
+        with pairing_context(folder,'match'):
+            with self.assertRaisesRegex(ValueError,'lacks coverage indices'):
+                construct_five_datasets(*args)
 
 
 if __name__=='__main__':unittest.main()

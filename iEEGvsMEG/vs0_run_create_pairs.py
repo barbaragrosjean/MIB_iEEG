@@ -63,6 +63,7 @@ def create_pairs(config_path, *, overwrite=False):
         selections[f'random_{i:03d}'] = np.random.default_rng(rngs[i-1]).choice(len(meg), len(ieeg), replace=False)
     # Build everything before replacing files, so invalid input cannot publish partial pairs.
     outputs = []
+    coverage_cache = {}
     for pairing_id in PAIRING_IDS:
         dem = pd.concat([ieeg.add_prefix('ieeg_'), meg.iloc[selections[pairing_id]].reset_index(drop=True).add_prefix('meg_')], axis=1)
         dem['pairing_id'] = pairing_id
@@ -80,6 +81,21 @@ def create_pairs(config_path, *, overwrite=False):
             frame['meg_roi'] = np.asarray(labels[row.meg_subject])[indices]
             frame['distance_mm'] = distances
             frame['pairing_id'] = pairing_id
+            # Resolve every mapping needed by downstream constructions HERE only.
+            coverage = []
+            for meg_subject in dem.meg_subject:
+                key=(row.ieeg_subject,meg_subject)
+                if key not in coverage_cache:
+                    coverage_seed=int.from_bytes(hashlib.sha256(f"{p['seed']}:coverage:{key}".encode()).digest()[:8],'little')
+                    coverage_cache[key]=match_sources(frame[['ieeg_x','ieeg_y','ieeg_z']],positions[meg_subject],seed=coverage_seed)[0]
+                values=indices if meg_subject==row.meg_subject else coverage_cache[key]
+                coverage.append((meg_subject,values))
+            frame['coverage_source_indices']=[json.dumps({subject:int(values[i]) for subject,values in coverage},sort_keys=True) for i in range(len(frame))]
+            control_seed=int.from_bytes(hashlib.sha256(f"{p['seed']}:control:{pairing_id}:{row.ieeg_subject}".encode()).digest()[:8],'little')
+            unique,inverse=np.unique(indices,return_inverse=True)
+            control=np.random.default_rng(control_seed).choice(len(positions[row.meg_subject]),len(unique),replace=False)[inverse]
+            frame['random_source_index']=control
+            frame['random_distance_mm']=np.linalg.norm(positions[row.meg_subject][control]-frame[['ieeg_x','ieeg_y','ieeg_z']].to_numpy(),axis=1)
             frames.append(frame)
         outputs.append((pairing_id, dem, pd.concat(frames, ignore_index=True)))
     for pairing_id, dem, elect in outputs:

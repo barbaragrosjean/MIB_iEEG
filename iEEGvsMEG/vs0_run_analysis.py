@@ -109,6 +109,9 @@ def source_inputs(out_root, analysis, pairing):
     p=dict(parameters(out_root,'vs0_pairs'),**{k:v for k,v in data_options(out_root).items() if k in ('ieeg_dir','meg_dir','project_path')});dem,elect=pairing_paths(Path(out_root)/'vs0_pairs',pairing)
     import pandas as pd
     pairs=pd.read_csv(dem,dtype=str)
+    if analysis=='vs1_stability':
+        names=parameters(out_root,analysis).get('comparison_pairings',[name for name in PAIRING_IDS if name.startswith('random_')])
+        pairs=pd.concat([pairs,*[pd.read_csv(pairing_paths(Path(out_root)/'vs0_pairs',name)[0],dtype=str) for name in names]],ignore_index=True).drop_duplicates(['ieeg_subject','meg_subject'])
     paths=[Path(p['ieeg_dem_csv']),Path(p['meg_dem_xlsx'])]
     for subject in pairs.ieeg_subject:
         paths += [Path(p['ieeg_dir'])/f'{subject}{suffix}' for suffix in ('_epochs.p','_info.json','_coords.csv')]
@@ -139,6 +142,10 @@ def signature(out_root, analysis, pairing):
     for name,expected in pair_manifest['inputs'].items():
         if digest_file(name)!=expected:raise ValueError(f'Eligibility input changed: {name}; regenerate pairs.')
     pairs={p.name:digest_file(p) for p in pairing_paths(pair_root,pairing)}
+    if analysis=='vs1_stability':
+        names=parameters(out_root,analysis).get('comparison_pairings',[name for name in PAIRING_IDS if name.startswith('random_')])
+        for name in names:
+            for source in pairing_paths(pair_root,name):pairs[source.name]=digest_file(source)
     if any(pair_manifest['outputs'].get(name)!=value for name,value in pairs.items()):
         raise ValueError('Pairing CSV changed after publication; regenerate pairs explicitly.')
     parents={name:digest_file(output_path(out_root,name,pairing)/'manifest.json') for name in required_analyses(analysis)}

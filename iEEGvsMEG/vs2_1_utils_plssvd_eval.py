@@ -469,10 +469,12 @@ def _raw_weights(trials,fold,model,scalers,audit,kind,modality,k):
     elif kind=='full_average':
         for s in subjects:out[s.subject][:]=weights/len(subjects)
     elif kind=='coverage_average':
-        from scipy.spatial import cKDTree
+        from vs0_utils_pairing import saved_source_maps
         coords=np.concatenate([s.positions for s in trials.ieeg])
-        for s in subjects:
-            ix=cKDTree(s.positions).query(coords)[1];np.add.at(out[s.subject],ix,weights/len(subjects))
+        owners=np.concatenate([np.repeat(s.subject,len(s.positions)) for s in trials.ieeg])
+        _,indices=saved_source_maps([s.subject for s in trials.ieeg],owners,coords,
+                                   [s.subject for s in subjects],[s.positions for s in subjects],need_coverage=True)
+        for s,ix in zip(subjects,indices):np.add.at(out[s.subject],ix,weights/len(subjects))
     else:
         column='random_source_index' if kind=='random_control' else 'source_index'
         for subject,rows in audit.groupby('meg_subject',sort=False):

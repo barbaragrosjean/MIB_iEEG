@@ -1,4 +1,4 @@
-"""Fixed-cohort random-assignment stability of PCA time courses and weights.
+"""Stability of PCA time courses and weights across saved CSV associations.
 
 All reported metrics are mean absolute Pearson correlations after one-to-one
 component assignment. Domains are matched independently; weight rows retain iEEG electrode order.
@@ -9,7 +9,6 @@ import json
 import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
-from scipy.spatial import cKDTree
 from vs1_utils_coverage_matching import Dataset, fit_block_pca, normalize_dataset
 
 
@@ -100,105 +99,77 @@ def load_stability_results(output_dir, expected_experiment=None):
     return result
 
 
-def run_pairing_stability(reference, *, n_subjects=None, repeats=20, n_components=3, seed=2026,
-                          baseline_pairing=None, max_gram_gib=2., output_dir=None):
-    """Freeze participant identities/counts, vary only MEG-to-iEEG assignment.
+def run_pairing_stability(reference, *, n_subjects=None, repeats=None, n_components=3, seed=2026,
+                          baseline_pairing=None, max_gram_gib=2., output_dir=None,
+                          baseline_datasets=None, saved_alternatives=None):
+    """Compare an explicit baseline with saved CSV associations; never rematch.
 
-    A single random source-index permutation PER MEG SUBJECT is fixed across all
-    assignments. Applying it to the anatomical indices creates the random control,
-    preserving source duplication without drawing fresh random locations per run.
-    The original/baseline assignment is compared with the randomized assignments;
-    their distribution measures dependence on pairing, not biological identity.
+    saved_alternatives yields (pairing_id, constructed datasets). All datasets
+    must already contain the fixed iEEG electrode slots and their CSV sources.
     """
-    k = _integer(n_components, 'n_components'); repeats = _integer(repeats, 'repeats', 2)
-    s, owners, ieeg_ids, meg_ids = _context(reference)
-    roster_seq, assignment_seq, control_seq = np.random.SeedSequence(seed).spawn(3)
-    rng = np.random.default_rng(roster_seq)
-    if baseline_pairing is not None:
-        baseline = {str(a): str(b) for a, b in baseline_pairing.items()}
-        count = len(baseline)
-        if not count or not set(baseline) <= set(ieeg_ids) or not set(baseline.values()) <= set(meg_ids) or len(set(baseline.values())) != count:
-            raise ValueError('baseline_pairing must contain valid, distinct participants.')
-        if n_subjects is not None and _integer(n_subjects, 'n_subjects') != count:
-            raise ValueError('n_subjects must agree with baseline_pairing.')
-        fixed_ieeg = [v for v in ieeg_ids if v in baseline]
-        fixed_meg = [v for v in meg_ids if v in baseline.values()]
-    else:
-        count = min(len(ieeg_ids), len(meg_ids)) if n_subjects is None else _integer(n_subjects, 'n_subjects')
-        if count > min(len(ieeg_ids), len(meg_ids)): raise ValueError('Fixed cohort exceeds available participants.')
-        fixed_ieeg = [ieeg_ids[i] for i in sorted(rng.choice(len(ieeg_ids), count, replace=False))]
-        fixed_meg = [meg_ids[i] for i in sorted(rng.choice(len(meg_ids), count, replace=False))]
-        baseline = dict(zip(fixed_ieeg, rng.permutation(fixed_meg).tolist()))
-    if count < 2: raise ValueError('Pairing sensitivity requires at least two subjects per modality.')
-    anchor_dataset, electrode_rows = _ieeg_dataset(reference, fixed_ieeg)
-    config = dict(experiment='pairing', n_subjects=count, repeats=repeats, n_components=k, seed=int(seed),
-        ieeg_subjects=fixed_ieeg, meg_subjects=fixed_meg, baseline_pairing=baseline,
-        condition_mode=reference.condition_mode, metric='one-to-one matched mean absolute Pearson r',
-        random_control='one fixed source-index permutation per MEG participant; no new source draws per assignment',
-        block_scaling=reference.block_scaling, weight_correspondence='fixed iEEG electrode slots',
-        preprocessing=s.get('load_config', {}), scope='fixed-cohort assignment sensitivity, not validation of subject identity')
-    out = _open_output(output_dir, config)
-    normalize_dataset(anchor_dataset, reference.block_scaling)
-    anchor_fit = fit_block_pca(anchor_dataset, k, max_gram_gib=max_gram_gib)
-    anchor = {'timecourses': anchor_fit.scores, 'weights': anchor_fit.weights}
-    saved = {f'fixed_ieeg_{key}': value for key, value in anchor.items()}
-    indices = {v: meg_ids.index(v) for v in fixed_meg}
-    nearest = {v: cKDTree(s['meg_positions'][indices[v]]).query(s['electrode_positions'][electrode_rows])[1] for v in fixed_meg}
-    control_rng = np.random.default_rng(control_seq)
-    permutations = {v: control_rng.permutation(s['meg'][indices[v]].shape[1]) for v in fixed_meg}
+    from vs0_utils_pairing import active_pairing_id
+    if baseline_datasets is None or saved_alternatives is None:
+        raise ValueError('Stability requires constructed datasets from saved CSV pairings; use the managed runner.')
+    k=_integer(n_components,'n_components')
+    s,owners,ieeg_ids,meg_ids=_context(reference)
+    if n_subjects is not None and n_subjects!=len(ieeg_ids):
+        raise ValueError('Stability retains the full fixed iEEG cohort.')
+    config=dict(experiment='pairing',n_subjects=len(ieeg_ids),n_components=k,seed=int(seed),
+        baseline_pairing=baseline_datasets['paired_coverage'].pairing,baseline_id=active_pairing_id(),
+        condition_mode=reference.condition_mode,block_scaling=reference.block_scaling,
+        scope='Sensitivity across saved participant associations; no new associations or source matches',
+        preprocessing=s.get('load_config',{}))
+    out=_open_output(output_dir,config)
+    anchor_fit=fit_block_pca(reference,k,max_gram_gib=max_gram_gib)
+    anchor={'timecourses':anchor_fit.scores,'weights':anchor_fit.weights}
+    saved={f'fixed_ieeg_{key}':value for key,value in anchor.items()}
+    metrics,pairs,participants,mappings,assignments=[],[],[],[],[]
+    baseline_scores={};resampled={name:[] for name in ('paired_coverage','random_control')}
+    comparison_ids=[]
+    def runs():
+        yield -1,config['baseline_id'],baseline_datasets
+        for repeat,(name,datasets) in enumerate(saved_alternatives):
+            comparison_ids.append(name)
+            yield repeat,name,datasets
+    for repeat,pairing_id,datasets in runs():
+        current=datasets['iEEG']
+        if not current.metadata[['subject','channel_index']].reset_index(drop=True).equals(reference.metadata[['subject','channel_index']].reset_index(drop=True)):
+            raise ValueError('Saved associations must retain identical iEEG electrode rows.')
+        pairing=datasets['paired_coverage'].pairing
+        assignments.extend(dict(repeat=repeat,pairing_id=pairing_id,ieeg_subject=a,meg_subject=b) for a,b in pairing.items())
+        participants.extend(dict(repeat=repeat,pairing_id=pairing_id,modality=m,subject=v)
+                            for m,roster in [('ieeg',list(pairing)),('meg',list(pairing.values()))] for v in roster)
+        audit=datasets['paired_coverage'].matching
+        for row in audit.to_dict('records'):mappings.append(dict(row,repeat=repeat,pairing_id=pairing_id))
+        for kind in resampled:
+            ds=datasets[kind]
+            fitted=fit_block_pca(ds,k,max_gram_gib=max_gram_gib)
+            values={'timecourses':fitted.scores,'weights':fitted.weights}
+            labels=dict(modality='meg',dataset=kind,n_subjects=len(pairing),n_features=ds.n_features,repeat=repeat,repeat_other=-1)
+            for domain,value in values.items():
+                saved[f'{kind}_r{repeat}_{domain}']=value
+                _record(metrics,pairs,value,anchor[domain],k,**labels,domain=domain,
+                        comparison='cross_modal',reference_dataset='fixed_iEEG')
+                if repeat>=0:
+                    _record(metrics,pairs,value,baseline_scores[kind][domain],k,**labels,domain=domain,
+                            comparison='to_baseline_pairing',reference_dataset=kind)
+            if repeat==-1:baseline_scores[kind]=values
+            else:resampled[kind].append(values)
+    config.update(repeats=len(comparison_ids),comparison_pairings=comparison_ids)
+    for kind,values in resampled.items():
+        for a,b in combinations(range(len(values)),2):
+            for domain in ('timecourses','weights'):
+                _record(metrics,pairs,values[a][domain],values[b][domain],k,modality='meg',dataset=kind,
+                        n_subjects=len(ieeg_ids),n_features=reference.n_features,repeat=a,repeat_other=b,
+                        domain=domain,comparison='between_pairings',reference_dataset=kind)
+    cross=pd.DataFrame(metrics).query("comparison == 'cross_modal'")
+    differences=cross.pivot(index=['domain','repeat'],columns='dataset',values='correlation')
+    differences['paired_minus_control']=differences.paired_coverage-differences.random_control
     if out is not None:
-        np.savez_compressed(out/'control_source_permutations.npz', **{f'subject_{i}': permutations[v] for i, v in enumerate(fixed_meg)})
-        s['electrode_metadata'].iloc[electrode_rows].to_csv(out/'ieeg_features.csv', index=False)
-    metrics, pairs, participants, mappings, assignments = [], [], [], [], []
-    for m, roster in [('ieeg', fixed_ieeg), ('meg', fixed_meg)]:
-        participants.extend(dict(modality=m, subject=v) for v in roster)
-    baseline_scores, resampled = {}, {v: [] for v in ('paired_coverage', 'random_control')}
-    rng = np.random.default_rng(assignment_seq)
-    for repeat in range(-1, repeats):
-        pairing = baseline if repeat == -1 else dict(zip(fixed_ieeg, rng.permutation(fixed_meg).tolist()))
-        assignments.extend(dict(repeat=repeat, ieeg_subject=a, meg_subject=b) for a, b in pairing.items())
-        shape = (s['ieeg'].shape[0], len(electrode_rows), s['ieeg'].shape[-1])
-        arrays = {kind: np.empty(shape, dtype=float) for kind in resampled}
-        for ieeg_id, meg_id in pairing.items():
-            rows = np.flatnonzero(owners[electrode_rows] == ieeg_id)
-            ix = nearest[meg_id][rows]; rx = permutations[meg_id][ix]
-            a = s['meg'][indices[meg_id]]
-            arrays['paired_coverage'][:, rows, :] = a[:, ix, :]
-            arrays['random_control'][:, rows, :] = a[:, rx, :]
-            mappings.extend(dict(repeat=repeat, electrode_index=int(electrode_rows[row]),
-                ieeg_subject=ieeg_id, meg_subject=meg_id, source_index=int(i), random_source_index=int(j))
-                for row, i, j in zip(rows, ix, rx))
-        for kind, a in arrays.items():
-            dataset = Dataset(kind, [a], pd.DataFrame(), None, reference.condition_mode, source_data=s)
-            normalize_dataset(dataset, reference.block_scaling)
-            fitted = fit_block_pca(dataset, k, max_gram_gib=max_gram_gib)
-            values = {'timecourses': fitted.scores, 'weights': fitted.weights}
-            labels = dict(modality='meg', dataset=kind, n_subjects=count, n_features=dataset.n_features,
-                          repeat=repeat, repeat_other=-1)
-            for domain, value in values.items():
-                saved[f'{kind}_r{repeat}_{domain}'] = value
-                _record(metrics, pairs, value, anchor[domain], k, **labels, domain=domain,
-                        comparison='cross_modal', reference_dataset='fixed_iEEG')
-                if repeat >= 0:
-                    _record(metrics, pairs, value, baseline_scores[kind][domain], k, **labels,
-                            domain=domain, comparison='to_baseline_pairing', reference_dataset=kind)
-            if repeat == -1: baseline_scores[kind] = values
-            else: resampled[kind].append(values)
-        if repeat >= 0: print(f'Pairing repetition {repeat+1}/{repeats}', flush=True)
-    for kind, values in resampled.items():
-        for a, b in combinations(range(repeats), 2):
-            for domain in ('timecourses', 'weights'):
-                _record(metrics, pairs, values[a][domain], values[b][domain], k, modality='meg', dataset=kind,
-                        n_subjects=count, n_features=len(electrode_rows), repeat=a, repeat_other=b,
-                        domain=domain, comparison='between_pairings', reference_dataset=kind)
-    cross = pd.DataFrame(metrics).query("comparison == 'cross_modal'")
-    differences = cross.pivot(index=['domain', 'repeat'], columns='dataset', values='correlation')
-    differences['paired_minus_control'] = differences.paired_coverage-differences.random_control
-    return _finish(out, config, metrics, pairs, participants, saved,
-                   assignments=pd.DataFrame(assignments), source_mapping=pd.DataFrame(mappings),
-                   paired_control_differences=differences.reset_index())
-
-
+        s['electrode_metadata'].to_csv(out/'ieeg_features.csv',index=False)
+        (out/'config.json').write_text(json.dumps(config,indent=2))
+    return _finish(out,config,metrics,pairs,participants,saved,assignments=pd.DataFrame(assignments),
+        source_mapping=pd.DataFrame(mappings),paired_control_differences=differences.reset_index())
 
 
 def compare_to_full_concatenated(stability, output_dir, full_pca):
@@ -219,7 +190,13 @@ def compare_to_full_concatenated(stability, output_dir, full_pca):
             mapping = mapping.sort_values('electrode_index')
             starts = mapping.meg_subject.astype(str).map(offsets)
             if starts.isna().any():
-                raise ValueError('A stability subject is missing from full_concatenated.')
+                # Different saved pairings may subsample different MEG participants.
+                # Temporal scores share time rows; spatial weights lack a valid map.
+                for name in ('paired_coverage','random_control'):
+                    _record(metrics,pairs,scores[f'{name}_r{repeat}_timecourses'],full_pca.scores,k,
+                            dataset=name,domain='timecourses',repeat=int(repeat),repeat_other=-1,
+                            comparison='to_full_concatenated',reference_dataset='full_concatenated')
+                continue
             for name, source_column in [('paired_coverage', 'source_index'),
                                         ('random_control', 'random_source_index')]:
                 indices = starts.to_numpy(dtype=int) + mapping[source_column].to_numpy(dtype=int)

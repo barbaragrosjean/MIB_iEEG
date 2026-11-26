@@ -127,3 +127,55 @@ def without_pairing():
     token = _CONTEXT.set(None)
     try: yield
     finally: _CONTEXT.reset(token)
+
+
+def saved_source_maps(subjects, owners, electrode_positions, meg_subjects, meg_positions,
+                      *, need_coverage=False):
+    """Read authoritative CSV indices; never perform a spatial search."""
+    import numpy as np
+    import pandas as pd
+    frame=active_electrodes()
+    if frame is None:
+        raise ValueError('Load an explicit pairing CSV with pairing_context before constructing MEG datasets.')
+    ordered=[]
+    for subject in subjects:
+        rows=frame.loc[frame.ieeg_subject.eq(subject)].sort_values('channel_index')
+        selected=np.flatnonzero(np.asarray(owners)==subject)
+        if rows.channel_index.tolist()!=list(range(len(selected))):
+            raise ValueError(f'{subject}: saved correspondence does not cover every electrode.')
+        ordered.append(rows)
+    rows=pd.concat(ordered,ignore_index=True)
+    if not np.array_equal(rows.ieeg_subject.to_numpy(),owners):
+        raise ValueError('Saved electrode order differs from recording order.')
+    if not np.allclose(rows[['ieeg_x','ieeg_y','ieeg_z']],electrode_positions,atol=1e-6,rtol=0):
+        raise ValueError('Saved electrode coordinates differ from recordings.')
+    if 'random_source_index' not in rows:
+        raise ValueError('Electrode CSV lacks saved control indices. Regenerate vs0_pairs with --overwrite.')
+    coverage=None
+    if need_coverage:
+        if 'coverage_source_indices' not in rows:
+            raise ValueError('Electrode CSV lacks coverage indices. Regenerate vs0_pairs with --overwrite.')
+        coverage=[json.loads(v) for v in rows.coverage_source_indices]
+    nearest=[]
+    for subject,pos in zip(meg_subjects,meg_positions):
+        assigned=rows.meg_subject.eq(subject).to_numpy()
+        indices=np.full(len(rows),-1,dtype=int)
+        if coverage is not None:
+            for i,entry in enumerate(coverage):
+                if subject not in entry:raise ValueError(f'Missing saved coverage source for {subject}.')
+                value=entry[subject]
+                if not isinstance(value,int):raise ValueError('Source indices must be integers.')
+                indices[i]=value
+        saved=rows.loc[assigned,'source_index'].to_numpy(float)
+        if not np.isfinite(saved).all() or not np.equal(saved,np.floor(saved)).all():
+            raise ValueError('Assigned source indices must be finite integers.')
+        if coverage is not None and not np.array_equal(indices[assigned],saved.astype(int)):
+            raise ValueError('Assigned and coverage source indices disagree.')
+        indices[assigned]=saved.astype(int)
+        required=np.ones(len(rows),bool) if need_coverage else assigned
+        if np.any(indices[required]<0) or np.any(indices[required]>=len(pos)):
+            raise ValueError('Saved source index outside recording.')
+        if not np.allclose(rows.loc[assigned,['meg_x','meg_y','meg_z']],np.asarray(pos)[indices[assigned]],atol=1e-6,rtol=0):
+            raise ValueError('Saved MEG coordinates differ from recordings.')
+        nearest.append(indices)
+    return rows,nearest
