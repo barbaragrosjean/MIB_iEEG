@@ -1,6 +1,6 @@
 """Adapted from LB/LB5_decodingCluster.py mainTS and LB/src/decoding.py.
 
-submit_to_cluster -n 2 -q short.q "python vs4_1_run_decoding.py --pc_use 0 --model LR --meg-kind paired_coverage --iteration 20" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q short.q "python vs4_1_run_decoding.py --config out/vs4_decoding/config.json" --project MINDLAB2021_MEG-TempSeqAges
 
 Two condition pseudo-trial decoding, separately within MEG and iEEG.
 PC_use is zero-based. PCA or PLSSVD is fitted on training condition data only.
@@ -317,26 +317,75 @@ def mainTS(pc_use=0, model='LR', method_pls='mean', data_aug_method='mean',
                       model_name=model, crop_arg=crop_arg, method=method, **kwargs)
 
 
-if __name__ == '__main__' :
-    parser = argparse.ArgumentParser(description='Decode conditions using training-only MEG/iEEG PCA or PLSSVD.')
-    parser.add_argument('--method', type=str.upper, choices=['PCA', 'PLSSVD'], default='PLSSVD',
-                        help='Projection method (default: PLSSVD); PCA is fitted separately per modality.')
-    parser.add_argument('--band',default='broadband',help='Output band label; must match cache contents.')
-    parser.add_argument('--pc_use',type=int,default=0)
-    parser.add_argument('--model',choices=['LR','SVC_linear','SVC_rbf','RandomForest'],default='LR')
-    parser.add_argument('--method_pls',choices=['mean','concat'],default='mean',
-                        help='Condition representation for either method: average or stack conditions.')
-    parser.add_argument('--method_data_aug',choices=['mean','duplicat'],default='mean')
-    parser.add_argument('--iteration',type=int,default=100)
-    parser.add_argument('--iter_perm',type=int,default=50)
-    parser.add_argument('--n_tr',type=int,default=24)
-    parser.add_argument('--cache-dir',type=Path,default=CACHE_DIR)
-    parser.add_argument('--out-path',type=Path,default=OUT_PATH)
-    parser.add_argument('--meg-kind',default=MEG_KIND)
-    parser.add_argument('--block-scaling',choices=['none','equal_variance'],default=BLOCK_SCALING)
-    parser.add_argument('--seed',type=int,default=2026)
-    args = parser.parse_args()
-    mainTS(args.pc_use,args.model,args.method_pls,args.method_data_aug,
-        iteration=args.iteration,iter_perm=args.iter_perm,n_tr=args.n_tr,
-        cache_dir=args.cache_dir,out_path=args.out_path,meg_kind=args.meg_kind,
-        block_scaling=args.block_scaling,seed=args.seed,band=args.band,method=args.method)
+
+def run_configured_decoding(parameters, destination):
+    """Route an unchanged decoder through a validated saved-pairing context.
+
+    This wrapper controls input selection and output paths only. The numerical
+    mainTS/decodingTS implementation and its defaults are unchanged.
+    """
+    from vs0_utils_pairing import active_pairing_id, selected_cache_manifest
+    pairing_id = active_pairing_id()
+    if pairing_id is None:
+        raise ValueError('A saved pairing is required; run with the vs4_decoding config.')
+    allowed = {'pc_use', 'model', 'method_pls', 'data_aug_method', 'bs_decoding',
+               'method', 'iteration', 'iter_perm', 'n_tr', 'cache_dir', 'meg_kind',
+               'block_scaling', 'seed', 'classifier_params', 'band'}
+    unknown = set(parameters) - allowed
+    if unknown:
+        raise ValueError(f'Unknown decoding parameters: {sorted(unknown)}')
+    settings = dict(parameters)
+    required = {'pc_use', 'model', 'method', 'cache_dir'}
+    if not required <= settings.keys():
+        raise ValueError(f'Missing decoding settings: {sorted(required - settings.keys())}')
+    if settings['method'].upper() not in ('PCA', 'PLSSVD'):
+        raise ValueError('Projection method must be PCA or PLSSVD.')
+    if settings['model'] not in ('LR', 'SVC_linear', 'SVC_rbf', 'RandomForest'):
+        raise ValueError('Unknown classifier model.')
+    if isinstance(settings['pc_use'], bool) or not isinstance(settings['pc_use'], int) or settings['pc_use'] < 0:
+        raise ValueError('pc_use is a zero-based, nonnegative integer.')
+    band = settings.get('band', 'broadband')
+    if not isinstance(band, str) or not band or Path(band).name != band or band in ('.', '..'):
+        raise ValueError('band must be one output-folder name, without path separators.')
+    cache = Path(settings['cache_dir']).expanduser().resolve()
+    manifest_path = cache / 'manifest.json'
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f'Trial cache missing: {manifest_path}. Prepare the trial cache before decoding; condition averages cannot replace trials.')
+    # Metadata-only check: do not open the union's trial arrays here.
+    manifest = selected_cache_manifest(json.loads(manifest_path.read_text()))
+    for record in manifest['records']:
+        if len(record['files']) != 2:
+            raise ValueError('The decoder requires two saved conditions per participant.')
+        for filename in record['files']:
+            if not (cache / filename).is_file():
+                raise FileNotFoundError(f'Missing selected trial-cache array: {cache / filename}')
+    settings['cache_dir'] = cache
+    destination = Path(destination)
+    # Retain the numerical routine's established modality/band/file layout.
+    mainTS(out_path=destination, save=True, **settings)
+    for modality in ('ieeg', 'meg'):
+        folder = destination / modality / band / 'fullmodel'
+        if not list(folder.glob('*.csv')) or not list(folder.glob('*_iteration0_time_courses.npz')):
+            raise RuntimeError(f'Decoder did not publish the expected files for {modality}.')
+    return destination
+
+
+def main(argv=None):
+    """Select one saved pairing, a subset, or all pairings via the shared runner."""
+    import sys
+    from vs0_run_analysis import main as run_analysis_config
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    # Legacy numerical Python entry points remain unchanged. Executable
+    # commands now take parameters from JSON so a saved pairing is explicit.
+    legacy_flags = {'--pc_use', '--model', '--method', '--method_pls', '--method_data_aug',
+                    '--iteration', '--iter_perm', '--n_tr', '--cache-dir', '--out-path',
+                    '--meg-kind', '--block-scaling', '--seed', '--band'}
+    if '--config' not in arguments and any(arg.split('=', 1)[0] in legacy_flags for arg in arguments):
+        raise ValueError('Use --config out/vs4_decoding/config.json and edit its parameters. The unchanged Python functions mainTS and decodingTS remain available for direct use inside pairing_context.')
+    if not any(arg == '--config' or arg.startswith('--config=') for arg in arguments):
+        arguments = ['--config', str(ROOT / 'out/vs4_decoding/config.json'), *arguments]
+    return run_analysis_config(arguments)
+
+
+if __name__ == '__main__':
+    main()

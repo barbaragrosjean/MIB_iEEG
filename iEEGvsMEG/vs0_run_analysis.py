@@ -29,7 +29,7 @@ ANALYSES = ('vs1_construct', *COVERAGE, 'vs1_channel_space', 'vs1_roi_shell_maps
     'vs2_plssvd_permutation','vs2_plssvd_selection','vs3_subspace','vs3_weight_stability',
     'vs3_weights','vs3_pairing_weights','vs3_spatial_profiles','vs3_weight_clustering',
     'vs3_pairing_clustering','vs3_cross_modal_profiles','vs3_gradients',
-    'vs3_radius_search','vs3_percent_search','vs3_gradient_comparison')
+    'vs3_radius_search','vs3_percent_search','vs3_gradient_comparison','vs4_decoding')
 
 
 def read_config(path):
@@ -82,7 +82,7 @@ def specificity_config(out_root, pairing):
 
 
 def required_analyses(analysis):
-    if analysis=='vs1_construct':return []
+    if analysis in ('vs1_construct','vs4_decoding'):return []
     if analysis in (*COVERAGE,'vs1_channel_space','vs2_cov_models','vs2_plssvd_fit','vs3_subspace','vs3_weight_stability','vs3_weights'):
         return ['vs1_construct']
     if analysis=='vs1_roi_shell_maps':return ['vs1_channel_space']
@@ -133,6 +133,12 @@ def signature(out_root, analysis, pairing):
             if parent not in relevant:relevant.add(parent);pending.append(parent)
     if analysis in SPECIFICITY:relevant.add('vs3_weights')
     configs={name:digest_file(config_for(out_root,name)) for name in sorted(relevant)}
+    if analysis=='vs4_decoding':
+        # Batch selection and the printed command do not change a pairing's
+        # numerical result. Switching match -> all should reuse completed match.
+        computational_config=read_config(config_for(out_root,analysis)).copy()
+        for key in ('pairings','command'):computational_config.pop(key,None)
+        configs[analysis]=hashlib.sha256(json.dumps(computational_config,sort_keys=True).encode()).hexdigest()
     code={p.name:digest_file(p) for p in ROOT.glob('*.py')}
     pair_root=Path(out_root)/'vs0_pairs'
     pair_manifest=json.loads((pair_root/'manifest.json').read_text())
@@ -151,7 +157,26 @@ def signature(out_root, analysis, pairing):
     parents={name:digest_file(output_path(out_root,name,pairing)/'manifest.json') for name in required_analyses(analysis)}
     payload=dict(configs=configs,code=code,pairs=pairs,dependencies=parents,
                  inputs=source_inputs(out_root,analysis,pairing))
+    if analysis=='vs4_decoding':
+        payload['trial_cache']=decoding_cache_provenance(out_root,pairing)
     return hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest(),payload
+
+
+def decoding_cache_provenance(out_root,pairing):
+    """Fingerprint selected trial arrays without opening or mapping any data."""
+    from vs0_utils_pairing import selected_cache_manifest
+    cache=Path(parameters(out_root,'vs4_decoding')['cache_dir']).expanduser().resolve()
+    path=cache/'manifest.json'
+    if not path.is_file():
+        raise FileNotFoundError(f'Trial cache missing: {path}. Prepare individual trials before decoding.')
+    with pairing_context(Path(out_root)/'vs0_pairs',pairing):
+        manifest=selected_cache_manifest(json.loads(path.read_text()))
+    files=[]
+    for record in manifest['records']:
+        for filename in record['files']:
+            source=cache/filename;stat=source.stat()
+            files.append(dict(path=str(source),size=stat.st_size,mtime_ns=stat.st_mtime_ns))
+    return dict(path=str(cache),manifest_sha256=digest_file(path),files=files)
 
 
 def validate_result(out_root, analysis, pairing):
@@ -227,6 +252,9 @@ def cli_arguments(arguments):
 
 def execute(out_root,analysis,pairing,destination):
     p=parameters(out_root,analysis);cache=Path(out_root)/'vs1_construct/shared/trials'
+    if analysis=='vs4_decoding':
+        from vs4_1_run_decoding import run_configured_decoding
+        return run_configured_decoding(p,destination)
     if analysis=='vs1_construct':
         with file_lock(Path(out_root)/'vs1_construct/.shared.lock'):
             return construct(out_root,pairing,destination)

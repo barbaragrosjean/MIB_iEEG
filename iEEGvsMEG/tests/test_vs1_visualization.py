@@ -82,7 +82,7 @@ class NotebookTests(unittest.TestCase):
     def test_notebook_executes_all_modes_from_saved_outputs(self):
         notebook = nbformat.read(ROOT/'vs1_coverage_visualization.ipynb', as_version=4)
         nbformat.validate(notebook)
-        baseline = ROOT/'vs1_coverage_matching.ipynb'
+        baseline = ROOT/'OLD/vs1_coverage_matching.ipynb'
         original_hash = hashlib.sha256(baseline.read_bytes()).hexdigest()
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary)/'out'

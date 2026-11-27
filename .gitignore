@@ -6,7 +6,8 @@ iEEGvsMEG/out/**
 iEEGvsMEG/out/vs*/**
 !iEEGvsMEG/out/vs*/config.json
 iEEGvsMEG/out_old/
-iEEGvsMEG/OLD/
+iEEGvsMEG/OLD/*
+!iEEGvsMEG/OLD/vs1_coverage_matching.ipynb
 iEEGvsMEG/MEG/
 iEEGvsMEG/ieeg_shortWOBS_fs250/
 ieeg_shortWOBS_fs400/

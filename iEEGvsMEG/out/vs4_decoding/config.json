@@ -1,0 +1,23 @@
+{
+  "command": "python -u iEEGvsMEG/vs4_1_run_decoding.py --config iEEGvsMEG/out/vs4_decoding/config.json",
+  "schema_version": 1,
+  "analysis": "vs4_decoding",
+  "pairings": "match",
+  "parameters": {
+    "method": "PLSSVD",
+    "pc_use": 0,
+    "model": "LR",
+    "method_pls": "mean",
+    "data_aug_method": "mean",
+    "bs_decoding": false,
+    "iteration": 100,
+    "iter_perm": 50,
+    "n_tr": 24,
+    "cache_dir": "{OUT}/vs1_construct/shared/trials",
+    "meg_kind": "paired_coverage",
+    "block_scaling": "equal_variance",
+    "seed": 2026,
+    "classifier_params": null,
+    "band": "broadband"
+  }
+}

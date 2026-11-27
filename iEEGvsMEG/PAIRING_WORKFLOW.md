@@ -18,15 +18,15 @@ MEG eligibility requires accuracy >=0.5 separately in old and new conditions, us
 
 Electrode CSVs generated before `coverage_source_indices` and `random_source_index` were added must be regenerated once with `--overwrite`; incomplete correspondence now raises an error instead of triggering rematching. Existing pairing files are protected; deliberate regeneration requires `--overwrite`. Regenerating pairings invalidates analyses referencing changed CSVs.
 
-## 2. Review configurations and the run plan
+## 2. Review an analysis configuration and its run plan
 
 Every analysis has an editable `out/<analysis>/config.json`. Its first field is the execution command. The default pairing selection is `all` (22 pairings).
 
 ```bash
-python iEEGvsMEG/vs0_run_pipeline.py --dry-run
+python iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_pca/config.json --dry-run
 ```
 
-This lists 25 analysis types × 22 pairings = 550 jobs. Dependencies are reused rather than rerun when their manifests match. This is a plan, not evidence of completed computations.
+This lists the selected analysis and its pairing-specific output paths. Dependencies are reused when their manifests match. Each analysis is launched explicitly using its own configuration.
 
 ## 3. Execute
 
@@ -42,15 +42,42 @@ One selected pairing:
 python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_pca/config.json --pairing random_001
 ```
 
-All analyses across all pairings, sequentially:
-
-```bash
-python -u iEEGvsMEG/vs0_run_pipeline.py
-```
-
 Existing entry-point scripts also accept these managed configs. For example, `vs1_run_coverage.py --config .../vs1_pca/config.json` dispatches to the same runner. Legacy command-line interfaces remain available for existing results; use managed configs for this organization.
 
 The runner checks dependencies, pairing identities, input provenance, and result completion. Changed settings raise an explicit stale-results error. Use `--recompute` for the affected analysis; prior completed outputs move to its `archive/` directory. Dependencies must be recomputed separately if they are stale. Interrupted PLSSVD fit jobs resume their saved iterations. Shared caches with changed source data require explicit invalidation or a separate output root; they are not silently overwritten.
+
+## vs4 decoding
+
+Edit `out/vs4_decoding/config.json`. Its top-level `pairings` field accepts `"match"`, `"order"`, `"random_001"` through `"random_020"`, or `"all"` (all 22). A list of selected pairing IDs is also accepted. The initial selection is `"match"`.
+
+```bash
+python -u iEEGvsMEG/vs4_1_run_decoding.py --config iEEGvsMEG/out/vs4_decoding/config.json --dry-run
+python -u iEEGvsMEG/vs4_1_run_decoding.py --config iEEGvsMEG/out/vs4_decoding/config.json
+```
+
+The equivalent shared entry point is `vs0_run_analysis.py --config iEEGvsMEG/out/vs4_decoding/config.json`. There is no all-analysis pipeline launcher.
+
+Configure the projection (`method`: PCA or PLSSVD), zero-based component index (`pc_use`), classifier (`model`), condition representation (`method_pls`), augmentation (`data_aug_method`), decoding iterations, classifier-label permutations, pseudo-trial count, block scaling, seed, and optional classifier parameters in `parameters`. These are passed to the existing `mainTS`/`decodingTS` functions without changing their computations. `bs_decoding` retains the existing pre-stimulus cropping option. `band` labels the output; it does not filter data.
+
+A prepared **individual-trial** cache is required at `cache_dir`, initially `{OUT}/vs1_construct/shared/trials`. The vs4 runner does not rerun condition-average construction or export/map the full union cache. Only participants in the selected pairing are loaded, and the saved source/control/coverage indices are used. Missing cache files or pairing correspondence raise explicit errors. The decoder's preprocessing and classifier controls are unchanged; label shuffling remains a conditional classifier control rather than a refitted full-analysis null.
+
+Outputs retain the decoder's existing filenames inside:
+
+```text
+out/vs4_decoding/
+├── config.json
+├── match/
+│   ├── manifest.json
+│   ├── ieeg/<band>/fullmodel/*.csv
+│   ├── ieeg/<band>/fullmodel/*_iteration0_time_courses.npz
+│   ├── meg/<band>/fullmodel/*.csv
+│   └── meg/<band>/fullmodel/*_iteration0_time_courses.npz
+├── order/
+├── random_001/ ... random_020/
+└── summary/manifest.json
+```
+
+Only selected pairing folders are created. A changed numerical configuration requires `--recompute`; previous outputs are archived. Changing only the selected pairing list or command reuses compatible completed pairing outputs. The manifest also tracks the selected trial-cache files. The vs4 notebook and the currently empty behavior helper are not modified by this runner adaptation.
 
 ## Storage
 
@@ -66,7 +93,7 @@ Canonical modality-specificity results use CSV tables, compressed numerical arra
 
 ## Notebooks
 
-Select `PAIRING_ID` in each notebook header. Header/loading cells display the saved JSON parameters, validate results, and load the selected pairing. Figure cells, stored figure outputs, and plotting definitions are preserved. Computations are run by the printed commands, not by notebook loading cells.
+For vs1, use `vs1_coverage_visualization.ipynb` and select `MODE` (`match`, `order`, or `random`); the earlier notebook is preserved at `OLD/vs1_coverage_matching.ipynb`. In the other notebooks, select `PAIRING_ID` in the header. Header/loading cells display the saved JSON parameters, validate results, and load the selected pairing. Figure cells, stored figure outputs, and plotting definitions are preserved. Computations are run by the printed commands, not by notebook loading cells.
 
 ## Validation
 
