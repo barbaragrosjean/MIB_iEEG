@@ -28,6 +28,6 @@
       "meg_times_file": null,
       "average_cache_dir": "{OUT}/vs1_construct/shared/meg_averages"
     },
-    "export_trials": true
+    "export_trials": false
   }
 }

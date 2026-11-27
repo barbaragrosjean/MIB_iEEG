@@ -1,10 +1,19 @@
-# Current vs1-vs3 workflow. Run from the repository root.
-# Edit iEEGvsMEG/out/vs0_pairs/config.json before generating pairs.
+# workflow
 python -u iEEGvsMEG/vs0_run_create_pairs.py --config iEEGvsMEG/out/vs0_pairs/config.json
-python iEEGvsMEG/vs0_run_pipeline.py --dry-run
 
-# Example submission: one analysis over all 22 pairings, dependencies reused.
-submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_pca/config.json" --project MINDLAB2021_MEG-TempSeqAges
+# vs1:
+submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_construct/config.json --recompute" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_manipulation/config.json --recompute" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_channels/config.json --recompute" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_channel_space/config.json --recompute" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_pca/config.json --recompute" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_roi_shell_maps/config.json --recompute" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_stability/config.json --recompute" --project MINDLAB2021_MEG-TempSeqAges
+
+
+# vs2:
+submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs2_cov_models/config.json --recompute" --project MINDLAB2021_MEG-TempSeqAges
+
 
 # Or run the complete sequential workflow in an appropriate cluster job:
 # python -u iEEGvsMEG/vs0_run_pipeline.py
@@ -17,3 +26,6 @@ submit_to_cluster -n 2 -q long.q "python vs4_1_run_decoding.py --pc_use 3 --mode
 submit_to_cluster -n 2 -q long.q "python vs4_1_run_decoding.py --pc_use 3 --model LR --meg-kind paired_coverage --iteration 100 --method PCA"  --project MINDLAB2021_MEG-TempSeqAges
 submit_to_cluster -n 2 -q long.q "python vs4_1_run_decoding.py --pc_use 3 --model RandomForest --meg-kind paired_coverage --iteration 100 --method PCA"  --project MINDLAB2021_MEG-TempSeqAges
 submit_to_cluster -n 2 -q long.q "python vs4_1_run_decoding.py --pc_use 3 --model SVC_linear --meg-kind paired_coverage --iteration 100 --method PCA"  --project MINDLAB2021_MEG-TempSeqAges
+
+submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs2_cov_models/config.json"  --project MINDLAB2021_MEG-TempSeqAges
+ 
