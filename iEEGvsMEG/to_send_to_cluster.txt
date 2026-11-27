@@ -14,8 +14,8 @@ submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --conf
 submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs2_cov_models/config.json --recompute" --project MINDLAB2021_MEG-TempSeqAges
 submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs2_plssvd_fit/config.json" --project MINDLAB2021_MEG-TempSeqAges
 
-
-
+# vs4:
+submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs4_1_run_decoding.py --config iEEGvsMEG/out/vs4_decoding/config.json" --project MINDLAB2021_MEG-TempSeqAges
 # See PAIRING_WORKFLOW.md for output layout and recomputation.
 
 # vs4: edit out/vs4_decoding/config.json (pairings: match, order, random_001 ... random_020, or all).
