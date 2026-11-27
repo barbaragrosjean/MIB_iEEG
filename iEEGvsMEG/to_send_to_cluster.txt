@@ -10,9 +10,10 @@ submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --conf
 submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_roi_shell_maps/config.json --recompute" --project MINDLAB2021_MEG-TempSeqAges
 submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs1_stability/config.json --recompute" --project MINDLAB2021_MEG-TempSeqAges
 
-
 # vs2:
 submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs2_cov_models/config.json --recompute" --project MINDLAB2021_MEG-TempSeqAges
+submit_to_cluster -n 2 -q long.q "python -u iEEGvsMEG/vs0_run_analysis.py --config iEEGvsMEG/out/vs2_plssvd_fit/config.json" --project MINDLAB2021_MEG-TempSeqAges
+
 
 
 # Or run the complete sequential workflow in an appropriate cluster job:
