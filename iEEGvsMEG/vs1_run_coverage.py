@@ -71,10 +71,12 @@ def prepare_analysis(config, analysis, config_file, recompute=False):
 
 
 def load_pca_results(directory, datasets):
+    from dataclasses import fields
+    allowed = {field.name for field in fields(PCAResult)} - {'dataset'}
     results = {}
     for name, dataset in datasets.items():
         with np.load(Path(directory) / f'{name}.npz') as values:
-            results[name] = PCAResult(**{key: values[key].copy() for key in values.files}, dataset=dataset)
+            results[name] = PCAResult(**{key: values[key].copy() for key in values.files if key in allowed}, dataset=dataset)
     return results
 
 
@@ -106,7 +108,14 @@ def run_analysis(config, analysis, datasets, recompute=False):
             result = fit_block_pca(dataset, k, max_gram_gib=memory)
             np.savez_compressed(out / f'{name}.npz', scores=result.scores, weights=result.weights,
                 explained_variance=result.explained_variance,
-                explained_variance_ratio=result.explained_variance_ratio, total_variance=result.total_variance)
+                explained_variance_ratio=result.explained_variance_ratio, total_variance=result.total_variance,
+                effective_dimensionality=result.effective_dimensionality,
+                pre_block_total_variance=result.pre_block_total_variance,
+                dataset_scale=result.dataset_scale, n_features=result.n_features,
+                n_observations=result.n_observations, pca_schema_version=2,
+                times=np.asarray((dataset.source_data or {}).get('times', [])),
+                condition_mode=dataset.condition_mode,
+                conditions=np.asarray((dataset.source_data or {}).get('load_config', {}).get('conditions', [])))
     elif analysis == 'stability':
         from vs0_utils_pairing import pairing_context, active_pairing_id, PAIRING_IDS
         if not config.get('_managed_output'):

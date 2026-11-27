@@ -205,6 +205,11 @@ class PCAResult:
     explained_variance_ratio: np.ndarray
     total_variance: float
     dataset: Dataset = None  # attached by compute_pca for plotting/comparison
+    effective_dimensionality: float = np.nan
+    pre_block_total_variance: float = np.nan
+    dataset_scale: float = 1.
+    n_features: int = 0
+    n_observations: int = 0
 
 def fit_block_pca(dataset, n_components=10, feature_chunk=1024, max_gram_gib=2.):
     """Exact centred PCA via observation Gram matrix, bounded feature chunks.
@@ -228,6 +233,12 @@ def fit_block_pca(dataset, n_components=10, feature_chunk=1024, max_gram_gib=2.)
     total_ss = float(np.trace(gram))
     if total_ss <= 0:
         raise ValueError(f'{dataset.name}: no temporal variance.')
+    # Participation ratio uses the FULL Gram matrix, not truncated leading PCs.
+    gram_squared = float(np.einsum('ij,ij->', gram, gram))
+    dimensionality = total_ss**2 / gram_squared
+    dataset_scale = float(getattr(dataset, 'scale', 1.))
+    if not np.isfinite(dataset_scale) or dataset_scale <= 0:
+        raise ValueError('Dataset block scale must be finite and positive.')
     k = min(n_components, n - 1, p)
     values, vectors = eigh(gram, subset_by_index=(n - k, n - 1), check_finite=False)
     values, vectors = values[::-1], vectors[:, ::-1]
@@ -252,7 +263,10 @@ def fit_block_pca(dataset, n_components=10, feature_chunk=1024, max_gram_gib=2.)
     signs = np.sign(weights[np.argmax(np.abs(weights), axis=0), np.arange(len(values))])
     signs[signs == 0] = 1
     return PCAResult(scores * signs, weights * signs, values / (n - 1),
-                     values / total_ss, total_ss / (n - 1))
+                     values / total_ss, total_ss / (n - 1),
+                     effective_dimensionality=dimensionality,
+                     pre_block_total_variance=total_ss / ((n - 1) * dataset_scale**2),
+                     dataset_scale=dataset_scale, n_features=p, n_observations=n)
 
 def cross_correlations(a, b):
     """Pearson correlation between columns; constant columns return NaN."""
